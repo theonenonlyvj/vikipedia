@@ -10,7 +10,7 @@ const row = (
 ): ServerLeaderboardRow => ({
   runId: id,
   challengeId: "challenge-0001",
-  playerId: `player-${id}`,
+  accountId: `account-${id}`,
   displayName: id,
   elapsedMs,
   clickCount,

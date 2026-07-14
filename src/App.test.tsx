@@ -19,30 +19,38 @@ function memoryStorage(): Storage {
 }
 
 describe("Vikipedia app", () => {
-  it("requires a locally persisted display name before entering the site", async () => {
+  it("requires a display name before creating a persisted VGames guest session", async () => {
     const storage = memoryStorage();
     const fetchImpl = createFetchMock();
     const user = userEvent.setup();
 
     render(<App fetchImpl={fetchImpl} storage={storage} />);
 
-    expect(await screen.findByText(/enter vikipedia/i)).toBeVisible();
+    expect(await screen.findByText(/secure your display name/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /start challenge #1/i })).toBeNull();
 
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /enter vikipedia/i }));
+    await user.click(screen.getByRole("button", { name: /play as guest/i }));
 
     expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
-    expect(JSON.parse(storage.getItem("vikipedia:v0-player") ?? "{}")).toEqual({
+    expect(JSON.parse(storage.getItem("vikipedia:vgames-session") ?? "{}")).toEqual({
+      accountId: "acc-guest",
       displayName: "Vijay",
+      token: "jwt-guest",
+      status: "ghost",
     });
   });
 
-  it("skips the entry gate when a display name is already cached", async () => {
+  it("skips the entry gate when a VGames session is already cached", async () => {
     const storage = memoryStorage();
     storage.setItem(
-      "vikipedia:v0-player",
-      JSON.stringify({ displayName: "Vijay" }),
+      "vikipedia:vgames-session",
+      JSON.stringify({
+        accountId: "acc-1",
+        displayName: "Vijay",
+        token: "jwt-claimed",
+        status: "claimed",
+      }),
     );
 
     render(<App fetchImpl={createFetchMock()} storage={storage} />);
@@ -54,7 +62,29 @@ describe("Vikipedia app", () => {
     );
   });
 
-  it("tracks the run on the server after the saved display name enters", async () => {
+  it("secures a display name through VGames before entering the site", async () => {
+    const storage = memoryStorage();
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+
+    render(<App fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.type(screen.getByLabelText(/display name/i), "vijay");
+    await user.type(screen.getByLabelText(/password/i), "secret-pass");
+    await user.click(
+      screen.getByRole("button", { name: /secure display name \/ log in/i }),
+    );
+
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    expect(JSON.parse(storage.getItem("vikipedia:vgames-session") ?? "{}")).toMatchObject({
+      accountId: "acc-claimed",
+      displayName: "vijay",
+      token: "jwt-claimed",
+      status: "claimed",
+    });
+  });
+
+  it("tracks the run on the server with the VGames session token", async () => {
     let now = 1000;
     const fetchImpl = createFetchMock();
     const user = userEvent.setup();
@@ -68,7 +98,7 @@ describe("Vikipedia app", () => {
     );
 
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /enter vikipedia/i }));
+    await user.click(screen.getByRole("button", { name: /play as guest/i }));
     await user.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );
@@ -84,7 +114,12 @@ describe("Vikipedia app", () => {
     await waitFor(() => {
       expect(fetchImpl).toHaveBeenCalledWith(
         "/api/runs/run-1/complete",
-        expect.objectContaining({ method: "POST" }),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer jwt-guest",
+          }),
+          method: "POST",
+        }),
       );
     });
   });
@@ -92,8 +127,13 @@ describe("Vikipedia app", () => {
   it("creates the next numbered challenge from the Challenges tab", async () => {
     const storage = memoryStorage();
     storage.setItem(
-      "vikipedia:v0-player",
-      JSON.stringify({ displayName: "Vijay" }),
+      "vikipedia:vgames-session",
+      JSON.stringify({
+        accountId: "acc-1",
+        displayName: "Vijay",
+        token: "jwt-claimed",
+        status: "claimed",
+      }),
     );
     const fetchImpl = createFetchMock();
     const user = userEvent.setup();
@@ -116,6 +156,9 @@ describe("Vikipedia app", () => {
         "/api/challenges",
         expect.objectContaining({
           method: "POST",
+          headers: expect.objectContaining({
+            Authorization: "Bearer jwt-claimed",
+          }),
           body: JSON.stringify({ startTitle: "Mars", targetTitle: "Water" }),
         }),
       );
@@ -169,23 +212,55 @@ function createFetchMock() {
       });
     }
 
-    if (url === "/api/players") {
-      expect(readJsonBody(init)).toEqual({ displayName: "Vijay" });
+    if (url === "/api/identity/guest") {
+      const body = readJsonBody(init) as { displayName: string };
       return jsonResponse({
-        player: { id: "player-1", displayName: "Vijay" },
+        accountId: "acc-guest",
+        displayName: body.displayName,
+        token: "jwt-guest",
+        status: "ghost",
+      });
+    }
+
+    if (url === "/api/identity/secure") {
+      expect(readJsonBody(init)).toMatchObject({
+        username: "vijay",
+        password: "secret-pass",
+      });
+      return jsonResponse({
+        accountId: "acc-claimed",
+        displayName: "vijay",
+        token: "jwt-claimed",
+        status: "claimed",
+      });
+    }
+
+    if (url === "/api/identity/login") {
+      expect(readJsonBody(init)).toMatchObject({
+        username: "vijay",
+        password: "secret-pass",
+      });
+      return jsonResponse({
+        accountId: "acc-claimed",
+        displayName: "vijay",
+        token: "jwt-claimed",
+        status: "claimed",
       });
     }
 
     if (url === "/api/runs/start") {
       expect(readJsonBody(init)).toEqual({
         challengeId: "challenge-0001",
-        playerId: "player-1",
+        publicName: "Vijay",
+      });
+      expect(init?.headers).toMatchObject({
+        Authorization: expect.stringMatching(/^Bearer jwt-/),
       });
       return jsonResponse({
         run: {
           id: "run-1",
           challengeId: "challenge-0001",
-          playerId: "player-1",
+          accountId: "acc-guest",
           status: "active",
           startTitle: "Apple",
           targetTitle: "Fruit",
@@ -218,7 +293,7 @@ function createFetchMock() {
           rank: 1,
           runId: "run-1",
           challengeId: "challenge-0001",
-          playerId: "player-1",
+          accountId: "acc-guest",
           displayName: "Vijay",
           elapsedMs: 1500,
           clickCount: 1,
@@ -236,7 +311,7 @@ function createFetchMock() {
                 rank: 1,
                 runId: "run-1",
                 challengeId: "challenge-0001",
-                playerId: "player-1",
+                accountId: "acc-guest",
                 displayName: "Vijay",
                 elapsedMs: 1500,
                 clickCount: 1,

@@ -135,7 +135,7 @@ export interface ServerPathStep {
 export interface ServerLeaderboardRow {
   runId: string;
   challengeId: string;
-  playerId: string;
+  accountId: string;
   displayName: string;
   elapsedMs: number;
   clickCount: number;

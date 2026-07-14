@@ -1,18 +1,20 @@
 import type {
+  AccountStatus,
   Challenge,
   RankedLeaderboardRow,
   ServerPathStep,
 } from "../domain/types";
 
-export interface PlayerRecord {
-  id: string;
-  displayName: string;
+export interface AccountProfileRecord {
+  accountId: string;
+  publicName: string;
+  identityStatus: AccountStatus;
 }
 
 export interface RunRecordResponse {
   id: string;
   challengeId: string;
-  playerId: string;
+  accountId: string;
   status: "active" | "completed" | "abandoned";
   startTitle: string;
   targetTitle: string;
@@ -28,16 +30,20 @@ export interface TrackingRepository {
     startTitle: string;
     targetTitle: string;
   }): Promise<Challenge>;
-  upsertPlayer(input: {
-    displayName: string;
-    playerId?: string;
-  }): Promise<PlayerRecord>;
+  upsertAccountProfile(input: {
+    accountId: string;
+    publicName: string;
+    identityStatus: AccountStatus;
+  }): Promise<AccountProfileRecord>;
   startRun(input: {
     challengeId: string;
-    playerId: string;
+    accountId: string;
+    publicName: string;
+    identityStatus: AccountStatus;
   }): Promise<RunRecordResponse>;
   recordClick(
     runId: string,
+    accountId: string,
     input: {
       sourceTitle: string;
       clickedAnchorText: string;
@@ -49,12 +55,16 @@ export interface TrackingRepository {
   ): Promise<{ clickCount: number }>;
   completeRun(
     runId: string,
+    accountId: string,
     input: {
       finalTitle: string;
       clientTimestampMs?: number;
     },
   ): Promise<RankedLeaderboardRow>;
-  abandonRun(runId: string): Promise<{ status: "abandoned" }>;
+  abandonRun(
+    runId: string,
+    accountId: string,
+  ): Promise<{ status: "abandoned" }>;
   listLeaderboard(challengeId: string): Promise<RankedLeaderboardRow[]>;
   getRunPath(runId: string): Promise<ServerPathStep[]>;
 }

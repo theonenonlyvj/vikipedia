@@ -16,14 +16,15 @@ function fakeRepository(): TrackingRepository {
       ruleset: "ranked_classic" as const,
       source: "curated" as const,
     })),
-    upsertPlayer: vi.fn(async ({ displayName }) => ({
-      id: "player-1",
-      displayName,
+    upsertAccountProfile: vi.fn(async ({ publicName }) => ({
+      accountId: "acc-1",
+      publicName,
+      identityStatus: "claimed" as const,
     })),
     startRun: vi.fn(async () => ({
       id: "run-1",
       challengeId: "challenge-0001",
-      playerId: "player-1",
+      accountId: "acc-1",
       status: "active" as const,
       startTitle: "Moon",
       targetTitle: "Gravity",
@@ -34,7 +35,7 @@ function fakeRepository(): TrackingRepository {
     completeRun: vi.fn(async () => ({
       runId: "run-1",
       challengeId: "challenge-0001",
-      playerId: "player-1",
+      accountId: "acc-1",
       displayName: "Vijay",
       elapsedMs: 1200,
       clickCount: 1,
@@ -49,30 +50,40 @@ function fakeRepository(): TrackingRepository {
 }
 
 describe("api handlers", () => {
-  it("requires a non-empty display name", async () => {
+  it("requires a public account name before starting a run", async () => {
     const handlers = createApiHandlers(fakeRepository());
 
     await expect(
-      handlers.upsertPlayer({ displayName: "   " }),
+      handlers.startRun({
+        challengeId: "challenge-0001",
+        accountId: "acc-1",
+        publicName: "   ",
+        identityStatus: "claimed",
+      }),
     ).rejects.toMatchObject({
-      code: "invalid_display_name",
+      code: "invalid_public_name",
       status: 400,
     });
   });
 
-  it("trims display names before saving players", async () => {
+  it("trims account profile names before starting a run", async () => {
     const repository = fakeRepository();
     const handlers = createApiHandlers(repository);
 
     await expect(
-      handlers.upsertPlayer({ displayName: "  Vijay  " }),
-    ).resolves.toEqual({
-      player: { id: "player-1", displayName: "Vijay" },
-    });
+      handlers.startRun({
+        challengeId: "challenge-0001",
+        accountId: "acc-1",
+        publicName: "  Vijay  ",
+        identityStatus: "claimed",
+      }),
+    ).resolves.toMatchObject({ run: { id: "run-1" } });
 
-    expect(repository.upsertPlayer).toHaveBeenCalledWith({
-      displayName: "Vijay",
-      playerId: undefined,
+    expect(repository.startRun).toHaveBeenCalledWith({
+      challengeId: "challenge-0001",
+      accountId: "acc-1",
+      publicName: "Vijay",
+      identityStatus: "claimed",
     });
   });
 
@@ -123,7 +134,9 @@ describe("api handlers", () => {
     await expect(
       handlers.startRun({
         challengeId: "challenge-0001",
-        playerId: "player-1",
+        accountId: "acc-1",
+        publicName: "Vijay",
+        identityStatus: "claimed",
       }),
     ).resolves.toMatchObject({ run: { id: "run-1" } });
   });
@@ -133,7 +146,7 @@ describe("api handlers", () => {
     const handlers = createApiHandlers(repository);
 
     await expect(
-      handlers.recordClick("run-1", {
+      handlers.recordClick("run-1", "acc-1", {
         sourceTitle: "Moon",
         clickedAnchorText: "orbit",
         requestedTitle: "Orbit",
@@ -142,7 +155,7 @@ describe("api handlers", () => {
       }),
     ).resolves.toEqual({ clickCount: 1 });
 
-    expect(repository.recordClick).toHaveBeenCalledWith("run-1", {
+    expect(repository.recordClick).toHaveBeenCalledWith("run-1", "acc-1", {
       sourceTitle: "Moon",
       clickedAnchorText: "orbit",
       requestedTitle: "Orbit",
@@ -156,7 +169,7 @@ describe("api handlers", () => {
     const handlers = createApiHandlers(fakeRepository());
 
     await expect(
-      handlers.completeRun("run-1", { finalTitle: "" }),
+      handlers.completeRun("run-1", "acc-1", { finalTitle: "" }),
     ).rejects.toMatchObject({
       code: "invalid_final_title",
       status: 400,

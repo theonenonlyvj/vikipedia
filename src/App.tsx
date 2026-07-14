@@ -19,26 +19,26 @@ import type {
   ServerPathStep,
 } from "./domain/types";
 import {
-  createPlayerRepository,
-  type PlayerProfile,
-  type PlayerRepository,
-} from "./services/playerRepository";
+  createVGamesIdentityClient,
+  createVGamesIdentityRepository,
+  type VGamesIdentityClient,
+  type VGamesIdentityRepository,
+  type VGamesIdentitySession,
+} from "./services/vgamesIdentity";
 import {
   createVikipediaApiClient,
   type VikipediaApiClient,
 } from "./services/vikipediaApiClient";
 import { createWikipediaGateway } from "./services/wikipediaGateway";
-import type {
-  PlayerRecord,
-  RunRecordResponse,
-} from "./server/trackingRepository";
+import type { RunRecordResponse } from "./server/trackingRepository";
 
 interface AppProps {
   fetchImpl?: typeof fetch;
   now?: () => number;
   storage?: Storage;
   apiClient?: VikipediaApiClient;
-  playerRepository?: PlayerRepository;
+  identityClient?: VGamesIdentityClient;
+  identityRepository?: VGamesIdentityRepository;
 }
 
 type ModeState = "idle" | "loading" | "playing" | "complete";
@@ -49,13 +49,15 @@ export default function App({
   now = () => Date.now(),
   storage = globalThis.localStorage,
   apiClient: injectedApiClient,
-  playerRepository: injectedPlayerRepository,
+  identityClient: injectedIdentityClient,
+  identityRepository: injectedIdentityRepository,
 }: AppProps) {
   const [modeState, setModeState] = useState<ModeState>("idle");
   const [activeTab, setActiveTab] = useState<TabKey>("play");
-  const [siteProfile, setSiteProfile] = useState<PlayerProfile | null>(null);
-  const [player, setPlayer] = useState<PlayerRecord | null>(null);
+  const [identitySession, setIdentitySession] =
+    useState<VGamesIdentitySession | null>(null);
   const [displayNameDraft, setDisplayNameDraft] = useState("");
+  const [passwordDraft, setPasswordDraft] = useState("");
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [selectedChallengeId, setSelectedChallengeId] = useState<string | null>(
     null,
@@ -70,9 +72,13 @@ export default function App({
     () => injectedApiClient ?? createVikipediaApiClient(fetchImpl),
     [fetchImpl, injectedApiClient],
   );
-  const playerRepository = useMemo(
-    () => injectedPlayerRepository ?? createPlayerRepository(storage),
-    [injectedPlayerRepository, storage],
+  const identityClient = useMemo(
+    () => injectedIdentityClient ?? createVGamesIdentityClient(fetchImpl),
+    [fetchImpl, injectedIdentityClient],
+  );
+  const identityRepository = useMemo(
+    () => injectedIdentityRepository ?? createVGamesIdentityRepository(storage),
+    [injectedIdentityRepository, storage],
   );
   const wikipediaGateway = useMemo(
     () => createWikipediaGateway({ fetchImpl }),
@@ -84,7 +90,7 @@ export default function App({
     challenges[0] ??
     null;
   const nameIsReady =
-    (siteProfile?.displayName ?? displayNameDraft).trim().length > 0;
+    (identitySession?.displayName ?? displayNameDraft).trim().length > 0;
   const isBusy = modeState === "loading";
   const headerState =
     modeState === "complete"
@@ -94,18 +100,12 @@ export default function App({
         : "expanded";
 
   useEffect(() => {
-    const cachedProfile = playerRepository.getPlayerProfile();
-    if (cachedProfile) {
-      setSiteProfile(cachedProfile);
-      setDisplayNameDraft(cachedProfile.displayName);
-      if (cachedProfile.id) {
-        setPlayer({
-          id: cachedProfile.id,
-          displayName: cachedProfile.displayName,
-        });
-      }
+    const cachedSession = identityRepository.getSession();
+    if (cachedSession) {
+      setIdentitySession(cachedSession);
+      setDisplayNameDraft(cachedSession.displayName);
     }
-  }, [playerRepository]);
+  }, [identityRepository]);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,9 +156,17 @@ export default function App({
     startTitle: string;
     targetTitle: string;
   }) {
+    if (!identitySession) {
+      setError("Sign in before creating a challenge.");
+      return;
+    }
+
     setError(null);
     try {
-      const challenge = await apiClient.createChallenge(input);
+      const challenge = await apiClient.createChallenge(
+        input,
+        identitySession.token,
+      );
       setChallenges((current) =>
         getSortedChallenges([
           ...current.filter((item) => item.id !== challenge.id),
@@ -179,17 +187,84 @@ export default function App({
     }
   }
 
-  function enterSite() {
+  async function playAsGuest() {
     const displayName = displayNameDraft.trim();
     if (!displayName) {
       setError("Display name is required to enter Vikipedia.");
       return;
     }
 
-    const nextProfile = playerRepository.saveDisplayName(displayName);
-    setSiteProfile(nextProfile);
-    setDisplayNameDraft(nextProfile.displayName);
     setError(null);
+    setModeState("loading");
+    try {
+      const session = await identityClient.playAsGuest({
+        deviceCredential: identityRepository.getDeviceCredential(),
+        displayName,
+      });
+      identityRepository.saveSession(session);
+      setIdentitySession(session);
+      setDisplayNameDraft(session.displayName);
+      setModeState("idle");
+    } catch (caught) {
+      setModeState("idle");
+      setError(errorMessage(caught, "Could not start a guest session."));
+    }
+  }
+
+  async function secureOrLogin() {
+    const username = displayNameDraft.trim();
+    const password = passwordDraft.trim();
+    if (!username) {
+      setError("Display name is required to enter Vikipedia.");
+      return;
+    }
+    if (!password) {
+      setError("Password is required to secure a display name.");
+      return;
+    }
+
+    setError(null);
+    setModeState("loading");
+    const deviceCredential = identityRepository.getDeviceCredential();
+    try {
+      let session: VGamesIdentitySession;
+      if (identitySession?.status === "ghost") {
+        session = await identityClient.secureGuest({
+          deviceCredential,
+          token: identitySession.token,
+          username,
+          password,
+        });
+      } else {
+        try {
+          const guest = await identityClient.playAsGuest({
+            deviceCredential,
+            displayName: username,
+          });
+          identityRepository.saveSession(guest);
+          session = await identityClient.secureGuest({
+            deviceCredential,
+            token: guest.token,
+            username,
+            password,
+          });
+        } catch {
+          session = await identityClient.login({
+            deviceCredential,
+            username,
+            password,
+          });
+        }
+      }
+      identityRepository.saveSession(session);
+      setIdentitySession(session);
+      setDisplayNameDraft(session.displayName);
+      setPasswordDraft("");
+      setModeState("idle");
+    } catch (caught) {
+      setModeState("idle");
+      setError(errorMessage(caught, "Could not secure that display name."));
+    }
   }
 
   async function startSelectedChallenge() {
@@ -197,7 +272,7 @@ export default function App({
       return;
     }
 
-    if (!siteProfile) {
+    if (!identitySession) {
       setError("Display name is required to enter Vikipedia.");
       return;
     }
@@ -207,19 +282,13 @@ export default function App({
     setLeaderboard([]);
 
     try {
-      const nextPlayer = await apiClient.savePlayer({
-        displayName: siteProfile.displayName,
-        playerId: player?.id ?? siteProfile.id,
-      });
-      playerRepository.savePlayer(nextPlayer);
-      setSiteProfile(nextPlayer);
-      setPlayer(nextPlayer);
-      setDisplayNameDraft(nextPlayer.displayName);
-
-      const nextRun = await apiClient.startRun({
-        challengeId: selectedChallenge.id,
-        playerId: nextPlayer.id,
-      });
+      const nextRun = await apiClient.startRun(
+        {
+          challengeId: selectedChallenge.id,
+          publicName: identitySession.displayName,
+        },
+        identitySession.token,
+      );
       const nextArticle = await wikipediaGateway.getArticle(
         selectedChallenge.start.title,
       );
@@ -242,7 +311,12 @@ export default function App({
   }
 
   async function followArticleLink(title: string, anchorText: string) {
-    if (!session || !serverRun || session.status !== "active") {
+    if (
+      !session ||
+      !serverRun ||
+      !identitySession ||
+      session.status !== "active"
+    ) {
       return;
     }
 
@@ -262,14 +336,18 @@ export default function App({
         timestamp: clickedAt,
       });
 
-      const clickResponse = await apiClient.recordClick(serverRun.id, {
-        sourceTitle: session.currentPage.canonicalTitle,
-        clickedAnchorText: anchorText,
-        requestedTitle: title,
-        destinationTitle: nextArticle.canonicalTitle,
-        destinationPageId: nextArticle.pageId,
-        clientTimestampMs: clickedAt,
-      });
+      const clickResponse = await apiClient.recordClick(
+        serverRun.id,
+        {
+          sourceTitle: session.currentPage.canonicalTitle,
+          clickedAnchorText: anchorText,
+          requestedTitle: title,
+          destinationTitle: nextArticle.canonicalTitle,
+          destinationPageId: nextArticle.pageId,
+          clientTimestampMs: clickedAt,
+        },
+        identitySession.token,
+      );
 
       const trackedSession = {
         ...nextSession,
@@ -279,10 +357,14 @@ export default function App({
       setSession(trackedSession);
 
       if (trackedSession.status === "completed") {
-        const leaderboardRow = await apiClient.completeRun(serverRun.id, {
-          finalTitle: nextArticle.canonicalTitle,
-          clientTimestampMs: clickedAt,
-        });
+        const leaderboardRow = await apiClient.completeRun(
+          serverRun.id,
+          {
+            finalTitle: nextArticle.canonicalTitle,
+            clientTimestampMs: clickedAt,
+          },
+          identitySession.token,
+        );
         setServerRun({
           ...serverRun,
           status: "completed",
@@ -343,17 +425,17 @@ export default function App({
       ? session.completedAt - session.startedAt
       : 0);
 
-  if (!siteProfile) {
+  if (!identitySession) {
     return (
       <main className="app-shell entry-shell" aria-busy={isBusy}>
         <section className="entry-gate" aria-label="Enter Vikipedia">
           <span className="viota-mark">Viota</span>
           <h1>Vikipedia</h1>
-          <p>Pick a display name to enter the site.</p>
+          <p>Secure your display name to track every run from game zero.</p>
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              enterSite();
+              void secureOrLogin();
             }}
           >
             <label className="name-control">
@@ -367,10 +449,31 @@ export default function App({
                 value={displayNameDraft}
               />
             </label>
-            <button type="submit" disabled={!nameIsReady}>
-              Enter Vikipedia
+            <label className="name-control">
+              <span>Password</span>
+              <input
+                aria-label="Password"
+                autoComplete="current-password"
+                onChange={(event) => setPasswordDraft(event.target.value)}
+                type="password"
+                value={passwordDraft}
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={!nameIsReady || !passwordDraft.trim()}
+            >
+              Secure display name / Log in
             </button>
           </form>
+          <button
+            className="secondary-entry"
+            disabled={!nameIsReady || isBusy}
+            onClick={() => void playAsGuest()}
+            type="button"
+          >
+            Play as guest
+          </button>
           {error ? <p className="error-banner">{error}</p> : null}
         </section>
       </main>
@@ -421,7 +524,7 @@ export default function App({
         </div>
 
         <div className="account-chip" role="status" aria-label="Current player">
-          {siteProfile.displayName}
+          {identitySession.displayName}
         </div>
       </header>
 
@@ -480,8 +583,8 @@ export default function App({
 
         {activeTab === "stats" ? (
           <StatsPanel
+            accountId={identitySession.accountId}
             leaderboard={leaderboard}
-            player={player}
             session={session}
           />
         ) : null}
@@ -719,17 +822,15 @@ function RunPathPreview({ path }: { path: ServerPathStep[] }) {
 }
 
 function StatsPanel({
+  accountId,
   leaderboard,
-  player,
   session,
 }: {
+  accountId: string;
   leaderboard: RankedLeaderboardRow[];
-  player: PlayerRecord | null;
   session: GameSession | null;
 }) {
-  const personalRows = player
-    ? leaderboard.filter((row) => row.playerId === player.id)
-    : [];
+  const personalRows = leaderboard.filter((row) => row.accountId === accountId);
   const visitedTitles = session
     ? [
         session.challenge.start.title,
@@ -761,8 +862,14 @@ function StatsPanel({
           <dd>{visitedTitles.length}</dd>
         </div>
       </dl>
-      <StatsList title="Top starts" items={session ? [session.challenge.start.title] : []} />
-      <StatsList title="Top targets" items={session ? [session.challenge.target.title] : []} />
+      <StatsList
+        title="Top starts"
+        items={session ? [session.challenge.start.title] : []}
+      />
+      <StatsList
+        title="Top targets"
+        items={session ? [session.challenge.target.title] : []}
+      />
       <StatsList title="Visited pages" items={visitedTitles} />
     </section>
   );

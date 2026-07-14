@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createVikipediaApiClient } from "./vikipediaApiClient";
 
 describe("Vikipedia API client", () => {
-  it("calls the server tracking endpoints with JSON bodies", async () => {
+  it("calls server tracking endpoints with VGames bearer auth for writes", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       const responses: Record<string, unknown> = {
@@ -19,14 +19,11 @@ describe("Vikipedia API client", () => {
             },
           ],
         },
-        "/api/players": {
-          player: { id: "player-1", displayName: "Vijay" },
-        },
         "/api/runs/start": {
           run: {
             id: "run-1",
             challengeId: "challenge-0001",
-            playerId: "player-1",
+            accountId: "acc-1",
             status: "active",
             startTitle: "Moon",
             targetTitle: "Gravity",
@@ -40,7 +37,7 @@ describe("Vikipedia API client", () => {
             rank: 1,
             runId: "run-1",
             challengeId: "challenge-0001",
-            playerId: "player-1",
+            accountId: "acc-1",
             displayName: "Vijay",
             elapsedMs: 1500,
             clickCount: 1,
@@ -63,13 +60,10 @@ describe("Vikipedia API client", () => {
 
     expect((await client.listChallenges()).at(0)?.label).toBe("Challenge #1");
     expect(
-      await client.savePlayer({ displayName: "Vijay", playerId: "player-1" }),
-    ).toEqual({ id: "player-1", displayName: "Vijay" });
-    expect(
       await client.startRun({
         challengeId: "challenge-0001",
-        playerId: "player-1",
-      }),
+        publicName: "Vijay",
+      }, "jwt-claimed"),
     ).toMatchObject({ id: "run-1", clickCount: 0 });
     expect(
       await client.recordClick("run-1", {
@@ -79,27 +73,38 @@ describe("Vikipedia API client", () => {
         destinationTitle: "Gravity",
         destinationPageId: 123,
         clientTimestampMs: 1500,
-      }),
+      }, "jwt-claimed"),
     ).toEqual({ clickCount: 1 });
     expect(
       await client.completeRun("run-1", {
         finalTitle: "Gravity",
         clientTimestampMs: 1500,
-      }),
+      }, "jwt-claimed"),
     ).toMatchObject({ rank: 1, elapsedMs: 1500 });
     expect(await client.listLeaderboard("challenge-0001")).toEqual([]);
     expect(await client.getRunPath("run-1")).toEqual([]);
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      "/api/players",
+      "/api/runs/start",
       expect.objectContaining({
-        body: JSON.stringify({ displayName: "Vijay", playerId: "player-1" }),
+        body: JSON.stringify({
+          challengeId: "challenge-0001",
+          publicName: "Vijay",
+        }),
+        headers: expect.objectContaining({
+          Authorization: "Bearer jwt-claimed",
+        }),
         method: "POST",
       }),
     );
     expect(fetchImpl).toHaveBeenCalledWith(
       "/api/runs/run-1/click",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer jwt-claimed",
+        }),
+        method: "POST",
+      }),
     );
   });
 
@@ -115,7 +120,12 @@ describe("Vikipedia API client", () => {
     });
     const client = createVikipediaApiClient(fetchImpl);
 
-    await expect(client.savePlayer({ displayName: "" })).rejects.toThrow(
+    await expect(
+      client.startRun(
+        { challengeId: "challenge-0001", publicName: "" },
+        "jwt-claimed",
+      ),
+    ).rejects.toThrow(
       "Display name is required",
     );
   });
@@ -145,7 +155,10 @@ describe("Vikipedia API client", () => {
     const client = createVikipediaApiClient(fetchImpl);
 
     await expect(
-      client.createChallenge({ startTitle: "Mars", targetTitle: "Water" }),
+      client.createChallenge(
+        { startTitle: "Mars", targetTitle: "Water" },
+        "jwt-claimed",
+      ),
     ).resolves.toMatchObject({
       id: "challenge-0002",
       label: "Challenge #2",
@@ -156,6 +169,9 @@ describe("Vikipedia API client", () => {
       "/api/challenges",
       expect.objectContaining({
         method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer jwt-claimed",
+        }),
         body: JSON.stringify({ startTitle: "Mars", targetTitle: "Water" }),
       }),
     );

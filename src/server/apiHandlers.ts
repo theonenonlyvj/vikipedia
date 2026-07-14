@@ -10,8 +10,6 @@ import type {
   CompleteRunRequest,
   CompleteRunResponse,
   LeaderboardResponse,
-  PlayerRequest,
-  PlayerResponse,
   RunPathResponse,
   StartRunRequest,
   StartRunResponse,
@@ -21,14 +19,21 @@ import type { TrackingRepository } from "./trackingRepository";
 export interface ApiHandlers {
   listChallenges(): Promise<ChallengesResponse>;
   createChallenge(input: CreateChallengeRequest): Promise<CreateChallengeResponse>;
-  upsertPlayer(input: PlayerRequest): Promise<PlayerResponse>;
   startRun(input: StartRunRequest): Promise<StartRunResponse>;
-  recordClick(runId: string, input: ClickRequest): Promise<ClickResponse>;
+  recordClick(
+    runId: string,
+    accountId: string,
+    input: ClickRequest,
+  ): Promise<ClickResponse>;
   completeRun(
     runId: string,
+    accountId: string,
     input: CompleteRunRequest,
   ): Promise<CompleteRunResponse>;
-  abandonRun(runId: string): Promise<AbandonRunResponse>;
+  abandonRun(
+    runId: string,
+    accountId: string,
+  ): Promise<AbandonRunResponse>;
   listLeaderboard(challengeId: string): Promise<LeaderboardResponse>;
   getRunPath(runId: string): Promise<RunPathResponse>;
 }
@@ -63,44 +68,47 @@ export function createApiHandlers(
       };
     },
 
-    async upsertPlayer(input) {
-      const displayName = requiredString(
-        input.displayName,
-        "invalid_display_name",
-        "Enter a display name before starting.",
-      ).slice(0, 24);
-      const playerId = input.playerId?.trim() || undefined;
-
-      return {
-        player: await repository.upsertPlayer({ displayName, playerId }),
-      };
-    },
-
     async startRun(input) {
       const challengeId = requiredString(
         input.challengeId,
         "invalid_challenge_id",
         "Choose a challenge before starting.",
       );
-      const playerId = requiredString(
-        input.playerId,
-        "invalid_player_id",
+      const accountId = requiredString(
+        input.accountId,
+        "invalid_account_id",
+        "A VGames account is required.",
+      );
+      const publicName = requiredString(
+        input.publicName,
+        "invalid_public_name",
         "Enter a display name before starting.",
       );
+      const identityStatus = readIdentityStatus(input.identityStatus);
 
       return {
-        run: await repository.startRun({ challengeId, playerId }),
+        run: await repository.startRun({
+          challengeId,
+          accountId,
+          publicName: publicName.slice(0, 24),
+          identityStatus,
+        }),
       };
     },
 
-    async recordClick(runId, input) {
+    async recordClick(runId, accountId, input) {
       const cleanRunId = requiredString(
         runId,
         "invalid_run_id",
         "A run id is required.",
       );
+      const cleanAccountId = requiredString(
+        accountId,
+        "invalid_account_id",
+        "A VGames account is required.",
+      );
 
-      return repository.recordClick(cleanRunId, {
+      return repository.recordClick(cleanRunId, cleanAccountId, {
         sourceTitle: requiredString(
           input.sourceTitle,
           "invalid_source_title",
@@ -126,11 +134,16 @@ export function createApiHandlers(
       });
     },
 
-    async completeRun(runId, input) {
+    async completeRun(runId, accountId, input) {
       const cleanRunId = requiredString(
         runId,
         "invalid_run_id",
         "A run id is required.",
+      );
+      const cleanAccountId = requiredString(
+        accountId,
+        "invalid_account_id",
+        "A VGames account is required.",
       );
       const finalTitle = requiredString(
         input.finalTitle,
@@ -139,16 +152,25 @@ export function createApiHandlers(
       );
 
       return {
-        leaderboardRow: await repository.completeRun(cleanRunId, {
-          finalTitle,
-          clientTimestampMs: optionalNumber(input.clientTimestampMs),
-        }),
+        leaderboardRow: await repository.completeRun(
+          cleanRunId,
+          cleanAccountId,
+          {
+            finalTitle,
+            clientTimestampMs: optionalNumber(input.clientTimestampMs),
+          },
+        ),
       };
     },
 
-    async abandonRun(runId) {
+    async abandonRun(runId, accountId) {
       return repository.abandonRun(
         requiredString(runId, "invalid_run_id", "A run id is required."),
+        requiredString(
+          accountId,
+          "invalid_account_id",
+          "A VGames account is required.",
+        ),
       );
     },
 
@@ -172,4 +194,12 @@ export function createApiHandlers(
       };
     },
   };
+}
+
+function readIdentityStatus(value: unknown): "ghost" | "claimed" | "merged" {
+  if (value === "ghost" || value === "claimed" || value === "merged") {
+    return value;
+  }
+
+  return "ghost";
 }

@@ -1,18 +1,10 @@
 import type {
+  AccountStatus,
   Challenge,
   RankedLeaderboardRow,
   ServerPathStep,
 } from "../domain/types";
-import type { PlayerRecord, RunRecordResponse } from "./trackingRepository";
-
-export interface PlayerRequest {
-  displayName: string;
-  playerId?: string;
-}
-
-export interface PlayerResponse {
-  player: PlayerRecord;
-}
+import type { RunRecordResponse } from "./trackingRepository";
 
 export interface ChallengesResponse {
   challenges: Challenge[];
@@ -29,7 +21,9 @@ export interface CreateChallengeResponse {
 
 export interface StartRunRequest {
   challengeId: string;
-  playerId: string;
+  accountId: string;
+  publicName: string;
+  identityStatus: AccountStatus;
 }
 
 export interface StartRunResponse {

@@ -5,9 +5,7 @@ import type {
   CreateChallengeRequest,
   CompleteRunRequest,
   LeaderboardResponse,
-  PlayerRequest,
   RunPathResponse,
-  StartRunRequest,
 } from "../server/contracts";
 import type {
   Challenge,
@@ -15,21 +13,35 @@ import type {
   ServerPathStep,
 } from "../domain/types";
 import type {
-  PlayerRecord,
   RunRecordResponse,
 } from "../server/trackingRepository";
 
+export interface StartTrackedRunRequest {
+  challengeId: string;
+  publicName: string;
+}
+
 export interface VikipediaApiClient {
   listChallenges(): Promise<Challenge[]>;
-  createChallenge(input: CreateChallengeRequest): Promise<Challenge>;
-  savePlayer(input: PlayerRequest): Promise<PlayerRecord>;
-  startRun(input: StartRunRequest): Promise<RunRecordResponse>;
-  recordClick(runId: string, input: ClickRequest): Promise<ClickResponse>;
+  createChallenge(
+    input: CreateChallengeRequest,
+    token: string,
+  ): Promise<Challenge>;
+  startRun(
+    input: StartTrackedRunRequest,
+    token: string,
+  ): Promise<RunRecordResponse>;
+  recordClick(
+    runId: string,
+    input: ClickRequest,
+    token: string,
+  ): Promise<ClickResponse>;
   completeRun(
     runId: string,
     input: CompleteRunRequest,
+    token: string,
   ): Promise<RankedLeaderboardRow>;
-  abandonRun(runId: string): Promise<AbandonRunResponse>;
+  abandonRun(runId: string, token: string): Promise<AbandonRunResponse>;
   listLeaderboard(challengeId: string): Promise<RankedLeaderboardRow[]>;
   getRunPath(runId: string): Promise<ServerPathStep[]>;
 }
@@ -45,66 +57,60 @@ export function createVikipediaApiClient(
       );
       return response.challenges;
     },
-    async createChallenge(input) {
+    async createChallenge(input, token) {
       const response = await apiRequest<{ challenge: Challenge }>(
         fetchImpl,
         "/api/challenges",
         {
           method: "POST",
           body: input,
+          token,
         },
       );
       return response.challenge;
     },
-    async savePlayer(input) {
-      const response = await apiRequest<{ player: PlayerRecord }>(
-        fetchImpl,
-        "/api/players",
-        {
-          method: "POST",
-          body: input,
-        },
-      );
-      return response.player;
-    },
-    async startRun(input) {
+    async startRun(input, token) {
       const response = await apiRequest<{ run: RunRecordResponse }>(
         fetchImpl,
         "/api/runs/start",
         {
           method: "POST",
           body: input,
+          token,
         },
       );
       return response.run;
     },
-    async recordClick(runId, input) {
+    async recordClick(runId, input, token) {
       return apiRequest<ClickResponse>(
         fetchImpl,
         `/api/runs/${encodeURIComponent(runId)}/click`,
         {
           method: "POST",
           body: input,
+          token,
         },
       );
     },
-    async completeRun(runId, input) {
+    async completeRun(runId, input, token) {
       const response = await apiRequest<{ leaderboardRow: RankedLeaderboardRow }>(
         fetchImpl,
         `/api/runs/${encodeURIComponent(runId)}/complete`,
         {
           method: "POST",
           body: input,
+          token,
         },
       );
       return response.leaderboardRow;
     },
-    async abandonRun(runId) {
+    async abandonRun(runId, token) {
       return apiRequest<AbandonRunResponse>(
         fetchImpl,
         `/api/runs/${encodeURIComponent(runId)}/abandon`,
         {
           method: "POST",
+          token,
         },
       );
     },
@@ -128,14 +134,11 @@ export function createVikipediaApiClient(
 async function apiRequest<T>(
   fetchImpl: typeof fetch,
   path: string,
-  options: { method?: string; body?: unknown } = {},
+  options: { method?: string; body?: unknown; token?: string } = {},
 ): Promise<T> {
   const response = await fetchImpl(path, {
     method: options.method ?? "GET",
-    headers:
-      options.body === undefined
-        ? undefined
-        : { "Content-Type": "application/json" },
+    headers: createHeaders(options),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const payload = await readJson(response);
@@ -145,6 +148,21 @@ async function apiRequest<T>(
   }
 
   return payload as T;
+}
+
+function createHeaders(options: {
+  body?: unknown;
+  token?: string;
+}): Record<string, string> | undefined {
+  const headers: Record<string, string> = {};
+  if (options.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (options.token) {
+    headers.Authorization = `Bearer ${options.token}`;
+  }
+
+  return Object.keys(headers).length ? headers : undefined;
 }
 
 async function readJson(response: Response): Promise<unknown> {

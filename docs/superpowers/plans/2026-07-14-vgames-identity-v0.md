@@ -33,7 +33,7 @@
 - `src/server/apiHandlers.ts`: require `accountId` for run writes; remove local player creation.
 - `functions/_shared/createTrackingContext.ts`: switch env from Supabase to D1 + VGames URL.
 - `functions/api/identity/guest.ts`, `secure.ts`, `login.ts`: same-origin identity proxy endpoints.
-- `functions/api/players.ts`: remove or leave as compatibility error after client no longer calls it.
+- `functions/api/players.ts`: removed after client no longer calls it.
 - `functions/api/runs/start.ts`: derive run identity from Authorization token instead of client `playerId`.
 - `src/App.tsx`: landing gate with Secure display name / Log in primary flow and Play as guest secondary flow.
 - `src/styles.css`: landing identity styles only; no article typography changes.
@@ -54,10 +54,10 @@
   - `createVGamesIdentityClient(fetchImpl)`
   - methods `playAsGuest(displayName)`, `secureGuest(input)`, `login(input)`, `getSession()`, `clearSession()`
 
-- [ ] **Step 1: Write tests** for generated device credentials, stored sessions, guest auth request body including `game: "vikipedia"`, secure flow, and login flow.
-- [ ] **Step 2: Run** `npm test -- src/services/vgamesIdentity.test.ts` and verify tests fail because the module is missing.
-- [ ] **Step 3: Implement** storage helpers and fetch client with same-origin `/api/identity/*` endpoints.
-- [ ] **Step 4: Run** `npm test -- src/services/vgamesIdentity.test.ts` and verify pass.
+- [x] **Step 1: Write tests** for generated device credentials, stored sessions, guest auth request body including `game: "vikipedia"`, secure flow, and login flow.
+- [x] **Step 2: Run** `npm test -- src/services/vgamesIdentity.test.ts` and verify tests fail because the module is missing.
+- [x] **Step 3: Implement** storage helpers and fetch client with same-origin `/api/identity/*` endpoints.
+- [x] **Step 4: Run** `npm test -- src/services/vgamesIdentity.test.ts` and verify pass.
 
 ## Task 2: VGames Identity Proxy
 
@@ -78,10 +78,10 @@
   - `login(username, password, deviceCredential)`
   - `introspect(token)`
 
-- [ ] **Step 1: Write tests** proving the proxy calls VGames with `game: "vikipedia"`, refreshes token after `/auth/set-credentials` by logging in, and returns structured API errors.
-- [ ] **Step 2: Run** `npm test -- src/server/vgamesIdentityClient.test.ts functions/api/routes.test.ts` and verify expected failures.
-- [ ] **Step 3: Implement** the client and Pages Function endpoints.
-- [ ] **Step 4: Run** targeted tests and verify pass.
+- [x] **Step 1: Write tests** proving the proxy calls VGames with `game: "vikipedia"`, refreshes token after `/auth/set-credentials` by logging in, and returns structured API errors.
+- [x] **Step 2: Run** `npm test -- src/server/vgamesIdentityClient.test.ts functions/api/routes.test.ts` and verify expected failures.
+- [x] **Step 3: Implement** the client and Pages Function endpoints.
+- [x] **Step 4: Run** targeted tests and verify pass.
 
 ## Task 3: D1 Account-Keyed Tracking Repository
 
@@ -98,10 +98,10 @@
 - Consumes: VGames `accountId`, `publicName`, `identityStatus`.
 - Produces: tracking methods keyed by `accountId` and `account_profiles`.
 
-- [ ] **Step 1: Write repository tests** for challenge seed, account profile upsert, starting a run by `accountId`, recording clicks, completing runs, and leaderboard display updating when an account profile changes from guest to handle.
-- [ ] **Step 2: Run** `npm test -- src/server/d1TrackingRepository.test.ts src/server/apiHandlers.test.ts` and verify failures.
-- [ ] **Step 3: Implement** the D1 repository and update handler contracts.
-- [ ] **Step 4: Run** targeted tests and verify pass.
+- [x] **Step 1: Write repository tests** for challenge seed, account profile upsert, starting a run by `accountId`, recording clicks, completing runs, and leaderboard display updating when an account profile changes from guest to handle.
+- [x] **Step 2: Run** `npm test -- src/server/d1TrackingRepository.test.ts src/server/apiHandlers.test.ts` and verify failures.
+- [x] **Step 3: Implement** the D1 repository and update handler contracts.
+- [x] **Step 4: Run** targeted tests and verify pass.
 
 ## Task 4: Run API Authorization
 
@@ -119,10 +119,10 @@
 - Consumes: `Authorization: Bearer <VGames token>`.
 - Produces: run mutations that derive `accountId` from VGames introspection, not browser-provided `playerId`.
 
-- [ ] **Step 1: Write tests** that unauthenticated run start fails, authenticated run start omits `playerId`, and create challenge requires a VGames session.
-- [ ] **Step 2: Run** targeted tests and verify failures.
-- [ ] **Step 3: Implement** auth extraction/introspection and API client token headers.
-- [ ] **Step 4: Run** targeted tests and verify pass.
+- [x] **Step 1: Write tests** that unauthenticated run start fails, authenticated run start omits `playerId`, and create challenge requires a VGames session.
+- [x] **Step 2: Run** targeted tests and verify failures.
+- [x] **Step 3: Implement** auth extraction/introspection and API client token headers.
+- [x] **Step 4: Run** targeted tests and verify pass.
 
 ## Task 5: Landing And Session UI
 
@@ -130,16 +130,16 @@
 - Modify: `src/App.tsx`
 - Modify: `src/App.test.tsx`
 - Modify: `src/styles.css`
-- Modify: `src/services/playerRepository.ts` or delete after replacing usages.
+- Delete: `src/services/playerRepository.ts` after replacing usages.
 
 **Interfaces:**
 - Consumes: `VGamesIdentitySession`.
 - Produces: landing state with primary "Secure display name / Log in" and secondary "Play as guest".
 
-- [ ] **Step 1: Write UI tests** for guest play, secure guest, login, persisted session, and run start with the identity token.
-- [ ] **Step 2: Run** `npm test -- src/App.test.tsx` and verify failures.
-- [ ] **Step 3: Implement** landing/session UI and replace `playerRepository` usages.
-- [ ] **Step 4: Run** targeted tests and verify pass.
+- [x] **Step 1: Write UI tests** for guest play, secure guest, login, persisted session, and run start with the identity token.
+- [x] **Step 2: Run** `npm test -- src/App.test.tsx` and verify failures.
+- [x] **Step 3: Implement** landing/session UI and replace `playerRepository` usages.
+- [x] **Step 4: Run** targeted tests and verify pass.
 
 ## Task 6: VGames Origin Game Support
 
@@ -150,10 +150,10 @@
 **Interfaces:**
 - Produces: `/auth/quick` accepts `game: "vikipedia"` and stores `origin_game='vikipedia'`.
 
-- [ ] **Step 1: Write or update viota worker test** proving `game: "vikipedia"` is preserved.
-- [ ] **Step 2: Run** the viota worker test and verify failure.
-- [ ] **Step 3: Add `vikipedia` to `ORIGIN_GAMES`.
-- [ ] **Step 4: Run** the viota worker test and verify pass.
+- [x] **Step 1: Write or update viota worker test** proving `game: "vikipedia"` is preserved.
+- [x] **Step 2: Run** the viota worker test and verify failure.
+- [x] **Step 3: Add `vikipedia` to `ORIGIN_GAMES`.**
+- [x] **Step 4: Run** the viota worker test and verify pass.
 
 ## Task 7: Documentation And Verification
 
@@ -165,11 +165,11 @@
 **Interfaces:**
 - Produces: deployment docs with Cloudflare Pages, D1 binding, and VGames identity proxy setup.
 
-- [ ] **Step 1: Update docs** with D1 binding names, `VGAMES_URL`, and no standalone `players`.
-- [ ] **Step 2: Run** `npm test`.
-- [ ] **Step 3: Run** `npm run build`.
-- [ ] **Step 4: From viota, run** the targeted worker identity test changed in Task 6.
-- [ ] **Step 5: Commit Vikipedia and viota changes separately unless Vijay asks for one combined checkpoint.
+- [x] **Step 1: Update docs** with D1 binding names, `VGAMES_URL`, and no standalone `players`.
+- [x] **Step 2: Run** `npm test`.
+- [x] **Step 3: Run** `npm run build`.
+- [x] **Step 4: From viota, run** the targeted worker identity test changed in Task 6.
+- [ ] **Step 5: Commit Vikipedia and viota changes separately unless Vijay asks for one combined checkpoint.**
 
 ## Self-Review
 

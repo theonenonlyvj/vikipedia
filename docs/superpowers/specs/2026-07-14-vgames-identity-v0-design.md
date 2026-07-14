@@ -8,8 +8,9 @@ challenge-leaderboard based: it does not matter whether two players press
 Start at the same time. It only matters that every run is tracked against the
 right identity and challenge.
 
-This design supersedes the earlier standalone-Supabase identity assumption in
-`2026-07-14-server-tracked-v0-design.md`.
+This design supersedes the earlier standalone Supabase/player assumption in
+`2026-07-14-server-tracked-v0-design.md`. The implementation now uses
+Cloudflare D1 for Vikipedia-owned tracking data.
 
 ## Locked Decisions
 
@@ -123,6 +124,7 @@ Do not create a Vikipedia-local `players` namespace for public launch. Replace
 
 Minimum Vikipedia tables:
 
+- `account_profiles`
 - `challenges`
 - `runs`
 - `run_events`
@@ -136,6 +138,12 @@ Minimum Vikipedia tables:
 - `started_at`, `completed_at`, `abandoned_at`.
 - `elapsed_ms`, `click_count`.
 - start/target/final title snapshots.
+
+`account_profiles` is a Vikipedia-owned cache for leaderboard display:
+
+- `account_id`: VGames account id.
+- `public_name`: current display name/handle supplied by the VGames session.
+- `identity_status`: `ghost`, `claimed`, or `merged`.
 
 Leaderboards are per challenge. Sorting stays:
 
@@ -170,8 +178,8 @@ Vikipedia run calls:
 - `GET /api/challenges/:challengeId/leaderboard`
 - `GET /api/runs/:runId/path`
 
-`POST /api/players` should be removed or replaced with an identity-bootstrap
-flow that delegates to VGames.
+`POST /api/players` is removed. Identity bootstrap delegates to
+`/api/identity/guest`, `/api/identity/secure`, and `/api/identity/login`.
 
 ## Platform Fit
 
@@ -185,29 +193,19 @@ Vikipedia is a challenge leaderboard game, not a synchronous room game.
 
 ## Deployment Implication
 
-Do not launch a new standalone Supabase identity/player project as the next
-step. The next implementation plan should decide where Vikipedia challenge/run
-tables live:
-
-1. Prefer Cloudflare D1 if keeping the VGames stack cohesive is more important
-   than Postgres conveniences.
-2. Use Supabase only for Vikipedia-owned run data if there is a strong query or
-   operations reason, and still key every run by VGames `account_id`.
-
-Either way, VGames identity is the source of truth for player identity.
+Do not launch a standalone Supabase identity/player project. Vikipedia
+challenge/run tables live in Cloudflare D1 through the `VIKIPEDIA_DB` Pages
+binding. VGames identity is the source of truth for player identity.
 
 ## Required VGames Change
 
-The live VGames `/auth/quick` endpoint currently only recognizes `origin_game`
-values `iota` and `jaipur`. Add `vikipedia` before launch so new ghost accounts
-created from Vikipedia are stamped correctly.
+The viota worker must allow `origin_game = 'vikipedia'` before launch so new
+ghost accounts created from Vikipedia are stamped correctly. The local viota
+change has been made and verified with the targeted worker account test.
 
-## Open Implementation Questions
+## Resolved Implementation Questions
 
-- Should the Vikipedia data store be Cloudflare D1 beside VGames, or Supabase
-  keyed by VGames `account_id`?
-- Should guests pick a temporary display label before playing, or default to a
-  generated guest label until they secure a VGames name?
-- Should public leaderboards hide guest labels behind `Guest ####` until the
-  account is secured?
-- Should securing a VGames name be required before creating new challenges?
+- Data store: Cloudflare D1.
+- Guest entry: guests pick a temporary display label before playing.
+- Guest leaderboard labels: v0 displays the session display label.
+- Challenge creation: requires a VGames session token.

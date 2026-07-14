@@ -1,25 +1,70 @@
 import { createApiHandlers } from "../../src/server/apiHandlers";
+import { createD1TrackingRepository } from "../../src/server/d1TrackingRepository";
 import { ApiError } from "../../src/server/http";
-import { createSupabaseTrackingRepository } from "../../src/server/supabaseTrackingRepository";
+import { createVGamesIdentityClient } from "../../src/server/vgamesIdentityClient";
+import type { AccountStatus } from "../../src/domain/types";
 
 export interface Env {
-  SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
+  VIKIPEDIA_DB: D1Database;
+  VGAMES_URL: string;
 }
 
 export function createTrackingContext(env: Env) {
-  const repository = createSupabaseTrackingRepository({
-    url: env.SUPABASE_URL,
-    serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
+  const repository = createD1TrackingRepository({
+    db: env.VIKIPEDIA_DB,
   });
   const handlers = createApiHandlers(repository);
+  const identity = createVGamesIdentityClient({
+    baseUrl: env.VGAMES_URL,
+  });
+  const authorize = (request: Request) => authorizeVGamesRequest(request, identity);
 
   return {
     handlers,
+    identity,
+    authorize,
     readJson,
     json,
     error,
   };
+}
+
+export interface AuthorizedVGamesAccount {
+  accountId: string;
+  status: AccountStatus;
+}
+
+export async function authorizeVGamesRequest(
+  request: Request,
+  identity: Pick<ReturnType<typeof createVGamesIdentityClient>, "introspect">,
+): Promise<AuthorizedVGamesAccount> {
+  const token = readBearerToken(request);
+  const result = await identity.introspect(token);
+  if (!result.valid) {
+    throw new ApiError(
+      "unauthorized",
+      "Sign in before changing Vikipedia.",
+      401,
+    );
+  }
+
+  return {
+    accountId: result.accountId,
+    status: result.status,
+  };
+}
+
+function readBearerToken(request: Request): string {
+  const authorization = request.headers.get("Authorization") ?? "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match?.[1]) {
+    throw new ApiError(
+      "unauthorized",
+      "Sign in before changing Vikipedia.",
+      401,
+    );
+  }
+  return match[1].trim();
 }
 
 export async function readJson(request: Request): Promise<unknown> {

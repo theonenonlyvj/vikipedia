@@ -12,6 +12,7 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
 export const onRequestPost: PagesFunction<Env> = async (context) => {
   const tracking = createTrackingContext(context.env);
   try {
+    await tracking.authorize(context.request);
     return tracking.json(
       await tracking.handlers.createChallenge(
         (await tracking.readJson(context.request)) as {
