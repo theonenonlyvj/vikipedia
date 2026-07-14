@@ -19,6 +19,19 @@ function memoryStorage(): Storage {
 }
 
 describe("Vikipedia app", () => {
+  it("does not request passwords on the public entry gate", async () => {
+    render(<App fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+
+    expect(await screen.findByText(/choose a display name/i)).toBeVisible();
+    expect(screen.queryByLabelText(/password/i)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /secure display name|log in/i }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /enter vikipedia/i }),
+    ).toBeVisible();
+  });
+
   it("requires a display name before creating a persisted VGames guest session", async () => {
     const storage = memoryStorage();
     const fetchImpl = createFetchMock();
@@ -26,11 +39,11 @@ describe("Vikipedia app", () => {
 
     render(<App fetchImpl={fetchImpl} storage={storage} />);
 
-    expect(await screen.findByText(/secure your display name/i)).toBeVisible();
+    expect(await screen.findByText(/choose a display name/i)).toBeVisible();
     expect(screen.queryByRole("button", { name: /start challenge #1/i })).toBeNull();
 
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /play as guest/i }));
+    await user.click(screen.getByRole("button", { name: /enter vikipedia/i }));
 
     expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
     expect(JSON.parse(storage.getItem("vikipedia:vgames-session") ?? "{}")).toEqual({
@@ -62,28 +75,6 @@ describe("Vikipedia app", () => {
     );
   });
 
-  it("secures a display name through VGames before entering the site", async () => {
-    const storage = memoryStorage();
-    const fetchImpl = createFetchMock();
-    const user = userEvent.setup();
-
-    render(<App fetchImpl={fetchImpl} storage={storage} />);
-
-    await user.type(screen.getByLabelText(/display name/i), "vijay");
-    await user.type(screen.getByLabelText(/password/i), "secret-pass");
-    await user.click(
-      screen.getByRole("button", { name: /secure display name \/ log in/i }),
-    );
-
-    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
-    expect(JSON.parse(storage.getItem("vikipedia:vgames-session") ?? "{}")).toMatchObject({
-      accountId: "acc-claimed",
-      displayName: "vijay",
-      token: "jwt-claimed",
-      status: "claimed",
-    });
-  });
-
   it("tracks the run on the server with the VGames session token", async () => {
     let now = 1000;
     const fetchImpl = createFetchMock();
@@ -98,7 +89,7 @@ describe("Vikipedia app", () => {
     );
 
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /play as guest/i }));
+    await user.click(screen.getByRole("button", { name: /enter vikipedia/i }));
     await user.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );

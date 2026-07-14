@@ -57,7 +57,6 @@ export default function App({
   const [identitySession, setIdentitySession] =
     useState<VGamesIdentitySession | null>(null);
   const [displayNameDraft, setDisplayNameDraft] = useState("");
-  const [passwordDraft, setPasswordDraft] = useState("");
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [selectedChallengeId, setSelectedChallengeId] = useState<string | null>(
     null,
@@ -208,62 +207,6 @@ export default function App({
     } catch (caught) {
       setModeState("idle");
       setError(errorMessage(caught, "Could not start a guest session."));
-    }
-  }
-
-  async function secureOrLogin() {
-    const username = displayNameDraft.trim();
-    const password = passwordDraft.trim();
-    if (!username) {
-      setError("Display name is required to enter Vikipedia.");
-      return;
-    }
-    if (!password) {
-      setError("Password is required to secure a display name.");
-      return;
-    }
-
-    setError(null);
-    setModeState("loading");
-    const deviceCredential = identityRepository.getDeviceCredential();
-    try {
-      let session: VGamesIdentitySession;
-      if (identitySession?.status === "ghost") {
-        session = await identityClient.secureGuest({
-          deviceCredential,
-          token: identitySession.token,
-          username,
-          password,
-        });
-      } else {
-        try {
-          const guest = await identityClient.playAsGuest({
-            deviceCredential,
-            displayName: username,
-          });
-          identityRepository.saveSession(guest);
-          session = await identityClient.secureGuest({
-            deviceCredential,
-            token: guest.token,
-            username,
-            password,
-          });
-        } catch {
-          session = await identityClient.login({
-            deviceCredential,
-            username,
-            password,
-          });
-        }
-      }
-      identityRepository.saveSession(session);
-      setIdentitySession(session);
-      setDisplayNameDraft(session.displayName);
-      setPasswordDraft("");
-      setModeState("idle");
-    } catch (caught) {
-      setModeState("idle");
-      setError(errorMessage(caught, "Could not secure that display name."));
     }
   }
 
@@ -431,11 +374,14 @@ export default function App({
         <section className="entry-gate" aria-label="Enter Vikipedia">
           <span className="viota-mark">Viota</span>
           <h1>Vikipedia</h1>
-          <p>Secure your display name to track every run from game zero.</p>
+          <p>
+            Choose a display name to track your runs. Vikipedia is a Viota game
+            using public Wikipedia articles.
+          </p>
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              void secureOrLogin();
+              void playAsGuest();
             }}
           >
             <label className="name-control">
@@ -449,31 +395,10 @@ export default function App({
                 value={displayNameDraft}
               />
             </label>
-            <label className="name-control">
-              <span>Password</span>
-              <input
-                aria-label="Password"
-                autoComplete="current-password"
-                onChange={(event) => setPasswordDraft(event.target.value)}
-                type="password"
-                value={passwordDraft}
-              />
-            </label>
-            <button
-              type="submit"
-              disabled={!nameIsReady || !passwordDraft.trim()}
-            >
-              Secure display name / Log in
+            <button type="submit" disabled={!nameIsReady || isBusy}>
+              Enter Vikipedia
             </button>
           </form>
-          <button
-            className="secondary-entry"
-            disabled={!nameIsReady || isBusy}
-            onClick={() => void playAsGuest()}
-            type="button"
-          >
-            Play as guest
-          </button>
           {error ? <p className="error-banner">{error}</p> : null}
         </section>
       </main>
