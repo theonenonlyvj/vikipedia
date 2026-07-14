@@ -139,78 +139,10 @@ describe("VGames identity client", () => {
     );
   });
 
-  it("secures the current guest and returns the refreshed claimed session", async () => {
-    const fetchImpl = vi.fn(async () => {
-      return Response.json({
-        accountId: "acc-claimed",
-        displayName: "vijay",
-        token: "jwt-claimed",
-        status: "claimed",
-      });
-    });
-    const client = createVGamesIdentityClient(fetchImpl);
+  it("does not expose secure or login methods in the browser client", () => {
+    const client = createVGamesIdentityClient(vi.fn());
 
-    await expect(
-      client.secureGuest({
-        deviceCredential: "cred-123456789012",
-        token: "jwt-guest",
-        username: "vijay",
-        password: "secret-pass",
-      }),
-    ).resolves.toMatchObject({
-      accountId: "acc-claimed",
-      displayName: "vijay",
-      token: "jwt-claimed",
-      status: "claimed",
-    });
-
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "/api/identity/secure",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          deviceCredential: "cred-123456789012",
-          token: "jwt-guest",
-          username: "vijay",
-          password: "secret-pass",
-        }),
-      }),
-    );
-  });
-
-  it("logs into an existing VGames account", async () => {
-    const fetchImpl = vi.fn(async () => {
-      return Response.json({
-        accountId: "acc-claimed",
-        displayName: "vijay",
-        token: "jwt-claimed",
-        status: "claimed",
-      });
-    });
-    const client = createVGamesIdentityClient(fetchImpl);
-
-    await expect(
-      client.login({
-        deviceCredential: "cred-123456789012",
-        username: "vijay",
-        password: "secret-pass",
-      }),
-    ).resolves.toMatchObject({
-      accountId: "acc-claimed",
-      status: "claimed",
-    });
-
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "/api/identity/login",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          deviceCredential: "cred-123456789012",
-          username: "vijay",
-          password: "secret-pass",
-        }),
-      }),
-    );
+    expect(Object.keys(client)).toEqual(["playAsGuest"]);
   });
 
   it("surfaces identity API error messages", async () => {
@@ -223,10 +155,9 @@ describe("VGames identity client", () => {
     const client = createVGamesIdentityClient(fetchImpl);
 
     await expect(
-      client.login({
+      client.playAsGuest({
         deviceCredential: "cred-123456789012",
-        username: "vijay",
-        password: "wrong-pass",
+        displayName: "Vijay",
       }),
     ).rejects.toThrow("That name is already taken.");
   });

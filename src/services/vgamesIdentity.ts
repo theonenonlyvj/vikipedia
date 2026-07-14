@@ -25,23 +25,8 @@ export interface GuestIdentityInput {
   displayName: string;
 }
 
-export interface SecureGuestInput {
-  deviceCredential: string;
-  token: string;
-  username: string;
-  password: string;
-}
-
-export interface LoginInput {
-  deviceCredential: string;
-  username: string;
-  password: string;
-}
-
 export interface VGamesIdentityClient {
   playAsGuest(input: GuestIdentityInput): Promise<VGamesIdentitySession>;
-  secureGuest(input: SecureGuestInput): Promise<VGamesIdentitySession>;
-  login(input: LoginInput): Promise<VGamesIdentitySession>;
 }
 
 const CREDENTIAL_STORAGE_KEY = "vwiki-race:vgames-device-credential";
@@ -116,12 +101,6 @@ export function createVGamesIdentityClient(
   return {
     playAsGuest(input) {
       return identityRequest(fetchImpl, "/api/identity/guest", input);
-    },
-    secureGuest(input) {
-      return identityRequest(fetchImpl, "/api/identity/secure", input);
-    },
-    login(input) {
-      return identityRequest(fetchImpl, "/api/identity/login", input);
     },
   };
 }
