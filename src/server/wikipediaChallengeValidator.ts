@@ -84,6 +84,7 @@ export function createWikipediaChallengeValidator(options: {
       response = await fetchImpl(url.toString(), {
         headers: {
           "Api-User-Agent": WIKIMEDIA_API_USER_AGENT,
+          "User-Agent": WIKIMEDIA_API_USER_AGENT,
         },
       });
     } catch (caught) {

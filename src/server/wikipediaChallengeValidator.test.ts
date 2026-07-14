@@ -47,6 +47,7 @@ describe("Wikipedia challenge validator", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           "Api-User-Agent": expect.stringContaining("VWiki Race"),
+          "User-Agent": expect.stringContaining("VWiki Race"),
         }),
       }),
     );
