@@ -17,6 +17,9 @@ export interface ArticleRef {
 
 export interface Challenge {
   id: string;
+  label?: string;
+  sortOrder?: number;
+  isActive?: boolean;
   dateKey?: string;
   mode: ChallengeMode;
   start: ArticleRef;
@@ -117,4 +120,29 @@ export interface StatsSummary {
   mostVisited: CountStat[];
   bridgePages: CountStat[];
   commonJumps: JumpStat[];
+}
+
+export interface ServerPathStep {
+  stepNumber: number;
+  sourceTitle: string;
+  clickedAnchorText: string;
+  destinationTitle: string;
+  destinationPageId?: number;
+  elapsedSinceStartMs?: number;
+  createdAt: string;
+}
+
+export interface ServerLeaderboardRow {
+  runId: string;
+  challengeId: string;
+  playerId: string;
+  displayName: string;
+  elapsedMs: number;
+  clickCount: number;
+  completedAt: string;
+  pathPreview: ServerPathStep[];
+}
+
+export interface RankedLeaderboardRow extends ServerLeaderboardRow {
+  rank: number;
 }
