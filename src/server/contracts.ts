@@ -18,6 +18,15 @@ export interface ChallengesResponse {
   challenges: Challenge[];
 }
 
+export interface CreateChallengeRequest {
+  startTitle: string;
+  targetTitle: string;
+}
+
+export interface CreateChallengeResponse {
+  challenge: Challenge;
+}
+
 export interface StartRunRequest {
   challengeId: string;
   playerId: string;

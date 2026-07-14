@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "./App";
@@ -19,19 +19,44 @@ function memoryStorage(): Storage {
 }
 
 describe("Vikipedia app", () => {
-  it("plays the daily challenge to completion and shows a leaderboard row", async () => {
-    let now = 1000;
-    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      const body = url.includes("page=Fruit")
-        ? fruitParseResponse
-        : appleParseResponse;
+  it("requires a locally persisted display name before entering the site", async () => {
+    const storage = memoryStorage();
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
 
-      return new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+    render(<App fetchImpl={fetchImpl} storage={storage} />);
+
+    expect(await screen.findByText(/enter vikipedia/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: /start challenge #1/i })).toBeNull();
+
+    await user.type(screen.getByLabelText(/display name/i), "Vijay");
+    await user.click(screen.getByRole("button", { name: /enter vikipedia/i }));
+
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    expect(JSON.parse(storage.getItem("vikipedia:v0-player") ?? "{}")).toEqual({
+      displayName: "Vijay",
     });
+  });
+
+  it("skips the entry gate when a display name is already cached", async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      "vikipedia:v0-player",
+      JSON.stringify({ displayName: "Vijay" }),
+    );
+
+    render(<App fetchImpl={createFetchMock()} storage={storage} />);
+
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    expect(screen.queryByText(/enter vikipedia/i)).toBeNull();
+    expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent(
+      "Vijay",
+    );
+  });
+
+  it("tracks the run on the server after the saved display name enters", async () => {
+    let now = 1000;
+    const fetchImpl = createFetchMock();
     const user = userEvent.setup();
 
     render(
@@ -39,16 +64,13 @@ describe("Vikipedia app", () => {
         fetchImpl={fetchImpl}
         now={() => now}
         storage={memoryStorage()}
-        todayKey="2026-07-13"
       />,
     );
 
-    await user.clear(await screen.findByLabelText(/display name/i));
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /save name/i }));
-
+    await user.click(screen.getByRole("button", { name: /enter vikipedia/i }));
     await user.click(
-      await screen.findByRole("button", { name: /daily challenge/i }),
+      await screen.findByRole("button", { name: /start challenge #1/i }),
     );
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
 
@@ -56,11 +78,200 @@ describe("Vikipedia app", () => {
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
     expect(await screen.findByText(/target reached/i)).toBeVisible();
-    expect(screen.getAllByText(/1 click/i).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText("Vijay")).toHaveLength(2);
-    expect(screen.getByText(/personal stats/i)).toBeVisible();
-    expect(screen.getByText(/runs played/i)).toBeVisible();
-    expect(screen.getAllByText("Apple").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Fruit").length).toBeGreaterThan(0);
+    expect(await screen.findByText("Vijay")).toBeVisible();
+    expect(screen.getAllByText(/1 click/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/1\.5s/i).length).toBeGreaterThanOrEqual(1);
+    await waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "/api/runs/run-1/complete",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
+  it("creates the next numbered challenge from the Challenges tab", async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      "vikipedia:v0-player",
+      JSON.stringify({ displayName: "Vijay" }),
+    );
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+
+    render(<App fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /challenges/i }));
+    await user.type(screen.getByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+
+    expect(
+      await screen.findByRole("button", { name: /start challenge #2/i }),
+    ).toBeVisible();
+    expect((await screen.findAllByText(/mars -> water/i)).length).toBeGreaterThan(
+      0,
+    );
+    await waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "/api/challenges",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ startTitle: "Mars", targetTitle: "Water" }),
+        }),
+      );
+    });
   });
 });
+
+function createFetchMock() {
+  let completed = false;
+  let challenges = [
+    {
+      id: "challenge-0001",
+      label: "Challenge #1",
+      sortOrder: 1,
+      isActive: true,
+      mode: "daily",
+      start: { title: "Apple" },
+      target: { title: "Fruit" },
+      ruleset: "ranked_classic",
+      source: "curated",
+    },
+  ];
+
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+
+    if (url === "/api/challenges" && method === "POST") {
+      expect(readJsonBody(init)).toEqual({
+        startTitle: "Mars",
+        targetTitle: "Water",
+      });
+      const challenge = {
+        id: "challenge-0002",
+        label: "Challenge #2",
+        sortOrder: 2,
+        isActive: true,
+        mode: "daily",
+        start: { title: "Mars" },
+        target: { title: "Water" },
+        ruleset: "ranked_classic",
+        source: "curated",
+      };
+      challenges = [...challenges, challenge];
+      return jsonResponse({ challenge });
+    }
+
+    if (url === "/api/challenges") {
+      return jsonResponse({
+        challenges,
+      });
+    }
+
+    if (url === "/api/players") {
+      expect(readJsonBody(init)).toEqual({ displayName: "Vijay" });
+      return jsonResponse({
+        player: { id: "player-1", displayName: "Vijay" },
+      });
+    }
+
+    if (url === "/api/runs/start") {
+      expect(readJsonBody(init)).toEqual({
+        challengeId: "challenge-0001",
+        playerId: "player-1",
+      });
+      return jsonResponse({
+        run: {
+          id: "run-1",
+          challengeId: "challenge-0001",
+          playerId: "player-1",
+          status: "active",
+          startTitle: "Apple",
+          targetTitle: "Fruit",
+          clickCount: 0,
+          startedAt: "2026-07-14T01:00:00.000Z",
+        },
+      });
+    }
+
+    if (url === "/api/runs/run-1/click") {
+      expect(readJsonBody(init)).toMatchObject({
+        sourceTitle: "Apple",
+        clickedAnchorText: "fruit",
+        requestedTitle: "Fruit",
+        destinationTitle: "Fruit",
+        destinationPageId: 10843,
+        clientTimestampMs: 2500,
+      });
+      return jsonResponse({ clickCount: 1 });
+    }
+
+    if (url === "/api/runs/run-1/complete") {
+      completed = true;
+      expect(readJsonBody(init)).toEqual({
+        finalTitle: "Fruit",
+        clientTimestampMs: 2500,
+      });
+      return jsonResponse({
+        leaderboardRow: {
+          rank: 1,
+          runId: "run-1",
+          challengeId: "challenge-0001",
+          playerId: "player-1",
+          displayName: "Vijay",
+          elapsedMs: 1500,
+          clickCount: 1,
+          completedAt: "2026-07-14T01:00:01.500Z",
+          pathPreview: [],
+        },
+      });
+    }
+
+    if (url === "/api/challenges/challenge-0001/leaderboard") {
+      return jsonResponse({
+        leaderboard: completed
+          ? [
+              {
+                rank: 1,
+                runId: "run-1",
+                challengeId: "challenge-0001",
+                playerId: "player-1",
+                displayName: "Vijay",
+                elapsedMs: 1500,
+                clickCount: 1,
+                completedAt: "2026-07-14T01:00:01.500Z",
+                pathPreview: [
+                  {
+                    stepNumber: 1,
+                    sourceTitle: "Apple",
+                    clickedAnchorText: "fruit",
+                    destinationTitle: "Fruit",
+                    destinationPageId: 10843,
+                    elapsedSinceStartMs: 1500,
+                    createdAt: "2026-07-14T01:00:01.500Z",
+                  },
+                ],
+              },
+            ]
+          : [],
+      });
+    }
+
+    const body = url.includes("page=Fruit")
+      ? fruitParseResponse
+      : appleParseResponse;
+    return jsonResponse(body);
+  });
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function readJsonBody(init?: RequestInit): unknown {
+  return JSON.parse(String(init?.body ?? "{}"));
+}

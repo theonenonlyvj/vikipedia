@@ -65,6 +65,41 @@ export function createSupabaseTrackingRepositoryFromClient(
       return ((data ?? []) as ChallengeRow[]).map(mapChallengeRow);
     },
 
+    async createChallenge(input) {
+      const { data: latest, error: latestError } = await client
+        .from("challenges")
+        .select("sort_order")
+        .order("sort_order", { ascending: false })
+        .limit(1);
+      assertNoError(latestError, "challenge_number_lookup_failed");
+
+      const latestSortOrder = ((latest ?? []) as Pick<
+        ChallengeRow,
+        "sort_order"
+      >[]).at(0)?.sort_order ?? 0;
+      const sortOrder = latestSortOrder + 1;
+      const id = `challenge-${String(sortOrder).padStart(4, "0")}`;
+      const label = `Challenge #${sortOrder}`;
+      const { data, error } = await client
+        .from("challenges")
+        .insert({
+          id,
+          label,
+          start_title: input.startTitle,
+          target_title: input.targetTitle,
+          ruleset: "ranked_classic",
+          sort_order: sortOrder,
+          is_active: true,
+        })
+        .select(
+          "id,label,start_title,target_title,ruleset,sort_order,is_active",
+        )
+        .single();
+      assertNoError(error, "challenge_create_failed");
+
+      return mapChallengeRow(data as ChallengeRow);
+    },
+
     async upsertPlayer(input) {
       const displayName = input.displayName.trim().slice(0, 24);
       const payload = {

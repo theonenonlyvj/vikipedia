@@ -1,130 +1,248 @@
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
-import { getTodayChallenge, SOLO_CHALLENGES } from "./data/challenges";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+  type MouseEvent,
+} from "react";
+import { getSortedChallenges } from "./domain/challenges";
 import {
   createGameSession,
   followResolvedLink,
   type GameSession,
 } from "./domain/gameSession";
-import { createStatsSummary } from "./domain/stats";
+import { compressPathForStrip } from "./domain/pathCompression";
 import type {
   Article,
   Challenge,
-  LeaderboardEntry,
-  RunRecord,
-  RunResult,
-  StatsSummary,
-  VGamesAccount,
+  RankedLeaderboardRow,
+  ServerPathStep,
 } from "./domain/types";
-import { createLocalDailyChallengeRepository } from "./services/dailyRepository";
-import { createLocalVGamesIdentityClient } from "./services/identity";
-import { createLocalRunHistoryRepository } from "./services/runHistoryRepository";
+import {
+  createPlayerRepository,
+  type PlayerProfile,
+  type PlayerRepository,
+} from "./services/playerRepository";
+import {
+  createVikipediaApiClient,
+  type VikipediaApiClient,
+} from "./services/vikipediaApiClient";
 import { createWikipediaGateway } from "./services/wikipediaGateway";
+import type {
+  PlayerRecord,
+  RunRecordResponse,
+} from "./server/trackingRepository";
 
 interface AppProps {
   fetchImpl?: typeof fetch;
   now?: () => number;
   storage?: Storage;
-  todayKey?: string;
+  apiClient?: VikipediaApiClient;
+  playerRepository?: PlayerRepository;
 }
 
 type ModeState = "idle" | "loading" | "playing" | "complete";
+type TabKey = "play" | "leaderboard" | "challenges" | "stats";
 
 export default function App({
   fetchImpl = globalThis.fetch.bind(globalThis),
   now = () => Date.now(),
   storage = globalThis.localStorage,
-  todayKey = new Date().toISOString().slice(0, 10),
+  apiClient: injectedApiClient,
+  playerRepository: injectedPlayerRepository,
 }: AppProps) {
-  const [account, setAccount] = useState<VGamesAccount | null>(null);
   const [modeState, setModeState] = useState<ModeState>("idle");
+  const [activeTab, setActiveTab] = useState<TabKey>("play");
+  const [siteProfile, setSiteProfile] = useState<PlayerProfile | null>(null);
+  const [player, setPlayer] = useState<PlayerRecord | null>(null);
+  const [displayNameDraft, setDisplayNameDraft] = useState("");
+  const [challenges, setChallenges] = useState<Challenge[]>([]);
+  const [selectedChallengeId, setSelectedChallengeId] = useState<string | null>(
+    null,
+  );
+  const [serverRun, setServerRun] = useState<RunRecordResponse | null>(null);
   const [session, setSession] = useState<GameSession | null>(null);
   const [article, setArticle] = useState<Article | null>(null);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [stats, setStats] = useState<StatsSummary | null>(null);
+  const [leaderboard, setLeaderboard] = useState<RankedLeaderboardRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [displayNameDraft, setDisplayNameDraft] = useState("Guest");
 
-  const identityClient = useMemo(
-    () => createLocalVGamesIdentityClient(storage),
-    [storage],
+  const apiClient = useMemo(
+    () => injectedApiClient ?? createVikipediaApiClient(fetchImpl),
+    [fetchImpl, injectedApiClient],
   );
-  const dailyRepository = useMemo(
-    () => createLocalDailyChallengeRepository(storage, now),
-    [now, storage],
-  );
-  const runHistoryRepository = useMemo(
-    () => createLocalRunHistoryRepository(storage),
-    [storage],
+  const playerRepository = useMemo(
+    () => injectedPlayerRepository ?? createPlayerRepository(storage),
+    [injectedPlayerRepository, storage],
   );
   const wikipediaGateway = useMemo(
     () => createWikipediaGateway({ fetchImpl }),
     [fetchImpl],
   );
 
+  const selectedChallenge =
+    challenges.find((challenge) => challenge.id === selectedChallengeId) ??
+    challenges[0] ??
+    null;
+  const nameIsReady =
+    (siteProfile?.displayName ?? displayNameDraft).trim().length > 0;
+  const isBusy = modeState === "loading";
+  const headerState =
+    modeState === "complete"
+      ? "result"
+      : session && modeState !== "idle"
+        ? "compact"
+        : "expanded";
+
+  useEffect(() => {
+    const cachedProfile = playerRepository.getPlayerProfile();
+    if (cachedProfile) {
+      setSiteProfile(cachedProfile);
+      setDisplayNameDraft(cachedProfile.displayName);
+      if (cachedProfile.id) {
+        setPlayer({
+          id: cachedProfile.id,
+          displayName: cachedProfile.displayName,
+        });
+      }
+    }
+  }, [playerRepository]);
+
   useEffect(() => {
     let cancelled = false;
 
-    identityClient
-      .quickAuth()
-      .then((nextAccount) => {
-        if (!cancelled) {
-          setAccount(nextAccount);
-          setDisplayNameDraft(nextAccount.displayName);
-          void refreshStats(nextAccount.accountId);
+    async function loadChallengeCatalog() {
+      setError(null);
+      try {
+        const nextChallenges = await apiClient.listChallenges();
+        if (cancelled) {
+          return;
         }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setError("Could not create local VGames identity.");
+        setChallenges(nextChallenges);
+        const firstChallenge = nextChallenges[0] ?? null;
+        setSelectedChallengeId(firstChallenge?.id ?? null);
+        if (firstChallenge) {
+          setLeaderboard(await apiClient.listLeaderboard(firstChallenge.id));
         }
-      });
+      } catch (caught) {
+        if (!cancelled) {
+          setError(errorMessage(caught, "Could not load challenges."));
+        }
+      }
+    }
+
+    void loadChallengeCatalog();
 
     return () => {
       cancelled = true;
     };
-  }, [identityClient]);
+  }, [apiClient]);
 
-  async function refreshStats(accountId: string) {
-    const records = await runHistoryRepository.getAllRuns();
-    setStats(createStatsSummary(records, accountId));
+  async function refreshLeaderboard(challengeId: string) {
+    setLeaderboard(await apiClient.listLeaderboard(challengeId));
   }
 
-  async function startChallenge(challenge: Challenge) {
+  async function selectChallenge(challengeId: string) {
+    setSelectedChallengeId(challengeId);
+    setActiveTab("play");
+    setError(null);
+    try {
+      await refreshLeaderboard(challengeId);
+    } catch (caught) {
+      setError(errorMessage(caught, "Could not load the leaderboard."));
+    }
+  }
+
+  async function createChallenge(input: {
+    startTitle: string;
+    targetTitle: string;
+  }) {
+    setError(null);
+    try {
+      const challenge = await apiClient.createChallenge(input);
+      setChallenges((current) =>
+        getSortedChallenges([
+          ...current.filter((item) => item.id !== challenge.id),
+          challenge,
+        ]),
+      );
+      if (!session || session.status !== "active") {
+        setSelectedChallengeId(challenge.id);
+        setServerRun(null);
+        setSession(null);
+        setArticle(null);
+        setLeaderboard([]);
+        setActiveTab("play");
+      }
+    } catch (caught) {
+      setError(errorMessage(caught, "Could not create that challenge."));
+      throw caught;
+    }
+  }
+
+  function enterSite() {
+    const displayName = displayNameDraft.trim();
+    if (!displayName) {
+      setError("Display name is required to enter Vikipedia.");
+      return;
+    }
+
+    const nextProfile = playerRepository.saveDisplayName(displayName);
+    setSiteProfile(nextProfile);
+    setDisplayNameDraft(nextProfile.displayName);
+    setError(null);
+  }
+
+  async function startSelectedChallenge() {
+    if (!selectedChallenge) {
+      return;
+    }
+
+    if (!siteProfile) {
+      setError("Display name is required to enter Vikipedia.");
+      return;
+    }
+
     setError(null);
     setModeState("loading");
     setLeaderboard([]);
 
     try {
-      const startedAt = now();
-      const nextSession = createGameSession(challenge, startedAt);
+      const nextPlayer = await apiClient.savePlayer({
+        displayName: siteProfile.displayName,
+        playerId: player?.id ?? siteProfile.id,
+      });
+      playerRepository.savePlayer(nextPlayer);
+      setSiteProfile(nextPlayer);
+      setPlayer(nextPlayer);
+      setDisplayNameDraft(nextPlayer.displayName);
+
+      const nextRun = await apiClient.startRun({
+        challengeId: selectedChallenge.id,
+        playerId: nextPlayer.id,
+      });
       const nextArticle = await wikipediaGateway.getArticle(
-        challenge.start.title,
+        selectedChallenge.start.title,
       );
-      setSession(nextSession);
+      const startedAtMs = Date.parse(nextRun.startedAt);
+      setServerRun(nextRun);
+      setSession(
+        createGameSession(
+          selectedChallenge,
+          Number.isNaN(startedAtMs) ? now() : startedAtMs,
+        ),
+      );
       setArticle(nextArticle);
-      if (challenge.mode === "daily") {
-        setLeaderboard(await dailyRepository.getLeaderboard(challenge.id));
-      }
+      await refreshLeaderboard(selectedChallenge.id);
+      setActiveTab("play");
       setModeState("playing");
     } catch (caught) {
       setModeState("idle");
-      setError(errorMessage(caught, "Could not load the start article."));
-    }
-  }
-
-  async function saveDisplayName() {
-    setError(null);
-    try {
-      const nextAccount = await identityClient.updateDisplayName(displayNameDraft);
-      setAccount(nextAccount);
-      setDisplayNameDraft(nextAccount.displayName);
-    } catch (caught) {
-      setError(errorMessage(caught, "Could not save display name."));
+      setError(errorMessage(caught, "Could not start that challenge."));
     }
   }
 
   async function followArticleLink(title: string, anchorText: string) {
-    if (!session || !account || session.status !== "active") {
+    if (!session || !serverRun || session.status !== "active") {
       return;
     }
 
@@ -144,30 +262,41 @@ export default function App({
         timestamp: clickedAt,
       });
 
-      setArticle(nextArticle);
-      setSession(nextSession);
+      const clickResponse = await apiClient.recordClick(serverRun.id, {
+        sourceTitle: session.currentPage.canonicalTitle,
+        clickedAnchorText: anchorText,
+        requestedTitle: title,
+        destinationTitle: nextArticle.canonicalTitle,
+        destinationPageId: nextArticle.pageId,
+        clientTimestampMs: clickedAt,
+      });
 
-      if (nextSession.status === "completed") {
-        if (nextSession.challenge.mode === "daily") {
-          const result: RunResult = {
-            challenge: nextSession.challenge,
-            accountId: account.accountId,
-            clicks: nextSession.clicks,
-            elapsedMs: clickedAt - nextSession.startedAt,
-            path: nextSession.path,
-            status: "completed",
-          };
-          await dailyRepository.submitResult(result, account);
-          setLeaderboard(
-            await dailyRepository.getLeaderboard(nextSession.challenge.id),
-          );
-        }
-        await runHistoryRepository.saveRun(
-          createRunRecord(nextSession, account.accountId),
-        );
-        await refreshStats(account.accountId);
+      const trackedSession = {
+        ...nextSession,
+        clicks: clickResponse.clickCount,
+      };
+      setArticle(nextArticle);
+      setSession(trackedSession);
+
+      if (trackedSession.status === "completed") {
+        const leaderboardRow = await apiClient.completeRun(serverRun.id, {
+          finalTitle: nextArticle.canonicalTitle,
+          clientTimestampMs: clickedAt,
+        });
+        setServerRun({
+          ...serverRun,
+          status: "completed",
+          clickCount: trackedSession.clicks,
+          completedAt: leaderboardRow.completedAt,
+          elapsedMs: leaderboardRow.elapsedMs,
+        });
+        await refreshLeaderboard(trackedSession.challenge.id);
         setModeState("complete");
       } else {
+        setServerRun({
+          ...serverRun,
+          clickCount: trackedSession.clicks,
+        });
         setModeState("playing");
       }
     } catch (caught) {
@@ -194,220 +323,460 @@ export default function App({
     }
   }
 
-  const dailyChallenge = getTodayChallenge(todayKey);
+  const currentPathTitles = session
+    ? [
+        session.challenge.start.title,
+        ...session.path.map(
+          (entry) => entry.resolvedDestination.canonicalTitle,
+        ),
+      ]
+    : [];
+  const visiblePath = session
+    ? compressPathForStrip(
+        currentPathTitles,
+        session.challenge.target.title,
+      )
+    : [];
   const elapsedMs =
-    session?.status === "completed" && session.completedAt
+    serverRun?.elapsedMs ??
+    (session?.status === "completed" && session.completedAt
       ? session.completedAt - session.startedAt
-      : 0;
+      : 0);
+
+  if (!siteProfile) {
+    return (
+      <main className="app-shell entry-shell" aria-busy={isBusy}>
+        <section className="entry-gate" aria-label="Enter Vikipedia">
+          <span className="viota-mark">Viota</span>
+          <h1>Vikipedia</h1>
+          <p>Pick a display name to enter the site.</p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              enterSite();
+            }}
+          >
+            <label className="name-control">
+              <span>Display name</span>
+              <input
+                aria-label="Display name"
+                autoComplete="nickname"
+                autoFocus
+                maxLength={24}
+                onChange={(event) => setDisplayNameDraft(event.target.value)}
+                value={displayNameDraft}
+              />
+            </label>
+            <button type="submit" disabled={!nameIsReady}>
+              Enter Vikipedia
+            </button>
+          </form>
+          {error ? <p className="error-banner">{error}</p> : null}
+        </section>
+      </main>
+    );
+  }
 
   return (
-    <main className="app-shell" aria-busy={modeState === "loading"}>
-      <header className="topbar">
-        <div>
+    <main
+      className={`app-shell header-${headerState}`}
+      aria-busy={isBusy}
+    >
+      <header className="game-header">
+        <div className="brand-lockup" aria-label="Vikipedia by Viota">
+          <span className="viota-mark">Viota</span>
           <h1>Vikipedia</h1>
-          <p className="subtitle">Ranked Classic Wikipedia racing</p>
         </div>
-        <div className="account-chip" aria-label="Current player">
-          {account?.displayName ?? "Loading"}
-        </div>
-      </header>
 
-      <section className="control-panel" aria-label="Game controls">
-        <label className="name-control">
-          <span>Display name</span>
-          <input
-            aria-label="Display name"
-            maxLength={24}
-            onChange={(event) => setDisplayNameDraft(event.target.value)}
-            value={displayNameDraft}
-          />
-        </label>
-        <button type="button" onClick={() => void saveDisplayName()}>
-          Save Name
-        </button>
-        <button
-          type="button"
-          onClick={() => void startChallenge(dailyChallenge)}
-        >
-          Daily Challenge
-        </button>
-        <button
-          type="button"
-          onClick={() => void startChallenge(SOLO_CHALLENGES[0])}
-        >
-          Solo Run
-        </button>
+        <div className="challenge-route" aria-label="Current challenge">
+          <span>{selectedChallenge?.label ?? "Challenge"}</span>
+          <strong>
+            {selectedChallenge
+              ? `${selectedChallenge.start.title} -> ${selectedChallenge.target.title}`
+              : "Loading"}
+          </strong>
+        </div>
+
         {session ? (
-          <dl className="score-strip">
+          <dl className="run-metrics" aria-label="Current run">
             <div>
-              <dt>Start</dt>
-              <dd>{session.challenge.start.title}</dd>
+              <dt>Clicks</dt>
+              <dd>{session.clicks}</dd>
             </div>
             <div>
               <dt>Target</dt>
               <dd>{session.challenge.target.title}</dd>
             </div>
-            <div>
-              <dt>Clicks</dt>
-              <dd>{session.clicks}</dd>
-            </div>
           </dl>
         ) : null}
-      </section>
+
+        <div className="player-gate">
+          <button
+            type="button"
+            disabled={!selectedChallenge || !nameIsReady || isBusy}
+            onClick={() => void startSelectedChallenge()}
+          >
+            Start {selectedChallenge?.label ?? "Challenge"}
+          </button>
+        </div>
+
+        <div className="account-chip" role="status" aria-label="Current player">
+          {siteProfile.displayName}
+        </div>
+      </header>
+
+      {session ? (
+        <PathStrip titles={visiblePath} />
+      ) : null}
+
+      <nav className="tabbar" aria-label="Vikipedia views">
+        {(["play", "leaderboard", "challenges", "stats"] as const).map(
+          (tab) => (
+            <button
+              aria-pressed={activeTab === tab}
+              className={activeTab === tab ? "active" : undefined}
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              type="button"
+            >
+              {tab}
+            </button>
+          ),
+        )}
+      </nav>
 
       {error ? <p className="error-banner">{error}</p> : null}
       {modeState === "loading" ? (
         <p className="loading-text">Loading article...</p>
       ) : null}
 
-      {session && article ? (
-        <section className="game-layout">
-          <article className="article-panel" onClick={handleArticleClick}>
-            <div className="article-heading">
-              <span>{session.challenge.mode}</span>
-              <h2>{article.canonicalTitle}</h2>
-            </div>
-            <div
-              className="article-content"
-              dangerouslySetInnerHTML={{ __html: article.html }}
-            />
-            <p className="attribution">{article.attribution}</p>
-          </article>
+      <section className="content-shell">
+        {activeTab === "play" ? (
+          <PlayPanel
+            article={article}
+            challenges={challenges}
+            elapsedMs={elapsedMs}
+            handleArticleClick={handleArticleClick}
+            modeState={modeState}
+            onCreateChallenge={createChallenge}
+            onSelectChallenge={(challengeId) => void selectChallenge(challengeId)}
+            selectedChallenge={selectedChallenge}
+            session={session}
+          />
+        ) : null}
 
-          <aside className="side-panel">
-            {session.status === "completed" ? (
-              <section className="result-box">
-                <h2>Target reached</h2>
-                <p>
-                  {session.clicks} {session.clicks === 1 ? "click" : "clicks"} in{" "}
-                  {formatElapsed(elapsedMs)}
-                </p>
-              </section>
-            ) : null}
+        {activeTab === "leaderboard" ? (
+          <LeaderboardPanel leaderboard={leaderboard} />
+        ) : null}
 
-            <section>
-              <h2>Path</h2>
-              {session.path.length ? (
-                <ol className="path-list">
-                  {session.path.map((entry) => (
-                    <li key={`${entry.clickNumber}-${entry.timestamp}`}>
-                      <span>{entry.sourcePage.canonicalTitle}</span>
-                      <strong>{entry.clickedAnchorText}</strong>
-                      <span>{entry.resolvedDestination.canonicalTitle}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="muted">No clicks yet.</p>
-              )}
-            </section>
+        {activeTab === "challenges" ? (
+          <ChallengeBrowser
+            challenges={challenges}
+            onCreateChallenge={createChallenge}
+            onSelectChallenge={(challengeId) => void selectChallenge(challengeId)}
+            selectedChallengeId={selectedChallenge?.id ?? null}
+          />
+        ) : null}
 
-            {session.challenge.mode === "daily" ? (
-              <section>
-                <h2>Daily Board</h2>
-                {leaderboard.length ? (
-                  <ol className="leaderboard">
-                    {leaderboard.map((row) => (
-                      <li key={row.accountId}>
-                        <span>{row.displayName}</span>
-                        <span>
-                          {row.clicks} {row.clicks === 1 ? "click" : "clicks"}
-                        </span>
-                        <span>{formatElapsed(row.elapsedMs)}</span>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="muted">No daily results yet.</p>
-                )}
-              </section>
-            ) : null}
-
-            <StatsPanel stats={stats} />
-          </aside>
-        </section>
-      ) : (
-        <section className="home-layout">
-          <section className="empty-state">
-            <h2>{dailyChallenge.start.title} to {dailyChallenge.target.title}</h2>
-            <p>Start the daily challenge or a solo run to begin navigating.</p>
-          </section>
-          <StatsPanel stats={stats} />
-        </section>
-      )}
+        {activeTab === "stats" ? (
+          <StatsPanel
+            leaderboard={leaderboard}
+            player={player}
+            session={session}
+          />
+        ) : null}
+      </section>
     </main>
   );
 }
 
-function StatsPanel({ stats }: { stats: StatsSummary | null }) {
-  const summary = stats ?? createStatsSummary([], "");
+function PlayPanel({
+  article,
+  challenges,
+  elapsedMs,
+  handleArticleClick,
+  modeState,
+  onCreateChallenge,
+  onSelectChallenge,
+  selectedChallenge,
+  session,
+}: {
+  article: Article | null;
+  challenges: Challenge[];
+  elapsedMs: number;
+  handleArticleClick: (event: MouseEvent<HTMLElement>) => void;
+  modeState: ModeState;
+  onCreateChallenge: (input: {
+    startTitle: string;
+    targetTitle: string;
+  }) => Promise<void>;
+  onSelectChallenge: (challengeId: string) => void;
+  selectedChallenge: Challenge | null;
+  session: GameSession | null;
+}) {
+  if (session && article) {
+    return (
+      <section className="game-layout">
+        <article className="article-panel" onClick={handleArticleClick}>
+          <div className="article-heading">
+            <span>{session.challenge.label ?? session.challenge.mode}</span>
+            <h2>{article.canonicalTitle}</h2>
+          </div>
+          <div
+            className="article-content"
+            dangerouslySetInnerHTML={{ __html: article.html }}
+          />
+          <p className="attribution">{article.attribution}</p>
+        </article>
+
+        {session.status === "completed" ? (
+          <aside className="result-panel">
+            <h2>Target reached</h2>
+            <p>
+              {session.clicks} {session.clicks === 1 ? "click" : "clicks"} in{" "}
+              {formatElapsed(elapsedMs)}
+            </p>
+          </aside>
+        ) : null}
+      </section>
+    );
+  }
 
   return (
-    <section className="stats-panel">
-      <h2>Personal Stats</h2>
-      <dl className="stat-grid">
-        <div>
-          <dt>Runs played</dt>
-          <dd>{summary.totals.runs}</dd>
-        </div>
-        <div>
-          <dt>Completed</dt>
-          <dd>{summary.totals.completed}</dd>
-        </div>
-        <div>
-          <dt>Best</dt>
-          <dd>
-            {summary.totals.bestClicks === null
-              ? "-"
-              : `${summary.totals.bestClicks} clicks`}
-          </dd>
-        </div>
-        <div>
-          <dt>Avg clicks</dt>
-          <dd>{summary.totals.averageClicks.toFixed(1)}</dd>
-        </div>
-      </dl>
-      <StatsList title="Top starts" items={summary.topStarts} />
-      <StatsList title="Top targets" items={summary.topTargets} />
-      <StatsList title="Most visited" items={summary.mostVisited} />
-      <StatsList title="Bridge pages" items={summary.bridgePages} />
-      <section>
-        <h3>Common jumps</h3>
-        {summary.commonJumps.length ? (
-          <ol className="compact-list">
-            {summary.commonJumps.slice(0, 5).map((jump) => (
-              <li key={`${jump.sourceTitle}->${jump.destinationTitle}`}>
-                <span>
-                  {jump.sourceTitle} {"->"} {jump.destinationTitle}
-                </span>
-                <strong>{jump.count}</strong>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="muted">No jumps yet.</p>
-        )}
+    <section className="home-layout">
+      <section className="empty-state">
+        <span>{selectedChallenge?.label ?? "Challenge"}</span>
+        <h2>
+          {selectedChallenge
+            ? `${selectedChallenge.start.title} -> ${selectedChallenge.target.title}`
+            : "Loading challenge catalog"}
+        </h2>
+        <p>{modeState === "loading" ? "Preparing run..." : "Pick a challenge."}</p>
       </section>
+
+      <ChallengeBrowser
+        challenges={challenges}
+        onCreateChallenge={onCreateChallenge}
+        onSelectChallenge={onSelectChallenge}
+        selectedChallengeId={selectedChallenge?.id ?? null}
+      />
     </section>
   );
 }
 
-function StatsList({
-  title,
-  items,
+function PathStrip({ titles }: { titles: string[] }) {
+  return (
+    <nav className="path-strip" aria-label="Run path">
+      {titles.map((title, index) => (
+        <span
+          className={title === "..." ? "path-ellipsis" : undefined}
+          key={`${title}-${index}`}
+        >
+          {title}
+        </span>
+      ))}
+    </nav>
+  );
+}
+
+function ChallengeBrowser({
+  challenges,
+  onCreateChallenge,
+  onSelectChallenge,
+  selectedChallengeId,
 }: {
-  title: string;
-  items: { title: string; count: number }[];
+  challenges: Challenge[];
+  onCreateChallenge: (input: {
+    startTitle: string;
+    targetTitle: string;
+  }) => Promise<void>;
+  onSelectChallenge: (challengeId: string) => void;
+  selectedChallengeId: string | null;
 }) {
+  const [startTitle, setStartTitle] = useState("");
+  const [targetTitle, setTargetTitle] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const canCreate =
+    startTitle.trim().length > 0 && targetTitle.trim().length > 0;
+
+  async function submitChallenge(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canCreate) {
+      return;
+    }
+
+    setIsCreating(true);
+    try {
+      await onCreateChallenge({
+        startTitle: startTitle.trim(),
+        targetTitle: targetTitle.trim(),
+      });
+      setStartTitle("");
+      setTargetTitle("");
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  return (
+    <section className="challenge-browser">
+      <h2>Challenges</h2>
+      <form className="create-challenge-form" onSubmit={submitChallenge}>
+        <label className="name-control">
+          <span>Start article</span>
+          <input
+            aria-label="Start article"
+            maxLength={80}
+            onChange={(event) => setStartTitle(event.target.value)}
+            value={startTitle}
+          />
+        </label>
+        <label className="name-control">
+          <span>Target article</span>
+          <input
+            aria-label="Target article"
+            maxLength={80}
+            onChange={(event) => setTargetTitle(event.target.value)}
+            value={targetTitle}
+          />
+        </label>
+        <button type="submit" disabled={!canCreate || isCreating}>
+          Create Challenge
+        </button>
+      </form>
+      {challenges.length ? (
+        <ol className="challenge-list">
+          {challenges.map((challenge) => (
+            <li key={challenge.id}>
+              <button
+                aria-pressed={selectedChallengeId === challenge.id}
+                onClick={() => onSelectChallenge(challenge.id)}
+                type="button"
+              >
+                <span>{challenge.label ?? challenge.id}</span>
+                <strong>
+                  {challenge.start.title} {"->"} {challenge.target.title}
+                </strong>
+              </button>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="muted">No challenges loaded.</p>
+      )}
+    </section>
+  );
+}
+
+function LeaderboardPanel({
+  leaderboard,
+}: {
+  leaderboard: RankedLeaderboardRow[];
+}) {
+  return (
+    <section className="leaderboard-panel">
+      <h2>Leaderboard</h2>
+      {leaderboard.length ? (
+        <ol className="leaderboard">
+          {leaderboard.map((row) => (
+            <li key={row.runId}>
+              <span className="rank">#{row.rank}</span>
+              <span>{row.displayName}</span>
+              <span>{formatElapsed(row.elapsedMs)}</span>
+              <span>
+                {row.clickCount} {row.clickCount === 1 ? "click" : "clicks"}
+              </span>
+              <details>
+                <summary>Path</summary>
+                <RunPathPreview path={row.pathPreview} />
+              </details>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="muted">No completed runs yet.</p>
+      )}
+    </section>
+  );
+}
+
+function RunPathPreview({ path }: { path: ServerPathStep[] }) {
+  if (!path.length) {
+    return <p className="muted">Path not loaded.</p>;
+  }
+
+  return (
+    <ol className="path-preview">
+      {path.map((step) => (
+        <li key={step.stepNumber}>
+          <span>{step.sourceTitle}</span>
+          <strong>{step.clickedAnchorText}</strong>
+          <span>{step.destinationTitle}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function StatsPanel({
+  leaderboard,
+  player,
+  session,
+}: {
+  leaderboard: RankedLeaderboardRow[];
+  player: PlayerRecord | null;
+  session: GameSession | null;
+}) {
+  const personalRows = player
+    ? leaderboard.filter((row) => row.playerId === player.id)
+    : [];
+  const visitedTitles = session
+    ? [
+        session.challenge.start.title,
+        ...session.path.map(
+          (entry) => entry.resolvedDestination.canonicalTitle,
+        ),
+      ]
+    : [];
+  const bestRow = personalRows.at(0) ?? null;
+
+  return (
+    <section className="stats-panel">
+      <h2>Stats</h2>
+      <dl className="stat-grid">
+        <div>
+          <dt>Runs ranked</dt>
+          <dd>{personalRows.length}</dd>
+        </div>
+        <div>
+          <dt>Best speed</dt>
+          <dd>{bestRow ? formatElapsed(bestRow.elapsedMs) : "-"}</dd>
+        </div>
+        <div>
+          <dt>Best clicks</dt>
+          <dd>{bestRow ? bestRow.clickCount : "-"}</dd>
+        </div>
+        <div>
+          <dt>Visited now</dt>
+          <dd>{visitedTitles.length}</dd>
+        </div>
+      </dl>
+      <StatsList title="Top starts" items={session ? [session.challenge.start.title] : []} />
+      <StatsList title="Top targets" items={session ? [session.challenge.target.title] : []} />
+      <StatsList title="Visited pages" items={visitedTitles} />
+    </section>
+  );
+}
+
+function StatsList({ title, items }: { title: string; items: string[] }) {
   return (
     <section>
       <h3>{title}</h3>
       {items.length ? (
         <ol className="compact-list">
           {items.slice(0, 5).map((item) => (
-            <li key={item.title}>
-              <span>{item.title}</span>
-              <strong>{item.count}</strong>
+            <li key={item}>
+              <span>{item}</span>
             </li>
           ))}
         </ol>
@@ -416,31 +785,6 @@ function StatsList({
       )}
     </section>
   );
-}
-
-function createRunRecord(session: GameSession, accountId: string): RunRecord {
-  const endedAt = session.completedAt ?? session.abandonedAt ?? Date.now();
-  return {
-    id: `run_${accountId}_${session.startedAt}_${session.challenge.id}`,
-    accountId,
-    challengeId: session.challenge.id,
-    mode: session.challenge.mode,
-    status: session.status === "abandoned" ? "abandoned" : "completed",
-    start: {
-      canonicalTitle: session.challenge.start.title,
-      pageId: session.challenge.start.pageId,
-    },
-    target: {
-      canonicalTitle: session.challenge.target.title,
-      pageId: session.challenge.target.pageId,
-    },
-    clicks: session.clicks,
-    elapsedMs: endedAt - session.startedAt,
-    createdAt: session.startedAt,
-    completedAt: session.completedAt,
-    abandonedAt: session.abandonedAt,
-    path: session.path,
-  };
 }
 
 function formatElapsed(ms: number): string {

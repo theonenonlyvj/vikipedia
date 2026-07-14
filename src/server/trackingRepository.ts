@@ -24,6 +24,10 @@ export interface RunRecordResponse {
 
 export interface TrackingRepository {
   listChallenges(): Promise<Challenge[]>;
+  createChallenge(input: {
+    startTitle: string;
+    targetTitle: string;
+  }): Promise<Challenge>;
   upsertPlayer(input: {
     displayName: string;
     playerId?: string;

@@ -128,6 +128,62 @@ describe("supabase tracking repository", () => {
     ]);
   });
 
+  it("assigns the next challenge number when creating a challenge", async () => {
+    const calls: unknown[] = [];
+    const repository = createSupabaseTrackingRepositoryFromClient(
+      fakeClient(async (query) => {
+        calls.push(query);
+
+        if (query.action === "select") {
+          return {
+            data: [{ sort_order: 1 }],
+            error: null,
+          };
+        }
+
+        expect(query).toMatchObject({
+          table: "challenges",
+          action: "insert",
+          payload: {
+            id: "challenge-0002",
+            label: "Challenge #2",
+            start_title: "Mars",
+            target_title: "Water",
+            ruleset: "ranked_classic",
+            sort_order: 2,
+            is_active: true,
+          },
+          single: true,
+        });
+        return {
+          data: {
+            id: "challenge-0002",
+            label: "Challenge #2",
+            start_title: "Mars",
+            target_title: "Water",
+            ruleset: "ranked_classic",
+            sort_order: 2,
+            is_active: true,
+          },
+          error: null,
+        };
+      }),
+    );
+
+    await expect(
+      repository.createChallenge({
+        startTitle: "Mars",
+        targetTitle: "Water",
+      }),
+    ).resolves.toMatchObject({
+      id: "challenge-0002",
+      label: "Challenge #2",
+      start: { title: "Mars" },
+      target: { title: "Water" },
+    });
+    expect(calls).toHaveLength(2);
+  });
+
   it("inserts a trimmed display-name player", async () => {
     const repository = createSupabaseTrackingRepositoryFromClient(
       fakeClient(async ({ table, action, payload, single }) => {

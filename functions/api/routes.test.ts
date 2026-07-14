@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockState = vi.hoisted(() => ({
   handlers: {
     listChallenges: vi.fn(),
+    createChallenge: vi.fn(),
     upsertPlayer: vi.fn(),
     startRun: vi.fn(),
     recordClick: vi.fn(),
@@ -75,6 +76,41 @@ describe("Cloudflare API routes", () => {
     });
     expect(mockState.handlers.upsertPlayer).toHaveBeenCalledWith({
       displayName: "Vijay",
+    });
+  });
+
+  it("routes challenge creation requests", async () => {
+    mockState.handlers.createChallenge.mockResolvedValue({
+      challenge: {
+        id: "challenge-0002",
+        label: "Challenge #2",
+        mode: "daily",
+        start: { title: "Mars" },
+        target: { title: "Water" },
+        ruleset: "ranked_classic",
+        source: "curated",
+      },
+    });
+    const route = await import("./challenges");
+
+    const response = await route.onRequestPost(
+      context(
+        new Request("https://example.com/api/challenges", {
+          method: "POST",
+          body: JSON.stringify({ startTitle: "Mars", targetTitle: "Water" }),
+        }),
+      ),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      challenge: {
+        id: "challenge-0002",
+        label: "Challenge #2",
+      },
+    });
+    expect(mockState.handlers.createChallenge).toHaveBeenCalledWith({
+      startTitle: "Mars",
+      targetTitle: "Water",
     });
   });
 

@@ -5,6 +5,17 @@ import type { TrackingRepository } from "./trackingRepository";
 function fakeRepository(): TrackingRepository {
   return {
     listChallenges: vi.fn(async () => []),
+    createChallenge: vi.fn(async ({ startTitle, targetTitle }) => ({
+      id: "challenge-0002",
+      label: "Challenge #2",
+      sortOrder: 2,
+      isActive: true,
+      mode: "daily" as const,
+      start: { title: startTitle },
+      target: { title: targetTitle },
+      ruleset: "ranked_classic" as const,
+      source: "curated" as const,
+    })),
     upsertPlayer: vi.fn(async ({ displayName }) => ({
       id: "player-1",
       displayName,
@@ -62,6 +73,46 @@ describe("api handlers", () => {
     expect(repository.upsertPlayer).toHaveBeenCalledWith({
       displayName: "Vijay",
       playerId: undefined,
+    });
+  });
+
+  it("creates a challenge with trimmed article titles", async () => {
+    const repository = fakeRepository();
+    const handlers = createApiHandlers(repository);
+
+    await expect(
+      handlers.createChallenge({
+        startTitle: "  Mars  ",
+        targetTitle: "  Water  ",
+      }),
+    ).resolves.toEqual({
+      challenge: {
+        id: "challenge-0002",
+        label: "Challenge #2",
+        sortOrder: 2,
+        isActive: true,
+        mode: "daily",
+        start: { title: "Mars" },
+        target: { title: "Water" },
+        ruleset: "ranked_classic",
+        source: "curated",
+      },
+    });
+
+    expect(repository.createChallenge).toHaveBeenCalledWith({
+      startTitle: "Mars",
+      targetTitle: "Water",
+    });
+  });
+
+  it("requires both challenge titles", async () => {
+    const handlers = createApiHandlers(fakeRepository());
+
+    await expect(
+      handlers.createChallenge({ startTitle: "", targetTitle: "Gravity" }),
+    ).rejects.toMatchObject({
+      code: "invalid_start_title",
+      status: 400,
     });
   });
 

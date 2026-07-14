@@ -5,6 +5,8 @@ import type {
   ChallengesResponse,
   ClickRequest,
   ClickResponse,
+  CreateChallengeRequest,
+  CreateChallengeResponse,
   CompleteRunRequest,
   CompleteRunResponse,
   LeaderboardResponse,
@@ -18,6 +20,7 @@ import type { TrackingRepository } from "./trackingRepository";
 
 export interface ApiHandlers {
   listChallenges(): Promise<ChallengesResponse>;
+  createChallenge(input: CreateChallengeRequest): Promise<CreateChallengeResponse>;
   upsertPlayer(input: PlayerRequest): Promise<PlayerResponse>;
   startRun(input: StartRunRequest): Promise<StartRunResponse>;
   recordClick(runId: string, input: ClickRequest): Promise<ClickResponse>;
@@ -37,6 +40,26 @@ export function createApiHandlers(
     async listChallenges() {
       return {
         challenges: getSortedChallenges(await repository.listChallenges()),
+      };
+    },
+
+    async createChallenge(input) {
+      const startTitle = requiredString(
+        input.startTitle,
+        "invalid_start_title",
+        "Enter a start article title.",
+      );
+      const targetTitle = requiredString(
+        input.targetTitle,
+        "invalid_target_title",
+        "Enter a target article title.",
+      );
+
+      return {
+        challenge: await repository.createChallenge({
+          startTitle,
+          targetTitle,
+        }),
       };
     },
 

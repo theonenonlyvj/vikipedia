@@ -1,19 +1,31 @@
 # Vikipedia
 
-Vikipedia is an early-stage app concept for a Wikipedia navigation game:
-players race from one article to another by following valid internal links.
+Vikipedia is a Wikipedia navigation game: players start on one article and race
+to a target article by clicking valid internal Wikipedia links.
 
-V1 is a playable solo + daily challenge web app. It uses a local mock of the
-future VGames identity contract, renders live English Wikipedia content through
-a controlled article view, tracks click paths, and stores daily leaderboard rows
-locally. It also records every run into a local master run-history list so
-personal cognitive stats exist from day zero.
+The current v0 is server-tracked from game 0. Challenges, players, runs, click
+events, paths, completions, and leaderboard rows go through Cloudflare Pages
+Functions and are stored in Supabase. Browser storage is used only to remember a
+player id and display name.
 
 ## Current Docs
 
 - [Game Principles and Rules](docs/game-principles-and-rules.md)
-- [V1 Design Spec](docs/superpowers/specs/2026-07-13-vikipedia-v1-design.md)
-- [V1 Implementation Plan](docs/superpowers/plans/2026-07-13-vikipedia-v1.md)
+- [Server-Tracked V0 Spec](docs/superpowers/specs/2026-07-14-server-tracked-v0-design.md)
+- [Server-Tracked V0 Plan](docs/superpowers/plans/2026-07-14-server-tracked-v0.md)
+
+## V0 Product Shape
+
+- `challenge-0001` is `Challenge #1`: `Moon` to `Gravity`.
+- Players can create new challenges by entering start and target article titles;
+  the server assigns the next `Challenge #N` number.
+- Display name is required before starting a run.
+- Leaderboards rank by fastest elapsed time, then fewest clicks, then earliest
+  completion.
+- Each click records source title, anchor text, requested title, resolved
+  destination, destination page id, and timestamps.
+- The article body is rendered from live Wikipedia HTML with app chrome around
+  it.
 
 ## Local Development
 
@@ -29,35 +41,49 @@ Run tests:
 npm test
 ```
 
-Run the app:
+Run the frontend only:
 
 ```bash
 npm run dev -- --host 127.0.0.1
 ```
 
-Build:
+The frontend expects `/api/*` routes. To exercise the tracked app locally, apply
+the Supabase migration, set the Cloudflare environment variables below, build,
+and run the site with Cloudflare Pages Functions:
 
 ```bash
 npm run build
+npx wrangler pages dev dist
 ```
 
-## Deployment
+## Supabase
 
-The app is a standard Vite static site. For Cloudflare Pages, connect the GitHub
-repo and use:
+Create a separate Supabase project for Vikipedia v0, then run:
+
+```bash
+supabase/migrations/0001_vikipedia_v0_tracking.sql
+```
+
+Required server-only environment variables:
+
+```bash
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=replace-with-cloudflare-secret
+```
+
+Do not expose `SUPABASE_SERVICE_ROLE_KEY` to the browser.
+
+## Cloudflare Pages
+
+For Cloudflare Pages:
 
 - Build command: `npm run build`
 - Build output directory: `dist`
+- Functions directory: `functions`
+- Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
 
-## VGames Identity
+## VGames
 
-Vikipedia v1 does not implement standalone accounts. It uses a local
-VGames-shaped mock identity with ghost accounts and display names so the game
-can later swap to the real VGames platform boundary.
-
-## Personal Stats
-
-Every completed run is written to a master `RunRecord` list in browser
-`localStorage`. The Stats panel derives top starts, top targets, most visited
-pages, bridge pages, common jumps, and run totals from that master list. This is
-personal/local in v0 and shaped for future VGames community storage.
+VGames integration is intentionally out of scope for v0. The current player
+model is a display-name player record that can later be linked or migrated into
+the VGames account platform.
