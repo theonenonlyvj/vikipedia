@@ -80,6 +80,19 @@ describe("Wikipedia challenge validator", () => {
     });
   });
 
+  it("reports the upstream status when Wikipedia rejects validation", async () => {
+    const validator = createWikipediaChallengeValidator({
+      fetchImpl: vi.fn(async () => new Response("blocked", { status: 403 })),
+    });
+
+    await expect(
+      validator.validateChallengeArticles({
+        startTitle: "Moon",
+        targetTitle: "Gravity",
+      }),
+    ).rejects.toThrow("Wikipedia returned status 403.");
+  });
+
   it("rejects disambiguation pages and same-page pairs", async () => {
     const validator = createWikipediaChallengeValidator({
       fetchImpl: vi.fn(async (input: RequestInfo | URL) => {

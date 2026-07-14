@@ -86,7 +86,14 @@ export function createWikipediaChallengeValidator(options: {
           "Api-User-Agent": WIKIMEDIA_API_USER_AGENT,
         },
       });
-    } catch {
+    } catch (caught) {
+      console.error(
+        "wikipedia_validation_fetch_failed",
+        JSON.stringify({
+          error: describeCaughtError(caught),
+          label,
+        }),
+      );
       throw new ApiError(
         "wikipedia_validation_failed",
         "Could not verify those Wikipedia articles right now.",
@@ -95,9 +102,19 @@ export function createWikipediaChallengeValidator(options: {
     }
 
     if (!response.ok) {
+      const responseText = await safeReadText(response);
+      console.error(
+        "wikipedia_validation_bad_status",
+        JSON.stringify({
+          body: responseText.slice(0, 500),
+          label,
+          status: response.status,
+          statusText: response.statusText,
+        }),
+      );
       throw new ApiError(
         "wikipedia_validation_failed",
-        "Could not verify those Wikipedia articles right now.",
+        `Could not verify those Wikipedia articles right now. Wikipedia returned status ${response.status}.`,
         502,
       );
     }
@@ -161,5 +178,21 @@ function safeDecode(value: string): string {
     return decodeURIComponent(value);
   } catch {
     return value;
+  }
+}
+
+function describeCaughtError(caught: unknown): string {
+  if (caught instanceof Error) {
+    return `${caught.name}: ${caught.message}`;
+  }
+
+  return String(caught);
+}
+
+async function safeReadText(response: Response): Promise<string> {
+  try {
+    return await response.text();
+  } catch {
+    return "";
   }
 }
