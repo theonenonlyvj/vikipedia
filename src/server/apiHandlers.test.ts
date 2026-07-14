@@ -89,7 +89,13 @@ describe("api handlers", () => {
 
   it("creates a challenge with trimmed article titles", async () => {
     const repository = fakeRepository();
-    const handlers = createApiHandlers(repository);
+    const validateChallengeArticles = vi.fn(async () => ({
+      start: { title: "Mars", pageId: 123 },
+      target: { title: "Water", pageId: 456 },
+    }));
+    const handlers = createApiHandlers(repository, {
+      validateChallengeArticles,
+    });
 
     await expect(
       handlers.createChallenge({
@@ -114,6 +120,10 @@ describe("api handlers", () => {
       startTitle: "Mars",
       targetTitle: "Water",
     });
+    expect(validateChallengeArticles).toHaveBeenCalledWith({
+      startTitle: "Mars",
+      targetTitle: "Water",
+    });
   });
 
   it("requires both challenge titles", async () => {
@@ -125,6 +135,30 @@ describe("api handlers", () => {
       code: "invalid_start_title",
       status: 400,
     });
+  });
+
+  it("rejects invalid Wikipedia article challenges before writing", async () => {
+    const repository = fakeRepository();
+    const validateChallengeArticles = vi.fn(async () => {
+      throw Object.assign(new Error("That start article does not exist."), {
+        code: "invalid_start_article",
+        status: 400,
+      });
+    });
+    const handlers = createApiHandlers(repository, {
+      validateChallengeArticles,
+    });
+
+    await expect(
+      handlers.createChallenge({
+        startTitle: "asdfasdf",
+        targetTitle: "asdfasdfa",
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_start_article",
+      status: 400,
+    });
+    expect(repository.createChallenge).not.toHaveBeenCalled();
   });
 
   it("starts a run through the repository", async () => {

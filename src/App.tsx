@@ -43,6 +43,16 @@ interface AppProps {
 
 type ModeState = "idle" | "loading" | "playing" | "complete";
 type TabKey = "play" | "leaderboard" | "challenges" | "stats";
+type AuthMode = "guest" | "claim" | "login";
+type AuthPromptIntent =
+  | { type: "start"; challengeId: string }
+  | {
+      type: "create";
+      input: {
+        startTitle: string;
+        targetTitle: string;
+      };
+    };
 
 export default function App({
   fetchImpl = globalThis.fetch.bind(globalThis),
@@ -54,9 +64,14 @@ export default function App({
 }: AppProps) {
   const [modeState, setModeState] = useState<ModeState>("idle");
   const [activeTab, setActiveTab] = useState<TabKey>("play");
+  const [authPrompt, setAuthPrompt] = useState<AuthPromptIntent | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>("guest");
+  const [authBusy, setAuthBusy] = useState(false);
   const [identitySession, setIdentitySession] =
     useState<VGamesIdentitySession | null>(null);
   const [displayNameDraft, setDisplayNameDraft] = useState("");
+  const [usernameDraft, setUsernameDraft] = useState("");
+  const [passwordDraft, setPasswordDraft] = useState("");
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [selectedChallengeId, setSelectedChallengeId] = useState<string | null>(
     null,
@@ -88,9 +103,9 @@ export default function App({
     challenges.find((challenge) => challenge.id === selectedChallengeId) ??
     challenges[0] ??
     null;
-  const nameIsReady =
+  const displayNameIsReady =
     (identitySession?.displayName ?? displayNameDraft).trim().length > 0;
-  const isBusy = modeState === "loading";
+  const isBusy = modeState === "loading" || authBusy;
   const headerState =
     modeState === "complete"
       ? "result"
@@ -103,6 +118,7 @@ export default function App({
     if (cachedSession) {
       setIdentitySession(cachedSession);
       setDisplayNameDraft(cachedSession.displayName);
+      setUsernameDraft(cachedSession.displayName);
     }
   }, [identityRepository]);
 
@@ -117,10 +133,19 @@ export default function App({
           return;
         }
         setChallenges(nextChallenges);
+        const requestedChallengeId = readChallengeIdFromUrl();
         const firstChallenge = nextChallenges[0] ?? null;
-        setSelectedChallengeId(firstChallenge?.id ?? null);
-        if (firstChallenge) {
-          setLeaderboard(await apiClient.listLeaderboard(firstChallenge.id));
+        const requestedChallenge =
+          nextChallenges.find(
+            (challenge) => challenge.id === requestedChallengeId,
+          ) ?? null;
+        const nextChallenge = requestedChallenge ?? firstChallenge;
+        setSelectedChallengeId(nextChallenge?.id ?? null);
+        if (requestedChallenge) {
+          syncChallengeUrl(requestedChallenge.id, "replace");
+        }
+        if (nextChallenge) {
+          setLeaderboard(await apiClient.listLeaderboard(nextChallenge.id));
         }
       } catch (caught) {
         if (!cancelled) {
@@ -142,6 +167,7 @@ export default function App({
 
   async function selectChallenge(challengeId: string) {
     setSelectedChallengeId(challengeId);
+    syncChallengeUrl(challengeId);
     setActiveTab("play");
     setError(null);
     try {
@@ -156,15 +182,25 @@ export default function App({
     targetTitle: string;
   }) {
     if (!identitySession) {
-      setError("Sign in before creating a challenge.");
+      openAuthPrompt({ type: "create", input });
       return;
     }
 
+    await createChallengeWithSession(input, identitySession);
+  }
+
+  async function createChallengeWithSession(
+    input: {
+      startTitle: string;
+      targetTitle: string;
+    },
+    sessionForRequest: VGamesIdentitySession,
+  ) {
     setError(null);
     try {
       const challenge = await apiClient.createChallenge(
         input,
-        identitySession.token,
+        sessionForRequest.token,
       );
       setChallenges((current) =>
         getSortedChallenges([
@@ -174,6 +210,7 @@ export default function App({
       );
       if (!session || session.status !== "active") {
         setSelectedChallengeId(challenge.id);
+        syncChallengeUrl(challenge.id);
         setServerRun(null);
         setSession(null);
         setArticle(null);
@@ -186,71 +223,204 @@ export default function App({
     }
   }
 
-  async function playAsGuest() {
-    const displayName = displayNameDraft.trim();
-    if (!displayName) {
-      setError("Display name is required to enter VWiki Race.");
-      return;
-    }
-
-    setError(null);
-    setModeState("loading");
-    try {
-      const session = await identityClient.playAsGuest({
-        deviceCredential: identityRepository.getDeviceCredential(),
-        displayName,
-      });
-      identityRepository.saveSession(session);
-      setIdentitySession(session);
-      setDisplayNameDraft(session.displayName);
-      setModeState("idle");
-    } catch (caught) {
-      setModeState("idle");
-      setError(errorMessage(caught, "Could not start a guest session."));
-    }
-  }
-
   async function startSelectedChallenge() {
     if (!selectedChallenge) {
       return;
     }
 
-    if (!identitySession) {
-      setError("Display name is required to enter VWiki Race.");
+    if (!identitySession || identitySession.status === "ghost") {
+      openAuthPrompt({ type: "start", challengeId: selectedChallenge.id });
+      return;
+    }
+
+    await startChallengeWithSession(selectedChallenge.id, identitySession);
+  }
+
+  async function startChallengeWithSession(
+    challengeId: string,
+    sessionForRun: VGamesIdentitySession,
+  ) {
+    const challenge =
+      challenges.find((item) => item.id === challengeId) ?? selectedChallenge;
+    if (!challenge) {
+      setError("Choose a challenge before starting.");
       return;
     }
 
     setError(null);
     setModeState("loading");
     setLeaderboard([]);
+    setSelectedChallengeId(challenge.id);
+    syncChallengeUrl(challenge.id);
 
     try {
       const nextRun = await apiClient.startRun(
         {
-          challengeId: selectedChallenge.id,
-          publicName: identitySession.displayName,
+          challengeId: challenge.id,
+          publicName: sessionForRun.displayName,
         },
-        identitySession.token,
+        sessionForRun.token,
       );
       const nextArticle = await wikipediaGateway.getArticle(
-        selectedChallenge.start.title,
+        challenge.start.title,
       );
       const startedAtMs = Date.parse(nextRun.startedAt);
       setServerRun(nextRun);
       setSession(
         createGameSession(
-          selectedChallenge,
+          challenge,
           Number.isNaN(startedAtMs) ? now() : startedAtMs,
         ),
       );
       setArticle(nextArticle);
-      await refreshLeaderboard(selectedChallenge.id);
+      await refreshLeaderboard(challenge.id);
       setActiveTab("play");
       setModeState("playing");
     } catch (caught) {
       setModeState("idle");
       setError(errorMessage(caught, "Could not start that challenge."));
     }
+  }
+
+  function openAuthPrompt(intent: AuthPromptIntent) {
+    setError(null);
+    setAuthPrompt(intent);
+    if (identitySession?.status === "ghost") {
+      setAuthMode("claim");
+      setUsernameDraft(identitySession.displayName);
+    } else if (!identitySession) {
+      setAuthMode("guest");
+    }
+  }
+
+  async function continueAsGuest() {
+    if (!authPrompt) {
+      return;
+    }
+
+    const prompt = authPrompt;
+    let nextIdentitySession = identitySession;
+    if (!nextIdentitySession) {
+      const displayName = displayNameDraft.trim();
+      if (!displayName) {
+        setError("Choose a display name before continuing as guest.");
+        return;
+      }
+
+      setAuthBusy(true);
+      try {
+        nextIdentitySession = await identityClient.playAsGuest({
+          deviceCredential: identityRepository.getDeviceCredential(),
+          displayName,
+        });
+        persistIdentitySession(nextIdentitySession);
+      } catch (caught) {
+        setError(errorMessage(caught, "Could not start a guest session."));
+        setAuthBusy(false);
+        return;
+      }
+    }
+
+    setAuthPrompt(null);
+    try {
+      await resumeAfterIdentity(prompt, nextIdentitySession);
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function claimGuestName() {
+    if (!authPrompt) {
+      return;
+    }
+
+    const prompt = authPrompt;
+    const username = usernameDraft.trim();
+    const password = passwordDraft;
+    if (!username || !password) {
+      setError("Enter a username and password to save this name.");
+      return;
+    }
+
+    const displayName = (identitySession?.displayName ?? displayNameDraft).trim();
+    if (!identitySession && !displayName) {
+      setError("Choose a display name before creating an account.");
+      return;
+    }
+
+    setAuthBusy(true);
+    try {
+      let guestSession = identitySession;
+      if (!guestSession) {
+        guestSession = await identityClient.playAsGuest({
+          deviceCredential: identityRepository.getDeviceCredential(),
+          displayName,
+        });
+      }
+
+      const claimedSession = await identityClient.secureGuest({
+        deviceCredential: identityRepository.getDeviceCredential(),
+        token: guestSession.token,
+        username,
+        password,
+      });
+      persistIdentitySession(claimedSession);
+      setAuthPrompt(null);
+      await resumeAfterIdentity(prompt, claimedSession);
+    } catch (caught) {
+      setError(errorMessage(caught, "Could not save that display name."));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function login() {
+    if (!authPrompt) {
+      return;
+    }
+
+    const prompt = authPrompt;
+    const username = usernameDraft.trim();
+    const password = passwordDraft;
+    if (!username || !password) {
+      setError("Enter your username and password.");
+      return;
+    }
+
+    setAuthBusy(true);
+    try {
+      const loggedInSession = await identityClient.login({
+        deviceCredential: identityRepository.getDeviceCredential(),
+        username,
+        password,
+      });
+      persistIdentitySession(loggedInSession);
+      setAuthPrompt(null);
+      await resumeAfterIdentity(prompt, loggedInSession);
+    } catch (caught) {
+      setError(errorMessage(caught, "Could not log in."));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  function persistIdentitySession(nextSession: VGamesIdentitySession) {
+    identityRepository.saveSession(nextSession);
+    setIdentitySession(nextSession);
+    setDisplayNameDraft(nextSession.displayName);
+    setUsernameDraft(nextSession.displayName);
+  }
+
+  async function resumeAfterIdentity(
+    prompt: AuthPromptIntent,
+    nextIdentitySession: VGamesIdentitySession,
+  ) {
+    if (prompt.type === "start") {
+      await startChallengeWithSession(prompt.challengeId, nextIdentitySession);
+      return;
+    }
+
+    await createChallengeWithSession(prompt.input, nextIdentitySession);
   }
 
   async function followArticleLink(title: string, anchorText: string) {
@@ -368,43 +538,6 @@ export default function App({
       ? session.completedAt - session.startedAt
       : 0);
 
-  if (!identitySession) {
-    return (
-      <main className="app-shell entry-shell" aria-busy={isBusy}>
-        <section className="entry-gate" aria-label="Enter VWiki Race">
-          <span className="viota-mark">VWiki</span>
-          <h1>VWiki Race</h1>
-          <p>
-            Choose a display name to track your Wikipedia race runs and
-            leaderboards from the start.
-          </p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void playAsGuest();
-            }}
-          >
-            <label className="name-control">
-              <span>Display name</span>
-              <input
-                aria-label="Display name"
-                autoComplete="nickname"
-                autoFocus
-                maxLength={24}
-                onChange={(event) => setDisplayNameDraft(event.target.value)}
-                value={displayNameDraft}
-              />
-            </label>
-            <button type="submit" disabled={!nameIsReady || isBusy}>
-              Enter VWiki Race
-            </button>
-          </form>
-          {error ? <p className="error-banner">{error}</p> : null}
-        </section>
-      </main>
-    );
-  }
-
   return (
     <main
       className={`app-shell header-${headerState}`}
@@ -441,7 +574,7 @@ export default function App({
         <div className="player-gate">
           <button
             type="button"
-            disabled={!selectedChallenge || !nameIsReady || isBusy}
+            disabled={!selectedChallenge || isBusy}
             onClick={() => void startSelectedChallenge()}
           >
             Start {selectedChallenge?.label ?? "Challenge"}
@@ -449,7 +582,7 @@ export default function App({
         </div>
 
         <div className="account-chip" role="status" aria-label="Current player">
-          {identitySession.displayName}
+          {identitySession?.displayName ?? "Guest"}
         </div>
       </header>
 
@@ -508,13 +641,274 @@ export default function App({
 
         {activeTab === "stats" ? (
           <StatsPanel
-            accountId={identitySession.accountId}
+            accountId={identitySession?.accountId ?? null}
             leaderboard={leaderboard}
             session={session}
           />
         ) : null}
       </section>
+
+      {authPrompt ? (
+        <IdentityPrompt
+          authBusy={authBusy}
+          authMode={authMode}
+          displayNameDraft={displayNameDraft}
+          displayNameIsReady={displayNameIsReady}
+          identitySession={identitySession}
+          onClaim={() => void claimGuestName()}
+          onClose={() => {
+            if (!authBusy) {
+              setAuthPrompt(null);
+            }
+          }}
+          onContinueAsGuest={() => void continueAsGuest()}
+          onDisplayNameChange={setDisplayNameDraft}
+          onLogin={() => void login()}
+          onPasswordChange={setPasswordDraft}
+          onSetAuthMode={setAuthMode}
+          onUsernameChange={setUsernameDraft}
+          passwordDraft={passwordDraft}
+          usernameDraft={usernameDraft}
+        />
+      ) : null}
     </main>
+  );
+}
+
+function IdentityPrompt({
+  authBusy,
+  authMode,
+  displayNameDraft,
+  displayNameIsReady,
+  identitySession,
+  onClaim,
+  onClose,
+  onContinueAsGuest,
+  onDisplayNameChange,
+  onLogin,
+  onPasswordChange,
+  onSetAuthMode,
+  onUsernameChange,
+  passwordDraft,
+  usernameDraft,
+}: {
+  authBusy: boolean;
+  authMode: AuthMode;
+  displayNameDraft: string;
+  displayNameIsReady: boolean;
+  identitySession: VGamesIdentitySession | null;
+  onClaim: () => void;
+  onClose: () => void;
+  onContinueAsGuest: () => void;
+  onDisplayNameChange: (value: string) => void;
+  onLogin: () => void;
+  onPasswordChange: (value: string) => void;
+  onSetAuthMode: (mode: AuthMode) => void;
+  onUsernameChange: (value: string) => void;
+  passwordDraft: string;
+  usernameDraft: string;
+}) {
+  const isGhost = identitySession?.status === "ghost";
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        aria-labelledby="identity-prompt-title"
+        aria-modal="true"
+        className="identity-dialog"
+        role="dialog"
+      >
+        <div className="identity-dialog-heading">
+          <div>
+            <span className="viota-mark">VWiki</span>
+            <h2 id="identity-prompt-title">Save your stats</h2>
+          </div>
+          <button
+            aria-label="Close identity prompt"
+            className="icon-button"
+            disabled={authBusy}
+            onClick={onClose}
+            type="button"
+          >
+            x
+          </button>
+        </div>
+
+        {isGhost ? (
+          <p className="identity-copy">
+            Save this name to keep your runs across devices, or continue as
+            guest for this challenge.
+          </p>
+        ) : (
+          <p className="identity-copy">
+            Pick a display name before the timer starts. You can claim it now or
+            keep playing as a guest.
+          </p>
+        )}
+
+        <div
+          className="auth-mode-switch"
+          role="tablist"
+          aria-label="Identity options"
+        >
+          <button
+            aria-pressed={authMode === "guest"}
+            onClick={() => onSetAuthMode("guest")}
+            type="button"
+          >
+            Guest
+          </button>
+          <button
+            aria-pressed={authMode === "claim"}
+            onClick={() => onSetAuthMode("claim")}
+            type="button"
+          >
+            Claim
+          </button>
+          <button
+            aria-pressed={authMode === "login"}
+            onClick={() => onSetAuthMode("login")}
+            type="button"
+          >
+            Log in
+          </button>
+        </div>
+
+        {authMode === "guest" ? (
+          <form
+            className="identity-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onContinueAsGuest();
+            }}
+          >
+            {!identitySession ? (
+              <label className="name-control">
+                <span>Display name</span>
+                <input
+                  aria-label="Display name"
+                  autoComplete="nickname"
+                  autoFocus
+                  maxLength={24}
+                  onChange={(event) => onDisplayNameChange(event.target.value)}
+                  value={displayNameDraft}
+                />
+              </label>
+            ) : (
+              <div className="identity-current-name">
+                <span>Playing as</span>
+                <strong>{identitySession.displayName}</strong>
+              </div>
+            )}
+            <button
+              disabled={authBusy || (!identitySession && !displayNameIsReady)}
+              type="submit"
+            >
+              Continue as guest
+            </button>
+          </form>
+        ) : null}
+
+        {authMode === "claim" ? (
+          <form
+            className="identity-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onClaim();
+            }}
+          >
+            {!identitySession ? (
+              <label className="name-control">
+                <span>Display name</span>
+                <input
+                  aria-label="Display name"
+                  autoComplete="nickname"
+                  autoFocus
+                  maxLength={24}
+                  onChange={(event) => onDisplayNameChange(event.target.value)}
+                  value={displayNameDraft}
+                />
+              </label>
+            ) : null}
+            <label className="name-control">
+              <span>Username</span>
+              <input
+                aria-label="Username"
+                autoComplete="username"
+                maxLength={24}
+                onChange={(event) => onUsernameChange(event.target.value)}
+                value={usernameDraft}
+              />
+            </label>
+            <label className="name-control">
+              <span>Password</span>
+              <input
+                aria-label="Password"
+                autoComplete="new-password"
+                minLength={8}
+                onChange={(event) => onPasswordChange(event.target.value)}
+                type="password"
+                value={passwordDraft}
+              />
+            </label>
+            <button disabled={authBusy} type="submit">
+              Claim this name
+            </button>
+            <button
+              className="secondary-button"
+              disabled={authBusy}
+              onClick={onContinueAsGuest}
+              type="button"
+            >
+              Continue as guest
+            </button>
+          </form>
+        ) : null}
+
+        {authMode === "login" ? (
+          <form
+            className="identity-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onLogin();
+            }}
+          >
+            <label className="name-control">
+              <span>Username</span>
+              <input
+                aria-label="Username"
+                autoComplete="username"
+                autoFocus
+                maxLength={24}
+                onChange={(event) => onUsernameChange(event.target.value)}
+                value={usernameDraft}
+              />
+            </label>
+            <label className="name-control">
+              <span>Password</span>
+              <input
+                aria-label="Password"
+                autoComplete="current-password"
+                onChange={(event) => onPasswordChange(event.target.value)}
+                type="password"
+                value={passwordDraft}
+              />
+            </label>
+            <button disabled={authBusy} type="submit">
+              Log in
+            </button>
+            <button
+              className="secondary-button"
+              disabled={authBusy}
+              onClick={onContinueAsGuest}
+              type="button"
+            >
+              Continue as guest
+            </button>
+          </form>
+        ) : null}
+      </section>
+    </div>
   );
 }
 
@@ -751,11 +1145,13 @@ function StatsPanel({
   leaderboard,
   session,
 }: {
-  accountId: string;
+  accountId: string | null;
   leaderboard: RankedLeaderboardRow[];
   session: GameSession | null;
 }) {
-  const personalRows = leaderboard.filter((row) => row.accountId === accountId);
+  const personalRows = accountId
+    ? leaderboard.filter((row) => row.accountId === accountId)
+    : [];
   const visitedTitles = session
     ? [
         session.challenge.start.title,
@@ -817,6 +1213,38 @@ function StatsList({ title, items }: { title: string; items: string[] }) {
       )}
     </section>
   );
+}
+
+function readChallengeIdFromUrl(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return new URLSearchParams(window.location.search).get("challenge");
+}
+
+function syncChallengeUrl(
+  challengeId: string,
+  historyMode: "push" | "replace" = "push",
+) {
+  if (typeof window === "undefined" || !challengeId) {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set("challenge", challengeId);
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextUrl === currentUrl) {
+    return;
+  }
+
+  if (historyMode === "replace") {
+    window.history.replaceState({}, "", nextUrl);
+    return;
+  }
+
+  window.history.pushState({}, "", nextUrl);
 }
 
 function formatElapsed(ms: number): string {

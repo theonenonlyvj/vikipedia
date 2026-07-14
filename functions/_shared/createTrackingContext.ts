@@ -2,6 +2,7 @@ import { createApiHandlers } from "../../src/server/apiHandlers";
 import { createD1TrackingRepository } from "../../src/server/d1TrackingRepository";
 import { ApiError } from "../../src/server/http";
 import { createVGamesIdentityClient } from "../../src/server/vgamesIdentityClient";
+import { createWikipediaChallengeValidator } from "../../src/server/wikipediaChallengeValidator";
 import type { AccountStatus } from "../../src/domain/types";
 
 export interface Env {
@@ -13,7 +14,12 @@ export function createTrackingContext(env: Env) {
   const repository = createD1TrackingRepository({
     db: env.VWIKI_RACE_DB,
   });
-  const handlers = createApiHandlers(repository);
+  const wikipedia = createWikipediaChallengeValidator({
+    fetchImpl: fetch,
+  });
+  const handlers = createApiHandlers(repository, {
+    validateChallengeArticles: wikipedia.validateChallengeArticles,
+  });
   const identity = createVGamesIdentityClient({
     baseUrl: env.VGAMES_URL,
   });

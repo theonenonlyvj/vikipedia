@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { appleParseResponse, fruitParseResponse } from "./test/fixtures";
 
@@ -19,34 +19,32 @@ function memoryStorage(): Storage {
 }
 
 describe("VWiki Race app", () => {
-  it("does not request passwords on the public entry gate", async () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  it("shows the challenge catalog without requiring identity at page entry", async () => {
     render(<App fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 
     expect(await screen.findByRole("heading", { name: "VWiki Race" })).toBeVisible();
-    expect(await screen.findByText(/choose a display name/i)).toBeVisible();
-    expect(screen.queryByLabelText(/password/i)).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: /secure display name|log in/i }),
-    ).toBeNull();
-    expect(
-      screen.getByRole("button", { name: /enter vwiki race/i }),
-    ).toBeVisible();
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    expect(screen.queryByText(/enter vwiki race/i)).toBeNull();
   });
 
-  it("requires a display name before creating a persisted VGames guest session", async () => {
+  it("prompts for identity before starting when no session exists", async () => {
     const storage = memoryStorage();
     const fetchImpl = createFetchMock();
     const user = userEvent.setup();
 
     render(<App fetchImpl={fetchImpl} storage={storage} />);
 
-    expect(await screen.findByText(/choose a display name/i)).toBeVisible();
-    expect(screen.queryByRole("button", { name: /start challenge #1/i })).toBeNull();
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
 
+    expect(await screen.findByRole("dialog", { name: /save your stats/i })).toBeVisible();
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /enter vwiki race/i }));
+    await user.click(screen.getByRole("button", { name: /continue as guest/i }));
 
-    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     expect(JSON.parse(storage.getItem("vwiki-race:vgames-session") ?? "{}")).toEqual({
       accountId: "acc-guest",
       displayName: "Vijay",
@@ -55,7 +53,7 @@ describe("VWiki Race app", () => {
     });
   });
 
-  it("skips the entry gate when a VGames session is already cached", async () => {
+  it("starts immediately for claimed sessions", async () => {
     const storage = memoryStorage();
     storage.setItem(
       "vwiki-race:vgames-session",
@@ -69,10 +67,41 @@ describe("VWiki Race app", () => {
 
     render(<App fetchImpl={createFetchMock()} storage={storage} />);
 
-    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
-    expect(screen.queryByText(/enter vwiki race/i)).toBeNull();
+    await userEvent.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull();
     expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent(
       "Vijay",
+    );
+  });
+
+  it("prompts ghost sessions to claim or continue before each challenge start", async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({
+        accountId: "acc-guest",
+        displayName: "Vijay",
+        token: "jwt-guest",
+        status: "ghost",
+      }),
+    );
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+
+    render(<App fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+
+    expect(await screen.findByRole("dialog", { name: /save your stats/i })).toBeVisible();
+    expect(screen.getByText(/claim this name/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /continue as guest/i }));
+
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(fetchImpl).not.toHaveBeenCalledWith(
+      "/api/identity/guest",
+      expect.anything(),
     );
   });
 
@@ -80,20 +109,29 @@ describe("VWiki Race app", () => {
     let now = 1000;
     const fetchImpl = createFetchMock();
     const user = userEvent.setup();
+    const storage = memoryStorage();
+    storage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({
+        accountId: "acc-guest",
+        displayName: "Vijay",
+        token: "jwt-guest",
+        status: "ghost",
+      }),
+    );
 
     render(
       <App
         fetchImpl={fetchImpl}
         now={() => now}
-        storage={memoryStorage()}
+        storage={storage}
       />,
     );
 
-    await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /enter vwiki race/i }));
     await user.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );
+    await user.click(await screen.findByRole("button", { name: /continue as guest/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
 
     now = 2500;
@@ -156,11 +194,84 @@ describe("VWiki Race app", () => {
       );
     });
   });
+
+  it("keeps the selected challenge in the URL and honors challenge deep links", async () => {
+    window.history.pushState({}, "", "/?challenge=challenge-0002");
+    const storage = memoryStorage();
+    storage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({
+        accountId: "acc-1",
+        displayName: "Vijay",
+        token: "jwt-claimed",
+        status: "claimed",
+      }),
+    );
+    const fetchImpl = createFetchMock({
+      challenges: [
+        {
+          id: "challenge-0001",
+          label: "Challenge #1",
+          sortOrder: 1,
+          isActive: true,
+          mode: "daily",
+          start: { title: "Apple" },
+          target: { title: "Fruit" },
+          ruleset: "ranked_classic",
+          source: "curated",
+        },
+        {
+          id: "challenge-0002",
+          label: "Challenge #2",
+          sortOrder: 2,
+          isActive: true,
+          mode: "daily",
+          start: { title: "Mars" },
+          target: { title: "Water" },
+          ruleset: "ranked_classic",
+          source: "curated",
+        },
+      ],
+    });
+    const user = userEvent.setup();
+
+    render(<App fetchImpl={fetchImpl} storage={storage} />);
+
+    expect((await screen.findAllByText(/mars -> water/i)).length).toBeGreaterThan(
+      0,
+    );
+    await user.click(await screen.findByRole("button", { name: /start challenge #2/i }));
+
+    await waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "/api/runs/start",
+        expect.objectContaining({
+          body: JSON.stringify({
+            challengeId: "challenge-0002",
+            publicName: "Vijay",
+          }),
+        }),
+      );
+    });
+    expect(window.location.search).toBe("?challenge=challenge-0002");
+  });
 });
 
-function createFetchMock() {
+function createFetchMock(options?: {
+  challenges?: Array<{
+    id: string;
+    label: string;
+    sortOrder: number;
+    isActive: boolean;
+    mode: string;
+    start: { title: string };
+    target: { title: string };
+    ruleset: string;
+    source: string;
+  }>;
+}) {
   let completed = false;
-  let challenges = [
+  let challenges = options?.challenges ?? [
     {
       id: "challenge-0001",
       label: "Challenge #1",
@@ -241,21 +352,20 @@ function createFetchMock() {
     }
 
     if (url === "/api/runs/start") {
-      expect(readJsonBody(init)).toEqual({
-        challengeId: "challenge-0001",
-        publicName: "Vijay",
-      });
+      const startBody = readJsonBody(init) as { challengeId: string; publicName: string };
+      expect(startBody.publicName).toBe("Vijay");
       expect(init?.headers).toMatchObject({
         Authorization: expect.stringMatching(/^Bearer jwt-/),
       });
+      const challenge = challenges.find((item) => item.id === startBody.challengeId) ?? challenges[0];
       return jsonResponse({
         run: {
           id: "run-1",
-          challengeId: "challenge-0001",
+          challengeId: challenge.id,
           accountId: "acc-guest",
           status: "active",
-          startTitle: "Apple",
-          targetTitle: "Fruit",
+          startTitle: challenge.start.title,
+          targetTitle: challenge.target.title,
           clickCount: 0,
           startedAt: "2026-07-14T01:00:00.000Z",
         },
@@ -295,9 +405,9 @@ function createFetchMock() {
       });
     }
 
-    if (url === "/api/challenges/challenge-0001/leaderboard") {
+    if (url.startsWith("/api/challenges/") && url.endsWith("/leaderboard")) {
       return jsonResponse({
-        leaderboard: completed
+        leaderboard: completed && url.includes("challenge-0001")
           ? [
               {
                 rank: 1,

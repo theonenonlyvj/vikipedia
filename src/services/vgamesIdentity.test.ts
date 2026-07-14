@@ -139,10 +139,80 @@ describe("VGames identity client", () => {
     );
   });
 
-  it("does not expose secure or login methods in the browser client", () => {
-    const client = createVGamesIdentityClient(vi.fn());
+  it("secures a guest through the VWiki Race identity proxy", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return Response.json({
+        accountId: "acc-claimed",
+        displayName: "casey",
+        token: "jwt-claimed",
+        status: "claimed",
+      });
+    });
+    const client = createVGamesIdentityClient(fetchImpl);
 
-    expect(Object.keys(client)).toEqual(["playAsGuest"]);
+    await expect(
+      client.secureGuest({
+        deviceCredential: "cred-123456789012",
+        token: "jwt-guest",
+        username: "casey",
+        password: "secret-pass",
+      }),
+    ).resolves.toMatchObject({
+      accountId: "acc-claimed",
+      displayName: "casey",
+      token: "jwt-claimed",
+      status: "claimed",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/identity/secure",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          deviceCredential: "cred-123456789012",
+          token: "jwt-guest",
+          username: "casey",
+          password: "secret-pass",
+        }),
+      }),
+    );
+  });
+
+  it("logs in through the VWiki Race identity proxy", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return Response.json({
+        accountId: "acc-claimed",
+        displayName: "casey",
+        token: "jwt-claimed",
+        status: "claimed",
+      });
+    });
+    const client = createVGamesIdentityClient(fetchImpl);
+
+    await expect(
+      client.login({
+        deviceCredential: "cred-123456789012",
+        username: "casey",
+        password: "secret-pass",
+      }),
+    ).resolves.toMatchObject({
+      accountId: "acc-claimed",
+      displayName: "casey",
+      token: "jwt-claimed",
+      status: "claimed",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/identity/login",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          deviceCredential: "cred-123456789012",
+          username: "casey",
+          password: "secret-pass",
+        }),
+      }),
+    );
   });
 
   it("surfaces identity API error messages", async () => {

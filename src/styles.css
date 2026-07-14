@@ -105,6 +105,110 @@ ol {
   margin-top: 12px;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: rgba(3, 8, 11, 0.72);
+  padding: 18px;
+  backdrop-filter: blur(8px);
+}
+
+.identity-dialog {
+  width: min(520px, 100%);
+  border: 1px solid rgba(130, 246, 239, 0.32);
+  background: #081318;
+  color: #eef7f8;
+  padding: 18px;
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.42);
+  clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px);
+  font-family: var(--viota-ui-font);
+}
+
+.identity-dialog-heading {
+  display: flex;
+  gap: 14px;
+  align-items: start;
+  justify-content: space-between;
+}
+
+.identity-dialog h2 {
+  color: #f7feff;
+  font-family: var(--viota-display-font);
+  font-size: clamp(2rem, 7vw, 3.7rem);
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 0.9;
+}
+
+.icon-button {
+  display: grid;
+  width: 38px;
+  min-width: 38px;
+  place-items: center;
+  padding: 0;
+}
+
+.identity-copy {
+  color: #b9d4d8;
+  margin-top: 10px;
+}
+
+.auth-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.auth-mode-switch button {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dffbfb;
+  min-width: 0;
+}
+
+.auth-mode-switch button[aria-pressed="true"] {
+  background: #ff7d66;
+  border-color: #ffb4a6;
+  color: #170908;
+}
+
+.identity-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.identity-form .name-control input {
+  width: 100%;
+}
+
+.identity-current-name {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(130, 246, 239, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 10px;
+}
+
+.identity-current-name span {
+  color: #9fb8bd;
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.identity-current-name strong {
+  color: #0debd7;
+}
+
+.secondary-button {
+  background: rgba(255, 255, 255, 0.06);
+  color: #dffbfb;
+}
+
 .game-header,
 .path-strip,
 .tabbar,
@@ -796,5 +900,19 @@ h1 {
     float: none;
     width: 100%;
     margin: 0 0 1em;
+  }
+
+  .modal-backdrop {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .identity-dialog {
+    max-height: calc(100vh - 20px);
+    overflow-y: auto;
+  }
+
+  .auth-mode-switch {
+    grid-template-columns: 1fr;
   }
 }

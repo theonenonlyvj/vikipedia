@@ -15,6 +15,7 @@ import type {
   StartRunResponse,
 } from "./contracts";
 import type { TrackingRepository } from "./trackingRepository";
+import type { ValidateChallengeArticles } from "./wikipediaChallengeValidator";
 
 export interface ApiHandlers {
   listChallenges(): Promise<ChallengesResponse>;
@@ -38,9 +39,17 @@ export interface ApiHandlers {
   getRunPath(runId: string): Promise<RunPathResponse>;
 }
 
+export interface ApiHandlerOptions {
+  validateChallengeArticles?: ValidateChallengeArticles;
+}
+
 export function createApiHandlers(
   repository: TrackingRepository,
+  options: ApiHandlerOptions = {},
 ): ApiHandlers {
+  const validateChallengeArticles =
+    options.validateChallengeArticles ?? defaultChallengeArticleValidation;
+
   return {
     async listChallenges() {
       return {
@@ -59,11 +68,15 @@ export function createApiHandlers(
         "invalid_target_title",
         "Enter a target article title.",
       );
+      const validatedArticles = await validateChallengeArticles({
+        startTitle,
+        targetTitle,
+      });
 
       return {
         challenge: await repository.createChallenge({
-          startTitle,
-          targetTitle,
+          startTitle: validatedArticles.start.title,
+          targetTitle: validatedArticles.target.title,
         }),
       };
     },
@@ -195,6 +208,14 @@ export function createApiHandlers(
     },
   };
 }
+
+const defaultChallengeArticleValidation: ValidateChallengeArticles = async ({
+  startTitle,
+  targetTitle,
+}) => ({
+  start: { title: startTitle, pageId: 0 },
+  target: { title: targetTitle, pageId: 0 },
+});
 
 function readIdentityStatus(value: unknown): "ghost" | "claimed" | "merged" {
   if (value === "ghost" || value === "claimed" || value === "merged") {
