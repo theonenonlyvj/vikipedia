@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace Vikipedia's local player identity with VGames ghost/claimed identity while keeping Vikipedia as an asynchronous challenge leaderboard game.
+**Goal:** Replace VWiki Race's local player identity with VGames ghost/claimed identity while keeping VWiki Race as an asynchronous challenge leaderboard game.
 
-**Architecture:** Vikipedia remains a Cloudflare Pages app with `/api/*` functions. VGames owns accounts and login through the live viota identity worker; Vikipedia owns challenge/run/click/path data keyed by VGames `account_id`. The browser stores only the device credential, token, account id, and local display metadata needed for silent guest re-auth.
+**Architecture:** VWiki Race remains a Cloudflare Pages app with `/api/*` functions. VGames owns accounts and login through the live viota identity worker; VWiki Race owns challenge/run/click/path data keyed by VGames `account_id`. The browser stores only the device credential, token, account id, and local display metadata needed for silent guest re-auth.
 
-**Tech Stack:** React 19, Vite, TypeScript, Vitest, Cloudflare Pages Functions, Cloudflare D1 for Vikipedia-owned run data, VGames identity worker at `https://viota-worker.theonenonlyvj.workers.dev`.
+**Tech Stack:** React 19, Vite, TypeScript, Vitest, Cloudflare Pages Functions, Cloudflare D1 for VWiki Race-owned run data, VGames identity worker at `https://viota-worker.theonenonlyvj.workers.dev`.
 
 ## Global Constraints
 
-- Vikipedia does not use realtime rooms.
-- Vikipedia does not use the VGames card-game layer.
+- VWiki Race does not use realtime rooms.
+- VWiki Race does not use the VGames card-game layer.
 - The unique VGames name/handle is the canonical public identity.
 - Guests are real VGames ghost accounts, not local-only throwaway players.
 - Guest stats must remain claimable when the user later secures or logs into an account.
@@ -27,7 +27,7 @@
 - `src/services/vgamesIdentity.test.ts`: storage and request tests for guest, secure, and login flows.
 - `src/server/vgamesIdentityClient.ts`: server-side fetch wrapper for VGames `/auth/quick`, `/auth/set-credentials`, `/auth/login`, and `/auth/introspect`.
 - `src/server/vgamesIdentityClient.test.ts`: proxy/introspection tests with fake fetch.
-- `src/server/d1TrackingRepository.ts`: D1-backed Vikipedia challenge/run/click repository keyed by `account_id`.
+- `src/server/d1TrackingRepository.ts`: D1-backed VWiki Race challenge/run/click repository keyed by `account_id`.
 - `src/server/d1TrackingRepository.test.ts`: repository behavior tests with a fake D1 adapter.
 - `src/server/trackingRepository.ts`: replace `playerId` inputs with `accountId` and account profile metadata.
 - `src/server/apiHandlers.ts`: require `accountId` for run writes; remove local player creation.
@@ -37,9 +37,9 @@
 - `functions/api/runs/start.ts`: derive run identity from Authorization token instead of client `playerId`.
 - `src/App.tsx`: landing gate with Secure display name / Log in primary flow and Play as guest secondary flow.
 - `src/styles.css`: landing identity styles only; no article typography changes.
-- `d1/migrations/0001_vikipedia_tracking.sql`: D1 schema for challenges, account profile cache, runs, events, and path steps.
+- `d1/migrations/0001_vwiki_race_tracking.sql`: D1 schema for challenges, account profile cache, runs, events, and path steps.
 - `README.md` and `docs/handoff/cloudflare-deployment-handoff.md`: deployment docs for VGames identity + D1.
-- `viota/packages/worker/src/d1/accounts.ts`: add `vikipedia` to valid `origin_game` values.
+- `viota/packages/worker/src/d1/accounts.ts`: add `vwiki-race` to valid `origin_game` values.
 
 ## Task 1: Browser VGames Identity Session
 
@@ -54,7 +54,7 @@
   - `createVGamesIdentityClient(fetchImpl)`
   - methods `playAsGuest(displayName)`, `secureGuest(input)`, `login(input)`, `getSession()`, `clearSession()`
 
-- [x] **Step 1: Write tests** for generated device credentials, stored sessions, guest auth request body including `game: "vikipedia"`, secure flow, and login flow.
+- [x] **Step 1: Write tests** for generated device credentials, stored sessions, guest auth request body including `game: "vwiki-race"`, secure flow, and login flow.
 - [x] **Step 2: Run** `npm test -- src/services/vgamesIdentity.test.ts` and verify tests fail because the module is missing.
 - [x] **Step 3: Implement** storage helpers and fetch client with same-origin `/api/identity/*` endpoints.
 - [x] **Step 4: Run** `npm test -- src/services/vgamesIdentity.test.ts` and verify pass.
@@ -78,7 +78,7 @@
   - `login(username, password, deviceCredential)`
   - `introspect(token)`
 
-- [x] **Step 1: Write tests** proving the proxy calls VGames with `game: "vikipedia"`, refreshes token after `/auth/set-credentials` by logging in, and returns structured API errors.
+- [x] **Step 1: Write tests** proving the proxy calls VGames with `game: "vwiki-race"`, refreshes token after `/auth/set-credentials` by logging in, and returns structured API errors.
 - [x] **Step 2: Run** `npm test -- src/server/vgamesIdentityClient.test.ts functions/api/routes.test.ts` and verify expected failures.
 - [x] **Step 3: Implement** the client and Pages Function endpoints.
 - [x] **Step 4: Run** targeted tests and verify pass.
@@ -86,7 +86,7 @@
 ## Task 3: D1 Account-Keyed Tracking Repository
 
 **Files:**
-- Create: `d1/migrations/0001_vikipedia_tracking.sql`
+- Create: `d1/migrations/0001_vwiki_race_tracking.sql`
 - Create: `src/server/d1TrackingRepository.ts`
 - Create: `src/server/d1TrackingRepository.test.ts`
 - Modify: `src/server/trackingRepository.ts`
@@ -112,8 +112,8 @@
 - Modify: `functions/api/runs/[runId]/abandon.ts`
 - Modify: `functions/api/challenges.ts`
 - Modify: `functions/api/routes.test.ts`
-- Modify: `src/services/vikipediaApiClient.ts`
-- Modify: `src/services/vikipediaApiClient.test.ts`
+- Modify: `src/services/vwikiRaceApiClient.ts`
+- Modify: `src/services/vwikiRaceApiClient.test.ts`
 
 **Interfaces:**
 - Consumes: `Authorization: Bearer <VGames token>`.
@@ -148,11 +148,11 @@
 - Modify: `/Users/vijayram/Cursor/viota/packages/worker/test/accounts.test.ts`
 
 **Interfaces:**
-- Produces: `/auth/quick` accepts `game: "vikipedia"` and stores `origin_game='vikipedia'`.
+- Produces: `/auth/quick` accepts `game: "vwiki-race"` and stores `origin_game='vwiki-race'`.
 
-- [x] **Step 1: Write or update viota worker test** proving `game: "vikipedia"` is preserved.
+- [x] **Step 1: Write or update viota worker test** proving `game: "vwiki-race"` is preserved.
 - [x] **Step 2: Run** the viota worker test and verify failure.
-- [x] **Step 3: Add `vikipedia` to `ORIGIN_GAMES`.**
+- [x] **Step 3: Add `vwiki-race` to `ORIGIN_GAMES`.**
 - [x] **Step 4: Run** the viota worker test and verify pass.
 
 ## Task 7: Documentation And Verification
@@ -169,7 +169,7 @@
 - [x] **Step 2: Run** `npm test`.
 - [x] **Step 3: Run** `npm run build`.
 - [x] **Step 4: From viota, run** the targeted worker identity test changed in Task 6.
-- [ ] **Step 5: Commit Vikipedia and viota changes separately unless Vijay asks for one combined checkpoint.**
+- [ ] **Step 5: Commit VWiki Race and viota changes separately unless Vijay asks for one combined checkpoint.**
 
 ## Self-Review
 

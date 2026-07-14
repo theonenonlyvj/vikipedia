@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVikipediaApiClient } from "./vikipediaApiClient";
+import { createVWikiRaceApiClient } from "./vwikiRaceApiClient";
 
-describe("Vikipedia API client", () => {
+describe("VWiki Race API client", () => {
   it("calls server tracking endpoints with VGames bearer auth for writes", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -56,7 +56,7 @@ describe("Vikipedia API client", () => {
         headers: { "Content-Type": "application/json" },
       });
     });
-    const client = createVikipediaApiClient(fetchImpl);
+    const client = createVWikiRaceApiClient(fetchImpl);
 
     expect((await client.listChallenges()).at(0)?.label).toBe("Challenge #1");
     expect(
@@ -118,7 +118,7 @@ describe("Vikipedia API client", () => {
         },
       );
     });
-    const client = createVikipediaApiClient(fetchImpl);
+    const client = createVWikiRaceApiClient(fetchImpl);
 
     await expect(
       client.startRun(
@@ -152,7 +152,7 @@ describe("Vikipedia API client", () => {
         },
       );
     });
-    const client = createVikipediaApiClient(fetchImpl);
+    const client = createVWikiRaceApiClient(fetchImpl);
 
     await expect(
       client.createChallenge(

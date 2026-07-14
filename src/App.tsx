@@ -26,9 +26,9 @@ import {
   type VGamesIdentitySession,
 } from "./services/vgamesIdentity";
 import {
-  createVikipediaApiClient,
-  type VikipediaApiClient,
-} from "./services/vikipediaApiClient";
+  createVWikiRaceApiClient,
+  type VWikiRaceApiClient,
+} from "./services/vwikiRaceApiClient";
 import { createWikipediaGateway } from "./services/wikipediaGateway";
 import type { RunRecordResponse } from "./server/trackingRepository";
 
@@ -36,7 +36,7 @@ interface AppProps {
   fetchImpl?: typeof fetch;
   now?: () => number;
   storage?: Storage;
-  apiClient?: VikipediaApiClient;
+  apiClient?: VWikiRaceApiClient;
   identityClient?: VGamesIdentityClient;
   identityRepository?: VGamesIdentityRepository;
 }
@@ -68,7 +68,7 @@ export default function App({
   const [error, setError] = useState<string | null>(null);
 
   const apiClient = useMemo(
-    () => injectedApiClient ?? createVikipediaApiClient(fetchImpl),
+    () => injectedApiClient ?? createVWikiRaceApiClient(fetchImpl),
     [fetchImpl, injectedApiClient],
   );
   const identityClient = useMemo(
@@ -189,7 +189,7 @@ export default function App({
   async function playAsGuest() {
     const displayName = displayNameDraft.trim();
     if (!displayName) {
-      setError("Display name is required to enter Vikipedia.");
+      setError("Display name is required to enter VWiki Race.");
       return;
     }
 
@@ -216,7 +216,7 @@ export default function App({
     }
 
     if (!identitySession) {
-      setError("Display name is required to enter Vikipedia.");
+      setError("Display name is required to enter VWiki Race.");
       return;
     }
 
@@ -336,13 +336,13 @@ export default function App({
       return;
     }
 
-    const link = target.closest<HTMLAnchorElement>("a[data-vikipedia-title]");
+    const link = target.closest<HTMLAnchorElement>("a[data-vwiki-race-title]");
     if (!link) {
       return;
     }
 
     event.preventDefault();
-    const title = link.dataset.vikipediaTitle;
+    const title = link.dataset.vwikiRaceTitle;
     if (title) {
       void followArticleLink(title, link.textContent?.trim() || title);
     }
@@ -371,12 +371,12 @@ export default function App({
   if (!identitySession) {
     return (
       <main className="app-shell entry-shell" aria-busy={isBusy}>
-        <section className="entry-gate" aria-label="Enter Vikipedia">
-          <span className="viota-mark">Viota</span>
-          <h1>Vikipedia</h1>
+        <section className="entry-gate" aria-label="Enter VWiki Race">
+          <span className="viota-mark">VWiki</span>
+          <h1>VWiki Race</h1>
           <p>
-            Choose a display name to track your runs. Vikipedia is a Viota game
-            using public Wikipedia articles.
+            Choose a display name to track your Wikipedia race runs and
+            leaderboards from the start.
           </p>
           <form
             onSubmit={(event) => {
@@ -396,7 +396,7 @@ export default function App({
               />
             </label>
             <button type="submit" disabled={!nameIsReady || isBusy}>
-              Enter Vikipedia
+              Enter VWiki Race
             </button>
           </form>
           {error ? <p className="error-banner">{error}</p> : null}
@@ -411,9 +411,9 @@ export default function App({
       aria-busy={isBusy}
     >
       <header className="game-header">
-        <div className="brand-lockup" aria-label="Vikipedia by Viota">
-          <span className="viota-mark">Viota</span>
-          <h1>Vikipedia</h1>
+        <div className="brand-lockup" aria-label="VWiki Race">
+          <span className="viota-mark">VWiki</span>
+          <h1>VWiki Race</h1>
         </div>
 
         <div className="challenge-route" aria-label="Current challenge">
@@ -457,7 +457,7 @@ export default function App({
         <PathStrip titles={visiblePath} />
       ) : null}
 
-      <nav className="tabbar" aria-label="Vikipedia views">
+      <nav className="tabbar" aria-label="VWiki Race views">
         {(["play", "leaderboard", "challenges", "stats"] as const).map(
           (tab) => (
             <button

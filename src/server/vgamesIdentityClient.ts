@@ -62,7 +62,7 @@ export function createVGamesIdentityClient(options: {
       const payload = await request("/auth/quick", {
         deviceCredential: input.deviceCredential,
         displayName: input.displayName,
-        game: "vikipedia",
+        game: "vwiki-race",
       });
       const auth = readAuthPayload(payload);
       return {

@@ -1,4 +1,4 @@
-# AGENTS.md - Vikipedia
+# AGENTS.md - VWiki Race
 
 This project is intended to become a public GitHub repository. Treat it as
 public unless Vijay explicitly says otherwise.

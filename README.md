@@ -1,10 +1,10 @@
-# Vikipedia
+# VWiki Race
 
-Vikipedia is a Wikipedia navigation game: players start on one article and race
+VWiki Race is a Wikipedia navigation game: players start on one article and race
 to a target article by clicking valid internal Wikipedia links.
 
 The current v0 is server-tracked from game 0 with VGames identity and a
-Vikipedia-owned Cloudflare D1 database. Vikipedia remains
+VWiki Race-owned Cloudflare D1 database. VWiki Race remains
 challenge-leaderboard based; it does not need VGames realtime rooms or the
 card-game layer.
 
@@ -15,6 +15,7 @@ card-game layer.
 - [VGames Identity V0 Spec](docs/superpowers/specs/2026-07-14-vgames-identity-v0-design.md)
 - [VGames Identity V0 Plan](docs/superpowers/plans/2026-07-14-vgames-identity-v0.md)
 - [Cloudflare Deployment Handoff](docs/handoff/cloudflare-deployment-handoff.md)
+- [Backlog](docs/backlog.md)
 
 ## V0 Product Shape
 
@@ -55,7 +56,7 @@ npm run dev -- --host 127.0.0.1
 The frontend expects `/api/*` routes. The production Pages Functions need:
 
 - `VGAMES_URL`
-- D1 binding `VIKIPEDIA_DB`
+- D1 binding `VWIKI_RACE_DB`
 
 ```bash
 npm run build
@@ -64,10 +65,10 @@ npm run build
 ## Identity And Data
 
 VGames owns accounts, unique names/handles, guest ghosts, login, and account
-merges. Vikipedia should own challenges, runs, click events, path steps, and
+merges. VWiki Race should own challenges, runs, click events, path steps, and
 per-challenge leaderboards keyed by VGames `account_id` in D1.
 
-Do not create a Vikipedia-local `players` namespace. The removed local
+Do not create a VWiki Race-local `players` namespace. The removed local
 prototype repositories were intentionally replaced by VGames sessions and D1.
 
 ## Cloudflare Pages
@@ -78,10 +79,10 @@ For Cloudflare Pages:
 - Build output directory: `dist`
 - Functions directory: `functions`
 - Identity origin: `https://viota-worker.theonenonlyvj.workers.dev`
-- D1 binding name: `VIKIPEDIA_DB`
-- D1 migration: `d1/migrations/0001_vikipedia_tracking.sql`
+- D1 binding name: `VWIKI_RACE_DB`
+- D1 migration: `d1/migrations/0001_vwiki_race_tracking.sql`
 
 ## VGames
 
 VGames integration is in scope for v0 identity. Realtime rooms are not in scope
-for Vikipedia v0 because gameplay is asynchronous challenge attempts.
+for VWiki Race v0 because gameplay is asynchronous challenge attempts.

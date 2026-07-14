@@ -18,17 +18,18 @@ function memoryStorage(): Storage {
   };
 }
 
-describe("Vikipedia app", () => {
+describe("VWiki Race app", () => {
   it("does not request passwords on the public entry gate", async () => {
     render(<App fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 
+    expect(await screen.findByRole("heading", { name: "VWiki Race" })).toBeVisible();
     expect(await screen.findByText(/choose a display name/i)).toBeVisible();
     expect(screen.queryByLabelText(/password/i)).toBeNull();
     expect(
       screen.queryByRole("button", { name: /secure display name|log in/i }),
     ).toBeNull();
     expect(
-      screen.getByRole("button", { name: /enter vikipedia/i }),
+      screen.getByRole("button", { name: /enter vwiki race/i }),
     ).toBeVisible();
   });
 
@@ -43,10 +44,10 @@ describe("Vikipedia app", () => {
     expect(screen.queryByRole("button", { name: /start challenge #1/i })).toBeNull();
 
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /enter vikipedia/i }));
+    await user.click(screen.getByRole("button", { name: /enter vwiki race/i }));
 
     expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
-    expect(JSON.parse(storage.getItem("vikipedia:vgames-session") ?? "{}")).toEqual({
+    expect(JSON.parse(storage.getItem("vwiki-race:vgames-session") ?? "{}")).toEqual({
       accountId: "acc-guest",
       displayName: "Vijay",
       token: "jwt-guest",
@@ -57,7 +58,7 @@ describe("Vikipedia app", () => {
   it("skips the entry gate when a VGames session is already cached", async () => {
     const storage = memoryStorage();
     storage.setItem(
-      "vikipedia:vgames-session",
+      "vwiki-race:vgames-session",
       JSON.stringify({
         accountId: "acc-1",
         displayName: "Vijay",
@@ -69,7 +70,7 @@ describe("Vikipedia app", () => {
     render(<App fetchImpl={createFetchMock()} storage={storage} />);
 
     expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
-    expect(screen.queryByText(/enter vikipedia/i)).toBeNull();
+    expect(screen.queryByText(/enter vwiki race/i)).toBeNull();
     expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent(
       "Vijay",
     );
@@ -89,7 +90,7 @@ describe("Vikipedia app", () => {
     );
 
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    await user.click(screen.getByRole("button", { name: /enter vikipedia/i }));
+    await user.click(screen.getByRole("button", { name: /enter vwiki race/i }));
     await user.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );
@@ -118,7 +119,7 @@ describe("Vikipedia app", () => {
   it("creates the next numbered challenge from the Challenges tab", async () => {
     const storage = memoryStorage();
     storage.setItem(
-      "vikipedia:vgames-session",
+      "vwiki-race:vgames-session",
       JSON.stringify({
         accountId: "acc-1",
         displayName: "Vijay",

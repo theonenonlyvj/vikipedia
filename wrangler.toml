@@ -1,11 +1,11 @@
-name = "vikipedia"
+name = "vwikirace"
 pages_build_output_dir = "./dist"
 compatibility_date = "2026-07-14"
 
 [[d1_databases]]
-binding = "VIKIPEDIA_DB"
-database_name = "vikipedia"
-database_id = "bdd320b2-008c-4ef9-a6fe-e2ba2df6570e"
+binding = "VWIKI_RACE_DB"
+database_name = "vwiki-race"
+database_id = "bbd89b81-078a-47e0-9db4-5d170a3f78b4"
 
 [vars]
 VGAMES_URL = "https://viota-worker.theonenonlyvj.workers.dev"

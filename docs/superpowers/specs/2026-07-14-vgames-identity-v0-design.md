@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Vikipedia should fit the VGames platform from the beginning without inheriting
+VWiki Race should fit the VGames platform from the beginning without inheriting
 the realtime/card-game room layer. The game is asynchronous and
 challenge-leaderboard based: it does not matter whether two players press
 Start at the same time. It only matters that every run is tracked against the
@@ -10,14 +10,14 @@ right identity and challenge.
 
 This design supersedes the earlier standalone Supabase/player assumption in
 `2026-07-14-server-tracked-v0-design.md`. The implementation now uses
-Cloudflare D1 for Vikipedia-owned tracking data.
+Cloudflare D1 for VWiki Race-owned tracking data.
 
 ## Locked Decisions
 
-- Vikipedia uses VGames identity from v0.
-- Vikipedia does not use VGames realtime rooms.
-- Vikipedia does not use the card-game layer.
-- Vikipedia owns its challenge/run/click/path data.
+- VWiki Race uses VGames identity from v0.
+- VWiki Race does not use VGames realtime rooms.
+- VWiki Race does not use the card-game layer.
+- VWiki Race owns its challenge/run/click/path data.
 - The canonical public name is the unique VGames name/handle.
 - Guests are real unclaimed VGames accounts, not local-only throwaway players.
 - Guest stats must remain claimable when the user later secures a name.
@@ -28,7 +28,7 @@ The landing page should make account creation the preferred path while keeping
 guest play available:
 
 ```txt
-Vikipedia
+VWiki Race
 
 Secure your display name.
 Track your runs, leaderboards, and stats across challenges.
@@ -58,9 +58,9 @@ Client state:
 Server state:
 
 - `accounts.status = 'ghost'`.
-- `origin_game = 'vikipedia'`.
+- `origin_game = 'vwiki-race'`.
 - `device_credentials` maps the device credential hash to the ghost account.
-- Vikipedia runs reference the VGames `account_id`.
+- VWiki Race runs reference the VGames `account_id`.
 
 Guest leaderboard entries should display a guest-safe name, not a permanent
 claim to a unique VGames handle.
@@ -77,7 +77,7 @@ The secure flow can be:
 3. The app calls `/auth/set-credentials` for the current ghost account, or
    `/auth/login` if they already have a secured account.
 4. The same VGames `account_id`, or the canonical merged account id, remains the
-   owner of their Vikipedia runs.
+   owner of their VWiki Race runs.
 
 ### Claiming Guest Stats
 
@@ -87,12 +87,12 @@ the simplest path is in-place claim:
 - Existing ghost account: `ghost`
 - Action: `/auth/set-credentials`
 - Result: same `account_id`, status becomes `claimed`
-- Vikipedia stats require no migration because runs already point at that
+- VWiki Race stats require no migration because runs already point at that
   `account_id`.
 
 If the user logs into an existing VGames account from a device that already has
-a Vikipedia guest account, VGames' login ghost-fold behavior should merge the
-device ghost into the logged-in canonical account. Vikipedia must store runs by
+a VWiki Race guest account, VGames' login ghost-fold behavior should merge the
+device ghost into the logged-in canonical account. VWiki Race must store runs by
 VGames account id and resolve leaderboard display through the canonical account
 identity so stats follow the person.
 
@@ -107,22 +107,22 @@ VGames owns:
 - Ghost-to-claimed lifecycle
 - Account merges/canonicalization
 
-Vikipedia owns:
+VWiki Race owns:
 
 - Challenges
 - Runs
 - Click events
 - Path steps
 - Per-challenge leaderboards
-- Vikipedia-specific stats such as top starts, top targets, most visited pages,
+- VWiki Race-specific stats such as top starts, top targets, most visited pages,
   bridge pages, common jumps, and completion speed.
 
 ## Data Model Direction
 
-Do not create a Vikipedia-local `players` namespace for public launch. Replace
+Do not create a VWiki Race-local `players` namespace for public launch. Replace
 `player_id` with a VGames account reference.
 
-Minimum Vikipedia tables:
+Minimum VWiki Race tables:
 
 - `account_profiles`
 - `challenges`
@@ -139,7 +139,7 @@ Minimum Vikipedia tables:
 - `elapsed_ms`, `click_count`.
 - start/target/final title snapshots.
 
-`account_profiles` is a Vikipedia-owned cache for leaderboard display:
+`account_profiles` is a VWiki Race-owned cache for leaderboard display:
 
 - `account_id`: VGames account id.
 - `public_name`: current display name/handle supplied by the VGames session.
@@ -151,23 +151,23 @@ Leaderboards are per challenge. Sorting stays:
 2. lowest `click_count`;
 3. earliest `completed_at`.
 
-VGames' current cross-game leaderboard views are not sufficient for Vikipedia
+VGames' current cross-game leaderboard views are not sufficient for VWiki Race
 because they group by `game_type` and do not include a mode/challenge dimension.
-Vikipedia should use its own leaderboard queries for v0.
+VWiki Race should use its own leaderboard queries for v0.
 
 ## API Direction
 
-Vikipedia API calls that create or mutate runs should require a VGames identity
+VWiki Race API calls that create or mutate runs should require a VGames identity
 token or server-verified account id.
 
 Frontend identity calls:
 
 - Guest start: call VGames `/auth/quick` with `{ deviceCredential, displayName,
-  game: 'vikipedia' }`.
+  game: 'vwiki-race' }`.
 - Secure current guest: call VGames `/auth/set-credentials`.
 - Existing user login: call VGames `/auth/login`.
 
-Vikipedia run calls:
+VWiki Race run calls:
 
 - `GET /api/challenges`
 - `POST /api/challenges`
@@ -186,21 +186,21 @@ Vikipedia run calls:
 This follows the VGames two-ring reframe:
 
 - Ring 0 identity: shared now.
-- Ring A realtime room primitive: not needed for Vikipedia v0.
+- Ring A realtime room primitive: not needed for VWiki Race v0.
 - Ring B turn-based card-game layer: not applicable.
 
-Vikipedia is a challenge leaderboard game, not a synchronous room game.
+VWiki Race is a challenge leaderboard game, not a synchronous room game.
 
 ## Deployment Implication
 
-Do not launch a standalone Supabase identity/player project. Vikipedia
-challenge/run tables live in Cloudflare D1 through the `VIKIPEDIA_DB` Pages
+Do not launch a standalone Supabase identity/player project. VWiki Race
+challenge/run tables live in Cloudflare D1 through the `VWIKI_RACE_DB` Pages
 binding. VGames identity is the source of truth for player identity.
 
 ## Required VGames Change
 
-The viota worker must allow `origin_game = 'vikipedia'` before launch so new
-ghost accounts created from Vikipedia are stamped correctly. The local viota
+The viota worker must allow `origin_game = 'vwiki-race'` before launch so new
+ghost accounts created from VWiki Race are stamped correctly. The local viota
 change has been made and verified with the targeted worker account test.
 
 ## Resolved Implementation Questions

@@ -1,4 +1,4 @@
-# Vikipedia Game Principles and Rules
+# VWiki Race Game Principles and Rules
 
 Status: initial research draft  
 Date: 2026-07-13  
@@ -84,7 +84,7 @@ but their results should not be ranked together.
 ### 10. Wikipedia Is The Source, Not The Product's Property
 
 The app must respect Wikimedia licensing, attribution, trademarks, API usage
-guidelines, rate limits, and infrastructure. Vikipedia should add a game layer
+guidelines, rate limits, and infrastructure. VWiki Race should add a game layer
 and community layer without pretending to own or replace Wikipedia content.
 
 ## Absolute Rules For Ranked Classic

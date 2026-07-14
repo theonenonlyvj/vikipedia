@@ -1,22 +1,20 @@
-# Vikipedia Cloudflare Deployment Handoff
+# VWiki Race Cloudflare Deployment Handoff
 
 Date: 2026-07-14
 
 ## Current State
 
-- GitHub repo: `https://github.com/theonenonlyvj/vikipedia.git`
+- GitHub repo: `https://github.com/theonenonlyvj/vwiki-race.git`
 - Production branch: `main`
-- VGames/D1 implementation commit: `09a30b1`
-- Current implementation: VGames identity + D1 tracking is pushed to
-  `main`
-- Deployment status: not deployed yet
-- Intended host: Cloudflare Pages
-- Intended identity: VGames identity worker
-- Intended run data store: Cloudflare D1
-- VGames realtime rooms: not needed for Vikipedia v0
+- Current implementation: VGames identity + D1 tracking is in `main`
+- Cloudflare Pages project: `vwikirace`
+- Production URL: `https://vwikirace.pages.dev`
+- Identity: VGames identity worker
+- Run data store: Cloudflare D1 database `vwiki-race`
+- VGames realtime rooms: not needed for VWiki Race v0
 
 The current v0 is designed to be tracked from game 0. VGames owns account
-identity, including ghost guests and secured unique names. Vikipedia owns
+identity, including ghost guests and secured unique names. VWiki Race owns
 challenges, runs, clicks, completions, paths, and per-challenge leaderboards.
 Guest play must be claimable later into a secured VGames name without losing
 stats.
@@ -24,7 +22,7 @@ stats.
 ## Superseding Note
 
 The earlier standalone Supabase launch path is superseded. Supabase code,
-migration files, and the Vikipedia-local `players` namespace have been removed
+migration files, and the VWiki Race-local `players` namespace have been removed
 from the current implementation. Do not recreate them for v0.
 
 ## Verified Before Handoff
@@ -48,62 +46,70 @@ Last known results:
 - Static app: Vite/React build output in `dist`
 - API layer: Cloudflare Pages Functions in `functions/api/*`
 - Identity: VGames worker at `https://viota-worker.theonenonlyvj.workers.dev`
-- Vikipedia data: Cloudflare D1 tables keyed by VGames `account_id`
+- VWiki Race data: Cloudflare D1 tables keyed by VGames `account_id`
 - Realtime rooms: not applicable
 
-Do not duplicate VGames accounts with a standalone Vikipedia player identity.
+Do not duplicate VGames accounts with a standalone VWiki Race player identity.
 
 ## Step 1: VGames Identity Fit
 
 Implemented locally:
 
 1. Guest play calls VGames `/auth/quick`.
-2. New VGames ghost accounts are created with `game: 'vikipedia'`.
+2. New VGames ghost accounts are created with `game: 'vwiki-race'`.
 3. Securing a display name claims the current ghost through VGames
    `/auth/set-credentials`.
 4. Existing users can use VGames `/auth/login`.
-5. Vikipedia run rows store VGames `account_id`, not a local `players.id`.
+5. VWiki Race run rows store VGames `account_id`, not a local `players.id`.
 6. Leaderboards display the secured VGames unique name/handle when available.
 7. Guest stats remain claimable when the guest later secures or logs into an
    account.
 
-VGames-side change in `/Users/vijayram/Cursor/viota`: `vikipedia` was added to
+VGames-side change in `/Users/vijayram/Cursor/viota`: `vwiki-race` was added to
 the allowed `origin_game` values and covered by
 `packages/worker/test/accounts.test.ts`. That change is pushed to viota `main`
-as `629c794`, but the viota worker still needs to be deployed before the
-production Vikipedia launch.
+as `899520f` and deployed to the viota worker as version
+`ba23146a-71c1-4ffe-814a-429cdff4cb08`.
 
 ## Step 2: Create D1
 
-Use one D1 database for Vikipedia-owned data.
+Use one D1 database for VWiki Race-owned data.
 
 Recommended database name:
 
 ```txt
-vikipedia
+vwiki-race
 ```
 
 Required Pages binding name:
 
 ```txt
-VIKIPEDIA_DB
+VWIKI_RACE_DB
 ```
 
 Migration file:
 
 ```txt
-d1/migrations/0001_vikipedia_tracking.sql
+d1/migrations/0001_vwiki_race_tracking.sql
+```
+
+Created database id:
+
+```txt
+bbd89b81-078a-47e0-9db4-5d170a3f78b4
 ```
 
 Dashboard path: Workers & Pages -> D1 SQL Database -> Create database, then
 apply the SQL migration. CLI equivalent if wrangler is available:
 
 ```bash
-wrangler d1 create vikipedia
-wrangler d1 migrations apply vikipedia --remote --migrations-dir d1/migrations
+wrangler d1 create vwiki-race
+wrangler d1 migrations apply vwiki-race --remote --migrations-dir d1/migrations
 ```
 
-## Step 3: Create Cloudflare Pages Project
+## Step 3: Cloudflare Pages Project
+
+The `vwikirace` Pages project has been created. If rebuilding manually:
 
 1. Open Cloudflare dashboard.
 2. Go to Workers & Pages.
@@ -111,12 +117,12 @@ wrangler d1 migrations apply vikipedia --remote --migrations-dir d1/migrations
 4. Select Pages.
 5. Select Import from an existing Git repository.
 6. Connect GitHub if prompted.
-7. Choose repo: `theonenonlyvj/vikipedia`.
+7. Choose repo: `theonenonlyvj/vwiki-race`.
 
 Use these build settings:
 
 ```txt
-Project name: vikipedia
+Project name: vwikirace
 Production branch: main
 Framework preset: React / Vite, or None if entering manually
 Root directory: /
@@ -125,7 +131,7 @@ Build output directory: dist
 Functions directory: functions
 ```
 
-The repo root is already the Vikipedia app, so do not set a nested root
+The repo root is already the VWiki Race app, so do not set a nested root
 directory.
 
 ## Step 4: Add Cloudflare Environment Values
@@ -139,8 +145,8 @@ VGAMES_URL = https://viota-worker.theonenonlyvj.workers.dev
 Bind the D1 database to the Pages Functions project:
 
 ```txt
-Binding name: VIKIPEDIA_DB
-Database: vikipedia
+Binding name: VWIKI_RACE_DB
+Database: vwiki-race
 ```
 
 ## Step 5: Deploy
@@ -155,7 +161,7 @@ Trigger the production deploy from Cloudflare Pages. Cloudflare should:
 The first live URL should be similar to:
 
 ```txt
-https://vikipedia.pages.dev
+https://vwikirace.pages.dev
 ```
 
 ## Step 6: Smoke Test Production
@@ -163,15 +169,15 @@ https://vikipedia.pages.dev
 After deploy completes, test:
 
 ```txt
-https://vikipedia.pages.dev/api/challenges
+https://vwikirace.pages.dev/api/challenges
 ```
 
 Expected result: JSON with at least `challenge-0001`.
 
 Then test the app flow:
 
-1. Open `https://vikipedia.pages.dev`.
-2. Choose Secure display name / Log in, or Play as guest.
+1. Open `https://vwikirace.pages.dev`.
+2. Enter a display name.
 3. Confirm `Challenge #1` shows `Moon -> Gravity`.
 4. Start the challenge.
 5. Click one Wikipedia link.
@@ -180,7 +186,7 @@ Then test the app flow:
 8. Confirm the leaderboard row is associated with the VGames identity.
 
 If API requests fail, check Cloudflare deployment logs first, then verify that
-`VGAMES_URL` and the `VIKIPEDIA_DB` binding exist in the Pages production
+`VGAMES_URL` and the `VWIKI_RACE_DB` binding exist in the Pages production
 environment.
 
 ## Useful Routes
@@ -202,8 +208,8 @@ environment.
 - Build fails: confirm Cloudflare is running from repo root and using
   `npm run build` with output directory `dist`.
 - Guest auth fails: confirm `VGAMES_URL` points at the viota worker and that the
-  viota worker deployment includes `game: 'vikipedia'`.
-- D1 errors: confirm the Pages Function binding is exactly `VIKIPEDIA_DB` and
+  viota worker deployment includes `game: 'vwiki-race'`.
+- D1 errors: confirm the Pages Function binding is exactly `VWIKI_RACE_DB` and
   the migration has been applied.
 - Leaderboard identity is wrong: confirm runs are keyed by VGames `account_id`
   and display uses the canonical secured VGames name/handle when present.
@@ -217,7 +223,7 @@ environment.
 Start with:
 
 ```bash
-cd /Users/vijayram/Cursor/vikipedia
+cd /Users/vijayram/Cursor/vwiki-race
 git status --short --branch
 npm test
 npm run build
@@ -236,9 +242,10 @@ Do not commit Cloudflare tokens or VGames secrets.
 
 ## Recommended Next Work
 
-1. Deploy the viota worker origin-game allowlist change.
-2. Create/apply the Vikipedia D1 database migration.
-3. Deploy to Cloudflare Pages using the checklist above.
-4. Verify guest play, secure-name claim, `/api/challenges`, and a full run in
+1. Inspect the latest Cloudflare Pages deployment and logs if production
+   behavior differs from local.
+2. Verify guest play, `/api/challenges`, and a full run in
    production.
-5. Add a custom domain if Vijay wants one.
+3. Implement challenge deep links and Wikipedia node validation from
+   `docs/backlog.md`.
+4. Add a custom domain if Vijay wants one.

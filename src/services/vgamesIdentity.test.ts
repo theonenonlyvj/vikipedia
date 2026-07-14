@@ -27,6 +27,8 @@ function fixedCrypto(): Pick<Crypto, "getRandomValues"> {
 }
 
 describe("VGames identity repository", () => {
+  const legacySessionStorageKey = `${["viki", "pedia"].join("")}:vgames-session`;
+
   it("mints and persists a stable 256-bit device credential", () => {
     const storage = memoryStorage();
     const repository = createVGamesIdentityRepository(storage, fixedCrypto());
@@ -65,17 +67,44 @@ describe("VGames identity repository", () => {
   it("clears invalid cached sessions", () => {
     const storage = memoryStorage();
     storage.setItem(
-      "vikipedia:vgames-session",
+      "vwiki-race:vgames-session",
       JSON.stringify({ accountId: "acc-1" }),
     );
 
     expect(createVGamesIdentityRepository(storage).getSession()).toBeNull();
-    expect(storage.getItem("vikipedia:vgames-session")).toBeNull();
+    expect(storage.getItem("vwiki-race:vgames-session")).toBeNull();
+  });
+
+  it("migrates valid legacy sessions to the VWiki Race storage key", () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      legacySessionStorageKey,
+      JSON.stringify({
+        accountId: "acc-1",
+        displayName: "Vijay",
+        token: "jwt-guest",
+        status: "ghost",
+      }),
+    );
+
+    expect(createVGamesIdentityRepository(storage).getSession()).toEqual({
+      accountId: "acc-1",
+      displayName: "Vijay",
+      token: "jwt-guest",
+      status: "ghost",
+    });
+    expect(storage.getItem(legacySessionStorageKey)).toBeNull();
+    expect(JSON.parse(storage.getItem("vwiki-race:vgames-session") ?? "{}")).toEqual({
+      accountId: "acc-1",
+      displayName: "Vijay",
+      token: "jwt-guest",
+      status: "ghost",
+    });
   });
 });
 
 describe("VGames identity client", () => {
-  it("creates a guest through the Vikipedia identity proxy", async () => {
+  it("creates a guest through the VWiki Race identity proxy", async () => {
     const fetchImpl = vi.fn(async () => {
       return Response.json({
         accountId: "acc-guest",

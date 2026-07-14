@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a Vikipedia v0 where every started challenge, click, completion, leaderboard row, and player stat is tracked through a server API backed by a separate Supabase project.
+**Goal:** Build a VWiki Race v0 where every started challenge, click, completion, leaderboard row, and player stat is tracked through a server API backed by a separate Supabase project.
 
 **Architecture:** Keep React/Vite as the frontend and add Cloudflare Pages Functions as the server boundary. Functions call pure TypeScript API handlers, and the production repository writes to Supabase using server-only credentials. The frontend reads challenges and leaderboards from the API, requires a display name before starting a run, and shows Viota-branded game chrome around a Wikipedia-native article renderer.
 
@@ -42,14 +42,14 @@
 - `functions/api/runs/[runId]/abandon.ts`: Cloudflare route for abandonment.
 - `functions/api/challenges/[challengeId]/leaderboard.ts`: Cloudflare route for leaderboard reads.
 - `functions/api/runs/[runId]/path.ts`: Cloudflare route for path popouts.
-- `src/services/vikipediaApiClient.ts`: browser API client.
+- `src/services/vwikiRaceApiClient.ts`: browser API client.
 - `src/services/playerRepository.ts`: local player id cache only.
 - `src/components/GameHeader.tsx`: expanded, compact, and result header states.
 - `src/components/PathStrip.tsx`: horizontal compressed path strip.
 - `src/components/LeaderboardPanel.tsx`: speed-first leaderboard with path popout.
 - `src/components/ChallengeBrowser.tsx`: challenge list and selection.
 - `src/components/WikipediaArticle.tsx`: Wikipedia-native article frame.
-- `supabase/migrations/0001_vikipedia_v0_tracking.sql`: schema, indexes, and Challenge #1 seed.
+- `supabase/migrations/0001_vwiki_race_v0_tracking.sql`: schema, indexes, and Challenge #1 seed.
 - `.env.example`: required local/Cloudflare env names with non-secret example values.
 - `README.md`: update deployment and database setup instructions.
 
@@ -497,7 +497,7 @@ git commit -m "feat: add tracking api handlers"
 ### Task 3: Supabase Schema And Repository
 
 **Files:**
-- Create: `supabase/migrations/0001_vikipedia_v0_tracking.sql`
+- Create: `supabase/migrations/0001_vwiki_race_v0_tracking.sql`
 - Create: `src/server/supabaseTrackingRepository.ts`
 - Test: `src/server/supabaseTrackingRepository.test.ts`
 - Modify: `package.json`
@@ -648,25 +648,25 @@ git commit -m "feat: add cloudflare tracking routes"
 ### Task 5: Browser API Client And Server-Tracked App Flow
 
 **Files:**
-- Create: `src/services/vikipediaApiClient.ts`
+- Create: `src/services/vwikiRaceApiClient.ts`
 - Create: `src/services/playerRepository.ts`
-- Test: `src/services/vikipediaApiClient.test.ts`
+- Test: `src/services/vwikiRaceApiClient.test.ts`
 - Test: `src/services/playerRepository.test.ts`
 - Modify: `src/App.tsx`
 - Modify: `src/App.test.tsx`
 
 **Interfaces:**
-- Produces: `VikipediaApiClient`
-- Produces: `createVikipediaApiClient(fetchImpl: typeof fetch): VikipediaApiClient`
+- Produces: `VWikiRaceApiClient`
+- Produces: `createVWikiRaceApiClient(fetchImpl: typeof fetch): VWikiRaceApiClient`
 - Produces: `createPlayerRepository(storage: StorageLike)`
 
 - [ ] **Step 1: Write API client tests**
 
-Test that `createVikipediaApiClient` calls `/api/challenges`, `/api/players`, `/api/runs/start`, `/api/runs/:runId/click`, `/api/runs/:runId/complete`, `/api/challenges/:challengeId/leaderboard`, and parses error payloads into thrown `Error` messages.
+Test that `createVWikiRaceApiClient` calls `/api/challenges`, `/api/players`, `/api/runs/start`, `/api/runs/:runId/click`, `/api/runs/:runId/complete`, `/api/challenges/:challengeId/leaderboard`, and parses error payloads into thrown `Error` messages.
 
 - [ ] **Step 2: Run API client tests and verify failure**
 
-Run: `npm test -- src/services/vikipediaApiClient.test.ts`
+Run: `npm test -- src/services/vwikiRaceApiClient.test.ts`
 
 Expected: FAIL because the client does not exist.
 
@@ -675,7 +675,7 @@ Expected: FAIL because the client does not exist.
 The client wraps `fetch` with JSON helpers and stable methods:
 
 ```ts
-export interface VikipediaApiClient {
+export interface VWikiRaceApiClient {
   listChallenges(): Promise<Challenge[]>;
   savePlayer(input: { displayName: string; playerId?: string }): Promise<PlayerRecord>;
   startRun(input: { challengeId: string; playerId: string }): Promise<RunRecordResponse>;
@@ -717,7 +717,7 @@ Replace local identity, local daily leaderboard, and local run-history writes wi
 
 - [ ] **Step 9: Run service and app tests**
 
-Run: `npm test -- src/services/vikipediaApiClient.test.ts src/services/playerRepository.test.ts src/App.test.tsx`
+Run: `npm test -- src/services/vwikiRaceApiClient.test.ts src/services/playerRepository.test.ts src/App.test.tsx`
 
 Expected: PASS.
 
@@ -768,7 +768,7 @@ type HeaderState = "pre-run" | "active" | "finished";
 
 interface GameHeaderProps {
   state: HeaderState;
-  brandName: "vikipedia";
+  brandName: "vwiki-race";
   challengeLabel: string;
   startTitle: string;
   targetTitle: string;
@@ -833,7 +833,7 @@ Document:
 - Cloudflare Pages build command: `npm run build`;
 - output directory: `dist`;
 - required Cloudflare env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`;
-- Supabase migration file: `supabase/migrations/0001_vikipedia_v0_tracking.sql`;
+- Supabase migration file: `supabase/migrations/0001_vwiki_race_v0_tracking.sql`;
 - Challenge #1 seed;
 - display-name-only v0 caveat;
 - VGames deferred.

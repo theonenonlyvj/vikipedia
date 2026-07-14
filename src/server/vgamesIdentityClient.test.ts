@@ -3,7 +3,7 @@ import { ApiError } from "./http";
 import { createVGamesIdentityClient } from "./vgamesIdentityClient";
 
 describe("server VGames identity client", () => {
-  it("creates Vikipedia ghost accounts through auth quick", async () => {
+  it("creates VWiki Race ghost accounts through auth quick", async () => {
     const fetchImpl = vi.fn(async () =>
       Response.json({ accountId: "acc-guest", token: "jwt-guest" }),
     );
@@ -31,7 +31,7 @@ describe("server VGames identity client", () => {
         body: JSON.stringify({
           deviceCredential: "cred-123456789012",
           displayName: "Casey",
-          game: "vikipedia",
+          game: "vwiki-race",
         }),
       }),
     );

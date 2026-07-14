@@ -21,7 +21,7 @@ export interface StartTrackedRunRequest {
   publicName: string;
 }
 
-export interface VikipediaApiClient {
+export interface VWikiRaceApiClient {
   listChallenges(): Promise<Challenge[]>;
   createChallenge(
     input: CreateChallengeRequest,
@@ -46,9 +46,9 @@ export interface VikipediaApiClient {
   getRunPath(runId: string): Promise<ServerPathStep[]>;
 }
 
-export function createVikipediaApiClient(
+export function createVWikiRaceApiClient(
   fetchImpl: typeof fetch,
-): VikipediaApiClient {
+): VWikiRaceApiClient {
   return {
     async listChallenges() {
       const response = await apiRequest<{ challenges: Challenge[] }>(
@@ -191,5 +191,5 @@ function readApiError(payload: unknown, status: number): string {
     return payload.error.message;
   }
 
-  return `Vikipedia API request failed with status ${status}`;
+  return `VWiki Race API request failed with status ${status}`;
 }

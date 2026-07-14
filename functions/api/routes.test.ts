@@ -217,7 +217,7 @@ describe("Cloudflare API routes", () => {
   it("rejects challenge creation without a VGames session", async () => {
     mockState.authorize.mockRejectedValue({
       code: "unauthorized",
-      message: "Sign in before changing Vikipedia.",
+      message: "Sign in before changing VWiki Race.",
       status: 401,
     });
     const route = await import("./challenges");

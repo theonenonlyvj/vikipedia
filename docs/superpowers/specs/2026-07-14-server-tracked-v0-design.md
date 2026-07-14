@@ -2,16 +2,16 @@
 
 ## Purpose
 
-Vikipedia v0 must track every game on a server-owned database from the first
+VWiki Race v0 must track every game on a server-owned database from the first
 publicly playable challenge. Browser `localStorage` may keep convenience state
 or a retry queue, but it is not the source of truth for runs, leaderboards, or
 player stats.
 
 VGames integration is explicitly deferred. V0 uses a separate Supabase project
-for Vikipedia while keeping data shapes compatible with migration into a shared
+for VWiki Race while keeping data shapes compatible with migration into a shared
 game platform when that work starts.
 
-**Superseded 2026-07-14:** Vikipedia should use VGames identity from v0 while
+**Superseded 2026-07-14:** VWiki Race should use VGames identity from v0 while
 remaining challenge-leaderboard based and not using the VGames realtime/card
 room layer. See `2026-07-14-vgames-identity-v0-design.md` before implementing
 or deploying this spec.
@@ -23,7 +23,7 @@ challenges.
 
 In scope:
 
-- Separate Vikipedia Supabase database.
+- Separate VWiki Race Supabase database.
 - Cloudflare Pages frontend with Cloudflare Pages Functions as the server API.
 - Display-name-only v0 players.
 - Server-created challenge catalog.
@@ -46,7 +46,7 @@ Out of scope:
 
 The frontend remains a Vite React app hosted on Cloudflare Pages. Runtime data
 writes go through Cloudflare Pages Functions under `/api/*`. Pages Functions use
-server-side Supabase credentials to write to the separate Vikipedia Supabase
+server-side Supabase credentials to write to the separate VWiki Race Supabase
 project, so no service key is exposed to the browser.
 
 The browser calls the API to:
@@ -285,13 +285,13 @@ controlled view allows:
 - tables when manageable;
 - normal Wikipedia link color and behavior.
 
-Vikipedia may remove global Wikipedia chrome, search, edit controls, external
+VWiki Race may remove global Wikipedia chrome, search, edit controls, external
 links, and unrelated navigation. It should not convert article content into
 cards, chips, or rewritten summaries.
 
 ### Header States
 
-Before a run starts, the header is expanded. It shows the Vikipedia brand,
+Before a run starts, the header is expanded. It shows the VWiki Race brand,
 challenge label, route, and display-name/start control.
 
 During a run, the header compresses and remains sticky while scrolling. Desktop

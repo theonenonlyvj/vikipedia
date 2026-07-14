@@ -28,9 +28,9 @@ describe("wikipedia gateway", () => {
       "Fruit",
       "Apple tree",
     ]);
-    expect(article.html).toContain('data-vikipedia-title="Fruit"');
+    expect(article.html).toContain('data-vwiki-race-title="Fruit"');
     expect(article.html).toContain("history section");
-    expect(article.html).not.toContain('data-vikipedia-title="Apple"');
+    expect(article.html).not.toContain('data-vwiki-race-title="Apple"');
     expect(article.html).not.toContain("Category:Apples");
     expect(article.html).not.toContain("Seed shortcut");
     expect(article.attribution).toContain("Wikipedia");

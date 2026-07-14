@@ -1,13 +1,13 @@
-# Vikipedia V1 Design
+# VWiki Race V1 Design
 
 Status: approved design  
 Date: 2026-07-13  
-Project: Vikipedia  
+Project: VWiki Race  
 Related research: `docs/game-principles-and-rules.md`
 
 ## Summary
 
-Vikipedia v1 is a contract-first Wikipedia navigation game. It proves the solo
+VWiki Race v1 is a contract-first Wikipedia navigation game. It proves the solo
 and daily challenge loops now, while shaping identity and result data around the
 future VGames platform.
 
@@ -28,7 +28,7 @@ password account system, a shortest-path solver, or random prompt generation.
 
 1. Multiplayer race lobbies.
 2. Real VGames backend integration.
-3. Password login, account claiming, or email inside Vikipedia.
+3. Password login, account claiming, or email inside VWiki Race.
 4. Automatic shortest-path solving.
 5. Random prompt generation.
 6. Mobile app wrapper.
@@ -36,7 +36,7 @@ password account system, a shortest-path solver, or random prompt generation.
 
 ## Architecture
 
-Vikipedia is a standalone game repository. It should fit the VGames program as a
+VWiki Race is a standalone game repository. It should fit the VGames program as a
 future game client, not invent a separate account platform.
 
 The app is split into five main areas:

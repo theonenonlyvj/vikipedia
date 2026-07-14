@@ -5,13 +5,13 @@ import { createVGamesIdentityClient } from "../../src/server/vgamesIdentityClien
 import type { AccountStatus } from "../../src/domain/types";
 
 export interface Env {
-  VIKIPEDIA_DB: D1Database;
+  VWIKI_RACE_DB: D1Database;
   VGAMES_URL: string;
 }
 
 export function createTrackingContext(env: Env) {
   const repository = createD1TrackingRepository({
-    db: env.VIKIPEDIA_DB,
+    db: env.VWIKI_RACE_DB,
   });
   const handlers = createApiHandlers(repository);
   const identity = createVGamesIdentityClient({
@@ -43,7 +43,7 @@ export async function authorizeVGamesRequest(
   if (!result.valid) {
     throw new ApiError(
       "unauthorized",
-      "Sign in before changing Vikipedia.",
+      "Sign in before changing VWiki Race.",
       401,
     );
   }
@@ -60,7 +60,7 @@ function readBearerToken(request: Request): string {
   if (!match?.[1]) {
     throw new ApiError(
       "unauthorized",
-      "Sign in before changing Vikipedia.",
+      "Sign in before changing VWiki Race.",
       401,
     );
   }

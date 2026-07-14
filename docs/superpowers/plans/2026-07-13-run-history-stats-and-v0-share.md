@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Do not implement standalone auth, password login, multiplayer, or a custom backend in Vikipedia v0.
+- Do not implement standalone auth, password login, multiplayer, or a custom backend in VWiki Race v0.
 - Every completed run should write a full `RunRecord` to a master list.
 - Stats must be derived from `RunRecord[]`, not manually maintained counters.
 - Local v0 stats are personal to the current browser/account.

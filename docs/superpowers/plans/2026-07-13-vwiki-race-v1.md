@@ -1,8 +1,8 @@
-# Vikipedia V1 Implementation Plan
+# VWiki Race V1 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a playable contract-first Vikipedia v1 with solo runs, daily challenge, local VGames-shaped identity, controlled Wikipedia article rendering, path logging, and local leaderboard storage.
+**Goal:** Build a playable contract-first VWiki Race v1 with solo runs, daily challenge, local VGames-shaped identity, controlled Wikipedia article rendering, path logging, and local leaderboard storage.
 
 **Architecture:** Use a Vite React TypeScript app with pure domain modules for game state, rules, and leaderboard logic. Keep service boundaries explicit: `VGamesIdentityClient`, `WikipediaGateway`, and `DailyChallengeRepository` each have mock/local implementations that can be replaced by real VGames or platform services later.
 
@@ -31,7 +31,7 @@
 - `src/main.tsx`: React entrypoint.
 - `src/App.tsx`: top-level application wiring and UI state.
 - `src/styles.css`: app styling.
-- `src/domain/types.ts`: shared Vikipedia domain types.
+- `src/domain/types.ts`: shared VWiki Race domain types.
 - `src/domain/rules.ts`: link classification and namespace filtering.
 - `src/domain/gameSession.ts`: run state machine, navigation transitions, win detection, path immutability.
 - `src/domain/leaderboard.ts`: daily leaderboard comparison and best-result replacement.
@@ -280,7 +280,7 @@ Expected: pass.
 
 - [ ] **Step 1: Update README**
 
-Document the Vikipedia v1 scope, local development command, test command, and VGames mock identity caveat.
+Document the VWiki Race v1 scope, local development command, test command, and VGames mock identity caveat.
 
 - [ ] **Step 2: Run all tests**
 

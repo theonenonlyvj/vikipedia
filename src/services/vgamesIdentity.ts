@@ -44,8 +44,11 @@ export interface VGamesIdentityClient {
   login(input: LoginInput): Promise<VGamesIdentitySession>;
 }
 
-const CREDENTIAL_STORAGE_KEY = "vikipedia:vgames-device-credential";
-const SESSION_STORAGE_KEY = "vikipedia:vgames-session";
+const CREDENTIAL_STORAGE_KEY = "vwiki-race:vgames-device-credential";
+const SESSION_STORAGE_KEY = "vwiki-race:vgames-session";
+const LEGACY_APP_KEY = ["viki", "pedia"].join("");
+const LEGACY_CREDENTIAL_STORAGE_KEY = `${LEGACY_APP_KEY}:vgames-device-credential`;
+const LEGACY_SESSION_STORAGE_KEY = `${LEGACY_APP_KEY}:vgames-session`;
 
 type CryptoLike = Pick<Crypto, "getRandomValues">;
 
@@ -60,6 +63,13 @@ export function createVGamesIdentityRepository(
         return existing;
       }
 
+      const legacy = storage.getItem(LEGACY_CREDENTIAL_STORAGE_KEY);
+      if (legacy) {
+        storage.setItem(CREDENTIAL_STORAGE_KEY, legacy);
+        storage.removeItem(LEGACY_CREDENTIAL_STORAGE_KEY);
+        return legacy;
+      }
+
       const bytes = cryptoLike.getRandomValues(new Uint8Array(32));
       const credential = toHex(bytes);
       storage.setItem(CREDENTIAL_STORAGE_KEY, credential);
@@ -67,28 +77,17 @@ export function createVGamesIdentityRepository(
     },
 
     getSession() {
-      const raw = storage.getItem(SESSION_STORAGE_KEY);
-      if (!raw) {
-        return null;
+      const session = readSession(storage, SESSION_STORAGE_KEY);
+      if (session) {
+        return session;
       }
 
-      try {
-        const parsed = JSON.parse(raw) as Partial<VGamesIdentitySession>;
-        if (!isSession(parsed)) {
-          storage.removeItem(SESSION_STORAGE_KEY);
-          return null;
-        }
-
-        return {
-          accountId: parsed.accountId.trim(),
-          displayName: parsed.displayName.trim(),
-          token: parsed.token,
-          status: parsed.status,
-        };
-      } catch {
-        storage.removeItem(SESSION_STORAGE_KEY);
-        return null;
+      const legacySession = readSession(storage, LEGACY_SESSION_STORAGE_KEY);
+      if (legacySession) {
+        storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(legacySession));
+        storage.removeItem(LEGACY_SESSION_STORAGE_KEY);
       }
+      return legacySession;
     },
 
     saveSession(session) {
@@ -101,10 +100,12 @@ export function createVGamesIdentityRepository(
           status: session.status,
         }),
       );
+      storage.removeItem(LEGACY_SESSION_STORAGE_KEY);
     },
 
     clearSession() {
       storage.removeItem(SESSION_STORAGE_KEY);
+      storage.removeItem(LEGACY_SESSION_STORAGE_KEY);
     },
   };
 }
@@ -192,6 +193,34 @@ function isSession(value: unknown): value is VGamesIdentitySession {
     "status" in value &&
     (value.status === "ghost" || value.status === "claimed")
   );
+}
+
+function readSession(
+  storage: StorageLike,
+  storageKey: string,
+): VGamesIdentitySession | null {
+  const raw = storage.getItem(storageKey);
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<VGamesIdentitySession>;
+    if (!isSession(parsed)) {
+      storage.removeItem(storageKey);
+      return null;
+    }
+
+    return {
+      accountId: parsed.accountId.trim(),
+      displayName: parsed.displayName.trim(),
+      token: parsed.token,
+      status: parsed.status,
+    };
+  } catch {
+    storage.removeItem(storageKey);
+    return null;
+  }
 }
 
 function toHex(bytes: Uint8Array): string {

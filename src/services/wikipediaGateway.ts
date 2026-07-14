@@ -52,7 +52,7 @@ async function fetchArticle(
   const url = buildParseUrl(endpoint, title);
   const response = await fetchImpl(url, {
     headers: {
-      "Api-User-Agent": "Vikipedia/0.1 (local development)",
+      "Api-User-Agent": "VWikiRace/0.1 (local development)",
     },
   });
   if (!response.ok) {
@@ -112,10 +112,10 @@ function sanitizeArticleHtml(
   links: ArticleLink[];
 } {
   const document = new DOMParser().parseFromString(
-    `<div class="vikipedia-article-root">${rawHtml}</div>`,
+    `<div class="vwiki-race-article-root">${rawHtml}</div>`,
     "text/html",
   );
-  const root = document.querySelector(".vikipedia-article-root");
+  const root = document.querySelector(".vwiki-race-article-root");
   if (!root) {
     throw new Error("Could not parse article HTML");
   }
@@ -151,8 +151,8 @@ function sanitizeArticleHtml(
       sourceSection: closestSectionTitle(anchor),
     });
     anchor.setAttribute("href", `#article:${encodeURIComponent(title)}`);
-    anchor.setAttribute("data-vikipedia-title", title);
-    anchor.setAttribute("data-vikipedia-href", href);
+    anchor.setAttribute("data-vwiki-race-title", title);
+    anchor.setAttribute("data-vwiki-race-href", href);
   }
 
   return {
