@@ -38,13 +38,29 @@ describe("API origin", () => {
   });
 
   it.each([
+    "http://localhost:8787",
+    "http://127.0.0.1:8787/",
+    "http://[::1]:8787",
+  ])("allows a canonical loopback HTTP origin during local development: %s", (value) => {
+    expect(resolveApiOrigin(value)).toBe(new URL(value).origin);
+  });
+
+  it.each([
+    "http://api.example.com",
+    "http://192.168.1.20:8787",
+    "http://0.0.0.0:8787",
+  ])("rejects a non-loopback HTTP origin during development: %s", (value) => {
+    expect(() => resolveApiOrigin(value)).toThrow("canonical HTTPS or loopback HTTP origin");
+  });
+
+  it.each([
     "https://user:secret@api.example.com",
     "https://api.example.com/v2",
     "https://api.example.com//",
     "https://api.example.com?region=us",
     "https://api.example.com#worker",
   ])("rejects a non-canonical API origin: %s", (value) => {
-    expect(() => resolveApiOrigin(value)).toThrow("canonical HTTPS origin");
+    expect(() => resolveApiOrigin(value)).toThrow("canonical HTTPS or loopback HTTP origin");
   });
 });
 

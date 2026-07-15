@@ -28,6 +28,8 @@ import type {
   ActiveRunRecord,
   AccountProfileRecord,
   CreateChallengeV2Input,
+  DailyChallengeInput,
+  DailyChallengeJob,
   LegacyClickInput,
   LegacyCompleteInput,
   RecordClickV2Result,
@@ -64,6 +66,104 @@ export function createD1TrackingRepository(options: {
   const timestamp = () => now().toISOString();
 
   const repository: RunProtocolRepository = {
+    async ensureDailyChallengeJob(dailyDate) {
+      const at = timestamp();
+      await db.prepare(
+        `INSERT OR IGNORE INTO daily_challenge_jobs
+           (daily_date, status, attempt_count, next_attempt_at, created_at, updated_at)
+         VALUES (?, 'pending', 0, ?, ?, ?)`,
+      ).bind(requireDailyDate(dailyDate), at, at, at).run();
+    },
+
+    async claimDueDailyChallengeJob() {
+      const at = timestamp();
+      const leaseToken = randomId();
+      const leaseExpiresAt = new Date(Date.parse(at) + 10 * 60 * 1000).toISOString();
+      const result = await db.prepare(
+        `UPDATE daily_challenge_jobs
+         SET status = 'claimed', attempt_count = attempt_count + 1,
+             lease_token = ?, lease_expires_at = ?, updated_at = ?
+         WHERE daily_date = (
+           SELECT daily_date FROM daily_challenge_jobs
+           WHERE (status = 'pending' AND next_attempt_at <= ?)
+              OR (status = 'claimed' AND lease_expires_at <= ?)
+           ORDER BY daily_date LIMIT 1
+         ) AND ((status = 'pending' AND next_attempt_at <= ?)
+           OR (status = 'claimed' AND lease_expires_at <= ?))`,
+      ).bind(leaseToken, leaseExpiresAt, at, at, at, at, at).run();
+      if (mutationChanges(result) !== 1) return null;
+      const row = await db.prepare(
+        `SELECT daily_date, attempt_count, lease_token, lease_expires_at
+         FROM daily_challenge_jobs WHERE lease_token = ? AND status = 'claimed'`,
+      ).bind(leaseToken).first<DailyChallengeJobRow>();
+      return row ? mapDailyChallengeJob(row) : null;
+    },
+
+    async failDailyChallengeJob(job, failureCode) {
+      const normalized = normalizeDailyJob(job);
+      const at = timestamp();
+      const nextAttemptAt = new Date(
+        Date.parse(at) + dailyRetryHours(normalized.attemptCount) * 60 * 60 * 1000,
+      ).toISOString();
+      await db.prepare(
+        `UPDATE daily_challenge_jobs
+         SET status = 'pending', next_attempt_at = ?, lease_token = NULL,
+             lease_expires_at = NULL, failure_code = ?, updated_at = ?
+         WHERE daily_date = ? AND status = 'claimed' AND lease_token = ?`,
+      ).bind(nextAttemptAt, redactDailyFailureCode(failureCode), at, normalized.dailyDate, normalized.leaseToken).run();
+    },
+
+    async acceptDailyChallenge(job, input) {
+      const normalizedJob = normalizeDailyJob(job);
+      const candidate = normalizeDailyChallengeInput(input);
+      const at = timestamp();
+      await requireBatch(db)([
+        db.prepare(
+          `UPDATE challenge_number_sequence SET next_sort_order = next_sort_order + 1
+           WHERE sequence_name = 'global'
+             AND EXISTS (SELECT 1 FROM daily_challenge_jobs
+               WHERE daily_date = ? AND status = 'claimed' AND lease_token = ?)
+             AND NOT EXISTS (SELECT 1 FROM challenges WHERE daily_date = ?)`,
+        ).bind(normalizedJob.dailyDate, normalizedJob.leaseToken, normalizedJob.dailyDate),
+        db.prepare(
+          `INSERT INTO challenges
+             (id, label, start_title, target_title, start_page_id, target_page_id,
+              validation_status, ruleset, sort_order, is_active, created_at,
+              created_by_account_id, created_by_display_name, created_by_identity_status,
+              origin, daily_date, source)
+           SELECT printf('challenge-%04d', s.next_sort_order - 1),
+                  'Challenge #' || (s.next_sort_order - 1), ?, ?, ?, ?,
+                  'ready', 'ranked_classic', s.next_sort_order - 1, 1, ?,
+                  'vwiki-race:daily', 'VWiki Race', 'claimed',
+                  'daily', ?, 'wikipedia_random'
+           FROM challenge_number_sequence s
+           WHERE s.sequence_name = 'global'
+             AND EXISTS (SELECT 1 FROM daily_challenge_jobs
+               WHERE daily_date = ? AND status = 'claimed' AND lease_token = ?)
+             AND NOT EXISTS (SELECT 1 FROM challenges WHERE daily_date = ?)`,
+        ).bind(candidate.startTitle, candidate.targetTitle, candidate.startPageId,
+          candidate.targetPageId, at, normalizedJob.dailyDate, normalizedJob.dailyDate,
+          normalizedJob.leaseToken, normalizedJob.dailyDate),
+        db.prepare(
+          `UPDATE daily_challenge_jobs
+           SET status = 'accepted', lease_token = NULL, lease_expires_at = NULL,
+               accepted_challenge_id = (SELECT id FROM challenges WHERE daily_date = ?),
+               failure_code = NULL, updated_at = ?
+           WHERE daily_date = ? AND status = 'claimed' AND lease_token = ?
+             AND EXISTS (SELECT 1 FROM challenges WHERE daily_date = ?)`,
+        ).bind(normalizedJob.dailyDate, at, normalizedJob.dailyDate,
+          normalizedJob.leaseToken, normalizedJob.dailyDate),
+      ]);
+      const row = await db.prepare(
+        `SELECT id, label, start_title, target_title, ruleset, sort_order, is_active,
+                start_page_id, target_page_id, created_by_account_id,
+                created_by_display_name, created_by_identity_status, origin, daily_date, source
+         FROM challenges WHERE daily_date = ?`,
+      ).bind(normalizedJob.dailyDate).first<ChallengeRow>();
+      if (!row) throw new ApiError("daily_challenge_accept_failed", "Daily challenge acceptance did not complete.", 500);
+      return mapChallengeRow(row);
+    },
+
     async listChallenges() {
       const { results } = await db
         .prepare(
@@ -79,7 +179,10 @@ export function createD1TrackingRepository(options: {
              target_page_id,
              created_by_account_id,
              created_by_display_name,
-             created_by_identity_status
+             created_by_identity_status,
+             origin,
+             daily_date,
+             source
            FROM challenges
            WHERE is_active = 1
            ORDER BY sort_order`,
@@ -89,68 +192,35 @@ export function createD1TrackingRepository(options: {
     },
 
     async createChallenge(input) {
-      const latest = await db
-        .prepare(
-          `SELECT sort_order
-           FROM challenges
-           ORDER BY sort_order DESC
-           LIMIT 1`,
-        )
-        .first<Pick<ChallengeRow, "sort_order">>();
-      const sortOrder = Number(latest?.sort_order ?? 0) + 1;
-      const id = `challenge-${String(sortOrder).padStart(4, "0")}`;
-      const label = `Challenge #${sortOrder}`;
       const createdAt = timestamp();
-
-      await db
-        .prepare(
+      await requireBatch(db)([
+        db.prepare(
+          `UPDATE challenge_number_sequence
+           SET next_sort_order = next_sort_order + 1 WHERE sequence_name = 'global'`,
+        ),
+        db.prepare(
           `INSERT INTO challenges
-             (
-               id,
-               label,
-               start_title,
-               target_title,
-               ruleset,
-               sort_order,
-               is_active,
-               created_at,
-               created_by_account_id,
-               created_by_display_name,
-               created_by_identity_status
-             )
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .bind(
-          id,
-          label,
-          input.startTitle,
-          input.targetTitle,
-          "ranked_classic",
-          sortOrder,
-          1,
-          createdAt,
-          input.creatorAccountId,
-          input.creatorDisplayName,
-          input.creatorIdentityStatus,
-        )
-        .run();
-
-      return {
-        id,
-        label,
-        sortOrder,
-        isActive: true,
-        mode: "daily",
-        start: { title: input.startTitle },
-        target: { title: input.targetTitle },
-        ruleset: "ranked_classic",
-        source: "curated",
-        createdBy: {
-          accountId: input.creatorAccountId,
-          displayName: input.creatorDisplayName,
-          identityStatus: input.creatorIdentityStatus,
-        },
-      };
+             (id, label, start_title, target_title, ruleset, sort_order, is_active,
+              created_at, created_by_account_id, created_by_display_name,
+              created_by_identity_status, origin, source)
+           SELECT printf('challenge-%04d', next_sort_order - 1),
+                  'Challenge #' || (next_sort_order - 1), ?, ?, 'ranked_classic',
+                  next_sort_order - 1, 1, ?, ?, ?, ?, 'manual', 'curated'
+           FROM challenge_number_sequence WHERE sequence_name = 'global'`,
+        ).bind(
+          input.startTitle, input.targetTitle, createdAt, input.creatorAccountId,
+          input.creatorDisplayName, input.creatorIdentityStatus,
+        ),
+      ]);
+      const row = await db.prepare(
+        `SELECT id, label, start_title, target_title, ruleset, sort_order, is_active,
+                start_page_id, target_page_id, created_by_account_id,
+                created_by_display_name, created_by_identity_status, origin, daily_date, source
+         FROM challenges WHERE created_at = ? AND created_by_account_id = ?
+         ORDER BY sort_order DESC LIMIT 1`,
+      ).bind(createdAt, input.creatorAccountId).first<ChallengeRow>();
+      if (!row) throw new ApiError("challenge_create_failed", "Challenge creation did not complete.", 500);
+      return mapChallengeRow(row);
     },
 
     async findChallengeCreationReplay(accountInput, input) {
@@ -219,14 +289,62 @@ export function createD1TrackingRepository(options: {
            VALUES ('create_challenge', ?, ?, ?, 'pending', ?)`,
         ).bind(create.idempotencyKey, account.accountId, fingerprint, createdAt),
         db.prepare(
+          `UPDATE challenge_number_sequence
+           SET next_sort_order = next_sort_order + 1
+           WHERE sequence_name = 'global'
+             AND EXISTS (
+               SELECT 1 FROM operation_idempotency o
+               WHERE o.operation = 'create_challenge' AND o.idempotency_key = ?
+                 AND o.canonical_account_id = ? AND o.request_fingerprint = ?
+                 AND o.outcome_status = 'pending' AND o.resource_id IS NULL
+             )
+             AND (SELECT count(*) FROM operation_idempotency attempted
+                  WHERE attempted.operation = 'create_challenge'
+                    AND coalesce((SELECT canonical_account_id FROM account_aliases
+                                  WHERE alias_account_id = attempted.canonical_account_id),
+                                 attempted.canonical_account_id) = ?
+                    AND attempted.outcome_status <> 'pending'
+                    AND attempted.created_at > ?) < 20
+             AND (SELECT count(*) FROM operation_idempotency accepted
+                  WHERE accepted.operation = 'create_challenge'
+                    AND coalesce((SELECT canonical_account_id FROM account_aliases
+                                  WHERE alias_account_id = accepted.canonical_account_id),
+                                 accepted.canonical_account_id) = ?
+                    AND accepted.outcome_status = 'accepted'
+                    AND accepted.created_at >= substr(?, 1, 10) || 'T00:00:00.000Z') < 10`,
+        ).bind(
+          create.idempotencyKey, account.accountId, fingerprint,
+          account.accountId, new Date(Date.parse(createdAt) - 60 * 60 * 1000).toISOString(),
+          account.accountId, createdAt,
+        ),
+        db.prepare(
           `UPDATE operation_idempotency
            SET resource_id = printf('challenge-%04d', (
-             SELECT coalesce(max(sort_order), 0) + 1 FROM challenges
+             SELECT next_sort_order - 1 FROM challenge_number_sequence
+             WHERE sequence_name = 'global'
            ))
            WHERE operation = 'create_challenge' AND idempotency_key = ?
              AND canonical_account_id = ? AND request_fingerprint = ?
-             AND outcome_status = 'pending' AND resource_id IS NULL`,
-        ).bind(create.idempotencyKey, account.accountId, fingerprint),
+             AND outcome_status = 'pending' AND resource_id IS NULL
+             AND (SELECT count(*) FROM operation_idempotency attempted
+                  WHERE attempted.operation = 'create_challenge'
+                    AND coalesce((SELECT canonical_account_id FROM account_aliases
+                                  WHERE alias_account_id = attempted.canonical_account_id),
+                                 attempted.canonical_account_id) = ?
+                    AND attempted.outcome_status <> 'pending'
+                    AND attempted.created_at > ?) < 20
+             AND (SELECT count(*) FROM operation_idempotency accepted
+                  WHERE accepted.operation = 'create_challenge'
+                    AND coalesce((SELECT canonical_account_id FROM account_aliases
+                                  WHERE alias_account_id = accepted.canonical_account_id),
+                                 accepted.canonical_account_id) = ?
+                    AND accepted.outcome_status = 'accepted'
+                    AND accepted.created_at >= substr(?, 1, 10) || 'T00:00:00.000Z') < 10`,
+        ).bind(
+          create.idempotencyKey, account.accountId, fingerprint,
+          account.accountId, new Date(Date.parse(createdAt) - 60 * 60 * 1000).toISOString(),
+          account.accountId, createdAt,
+        ),
         // Invariant: `account_aliases` (the merge-graph joined below) holds
         // opaque internal account UUIDs — server-to-server only, NEVER
         // serialize aliases into any client-facing response.
@@ -236,9 +354,9 @@ export function createD1TrackingRepository(options: {
               validation_status, ruleset, sort_order, is_active, created_at,
               created_by_account_id, created_by_display_name, created_by_identity_status)
            SELECT o.resource_id,
-                  'Challenge #' || (SELECT coalesce(max(sort_order), 0) + 1 FROM challenges),
+                  'Challenge #' || (SELECT next_sort_order - 1 FROM challenge_number_sequence WHERE sequence_name = 'global'),
                   ?, ?, ?, ?, 'ready', 'ranked_classic',
-                  (SELECT coalesce(max(sort_order), 0) + 1 FROM challenges),
+                  (SELECT next_sort_order - 1 FROM challenge_number_sequence WHERE sequence_name = 'global'),
                   1, ?, ?, ?, ?
            FROM operation_idempotency o
            WHERE o.operation = 'create_challenge' AND o.idempotency_key = ?
@@ -278,7 +396,10 @@ export function createD1TrackingRepository(options: {
                    'isActive', c.is_active, 'mode', 'daily',
                    'start', json_object('title', c.start_title, 'pageId', c.start_page_id),
                    'target', json_object('title', c.target_title, 'pageId', c.target_page_id),
-                   'ruleset', c.ruleset, 'source', 'curated',
+                   'ruleset', c.ruleset,
+                   'origin', c.origin,
+                   'dailyDate', c.daily_date,
+                   'source', c.source,
                    'createdBy', json_object('accountId', c.created_by_account_id,
                      'displayName', c.created_by_display_name,
                      'identityStatus', c.created_by_identity_status)
@@ -1332,6 +1453,35 @@ export function createD1TrackingRepository(options: {
       return results.map(mapPathStepRow);
     },
 
+    async getRecoveryRunPath(accountInput, runIdInput) {
+      const account = normalizeAuthorizedAccount(accountInput);
+      const runId = requireValue(runIdInput, "invalid_run_id");
+      const receipt = receiptIdsCte(account);
+      const activeOwnedRun = await db.prepare(
+        `WITH ${receipt.sql}
+         SELECT 1
+         FROM runs r
+         LEFT JOIN account_aliases owner_alias
+           ON owner_alias.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
+         WHERE r.id = ?
+           AND r.status = 'active'
+           AND r.protocol_version = 2
+           AND (r.expires_at IS NULL OR r.expires_at >= ?)
+           AND (
+             coalesce(r.canonical_account_id, r.account_id) IN (SELECT account_id FROM receipt_ids)
+             OR owner_alias.canonical_account_id IN (SELECT account_id FROM receipt_ids)
+           )`,
+      ).bind(...receipt.bindings, runId, timestamp()).first<{ present: number }>();
+      if (!activeOwnedRun) {
+        throw new ApiError(
+          "recovery_path_not_found",
+          "That active run was not found.",
+          404,
+        );
+      }
+      return loadPath(db, runId);
+    },
+
     async getAccountStats(accountInput) {
       const account = normalizeAuthorizedAccount(accountInput);
       const receipt = receiptIdsCte(account);
@@ -1726,7 +1876,13 @@ async function replayCreateChallengeOperation(
   at: string,
 ): Promise<Challenge> {
   await assertOperationReplay(db, account, row, fingerprint, at);
-  return parseOperationJson<Challenge>(row);
+  const challenge = parseOperationJson<
+    Omit<Challenge, "isActive"> & { isActive?: unknown }
+  >(row);
+  return {
+    ...challenge,
+    isActive: Boolean(challenge.isActive),
+  };
 }
 
 async function replayClickOperation(
@@ -2505,7 +2661,9 @@ function mapChallengeRow(row: ChallengeRow): Challenge {
     start: { title: row.start_title, pageId: optionalInteger(row.start_page_id) },
     target: { title: row.target_title, pageId: optionalInteger(row.target_page_id) },
     ruleset: "ranked_classic",
-    source: "curated",
+    origin: row.origin === "daily" ? "daily" : "manual",
+    dailyDate: row.daily_date ?? null,
+    source: row.source === "wikipedia_random" ? "wikipedia_random" : "curated",
     createdBy,
   };
 }
@@ -2564,6 +2722,75 @@ interface ChallengeRow {
   created_by_account_id?: string | null;
   created_by_display_name?: string | null;
   created_by_identity_status?: AccountStatus | null;
+  origin?: "manual" | "daily" | null;
+  daily_date?: string | null;
+  source?: "curated" | "wikipedia_random" | null;
+}
+
+interface DailyChallengeJobRow {
+  daily_date: string;
+  attempt_count: number;
+  lease_token: string | null;
+  lease_expires_at: string | null;
+}
+
+function requireDailyDate(value: string): string {
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+    !Number.isFinite(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new ApiError("invalid_daily_date", "Daily challenge dates must be UTC calendar dates.", 400);
+  }
+  return value;
+}
+
+function normalizeDailyJob(job: DailyChallengeJob): DailyChallengeJob {
+  const dailyDate = requireDailyDate(job.dailyDate);
+  const leaseToken = requireValue(job.leaseToken, "invalid_daily_lease");
+  const leaseExpiresAt = requireValue(job.leaseExpiresAt, "invalid_daily_lease");
+  if (!Number.isSafeInteger(job.attemptCount) || job.attemptCount < 1) {
+    throw new ApiError("invalid_daily_attempt", "Daily challenge job attempt is invalid.", 400);
+  }
+  return { dailyDate, attemptCount: job.attemptCount, leaseToken, leaseExpiresAt };
+}
+
+function normalizeDailyChallengeInput(input: DailyChallengeInput): DailyChallengeInput {
+  const startTitle = requireValue(input.startTitle, "invalid_start_title");
+  const targetTitle = requireValue(input.targetTitle, "invalid_target_title");
+  if (!Number.isSafeInteger(input.startPageId) || input.startPageId < 1 ||
+      !Number.isSafeInteger(input.targetPageId) || input.targetPageId < 1 ||
+      input.startPageId === input.targetPageId) {
+    throw new ApiError("invalid_daily_candidate", "Daily challenge candidates must be distinct main articles.", 400);
+  }
+  return { startTitle, startPageId: input.startPageId, targetTitle, targetPageId: input.targetPageId };
+}
+
+function mapDailyChallengeJob(row: DailyChallengeJobRow): DailyChallengeJob {
+  if (!row.lease_token || !row.lease_expires_at) {
+    throw new ApiError("daily_lease_missing", "Daily challenge lease was incomplete.", 500);
+  }
+  return {
+    dailyDate: row.daily_date,
+    attemptCount: Number(row.attempt_count),
+    leaseToken: row.lease_token,
+    leaseExpiresAt: row.lease_expires_at,
+  };
+}
+
+function mutationChanges(result: unknown): number {
+  return Number((result as D1ResultLike | undefined)?.meta?.changes ?? 0);
+}
+
+function dailyRetryHours(attemptCount: number): number {
+  return [1, 2, 4, 6][Math.min(Math.max(attemptCount - 1, 0), 3)] ?? 6;
+}
+
+function redactDailyFailureCode(value: string): string {
+  return /^(daily_candidate_unavailable|daily_candidate_timeout|daily_persistence_failed)$/.test(value)
+    ? value
+    : "daily_persistence_failed";
 }
 
 interface RunRow {

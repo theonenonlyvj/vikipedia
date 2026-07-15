@@ -4,13 +4,14 @@ import { createWikipediaChallengeValidator } from "./wikipediaChallengeValidator
 describe("Wikipedia challenge validator", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("V1a resolves redirects and returns canonical page IDs plus allowed start moves", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
       if (url.searchParams.get("action") === "parse") {
-        return parseLinksResponse({
+        return parseArticleResponse({
           pageid: 1,
           title: "Moon",
           links: [
@@ -52,7 +53,7 @@ describe("Wikipedia challenge validator", () => {
     ]);
     expect(urls[0].searchParams.get("redirects")).toBe("1");
     expect(urls[0].searchParams.get("prop")).toBe("info|pageprops");
-    expect(urls[2].searchParams.get("prop")).toBe("links|revid");
+    expect(urls[2].searchParams.get("prop")).toBe("text|revid");
     expect(urls[2].searchParams.get("page")).toBe("Moon");
     expect(urls.every((url) => !url.searchParams.has("generator"))).toBe(true);
     expect(fetchImpl).toHaveBeenCalledWith(
@@ -94,7 +95,7 @@ describe("Wikipedia challenge validator", () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
       if (url.searchParams.get("action") === "parse") {
-        return parseLinksResponse({
+        return parseArticleResponse({
           pageid: 1,
           title: "AC/DC",
           links: [{ ns: 0, title: "Rock music", exists: true }],
@@ -159,7 +160,7 @@ describe("Wikipedia challenge validator", () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
       if (url.searchParams.get("action") === "parse") {
-        return parseLinksResponse({
+        return parseArticleResponse({
           pageid: 1,
           title: "Moon",
           links: [
@@ -189,10 +190,47 @@ describe("Wikipedia challenge validator", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  it("V1g returns a typed upstream error without reading or logging its body", async () => {
+  it("V1g rejects a rendered dead start whose only links are removed by game rules", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.searchParams.get("action") === "parse") {
+        return Response.json({
+          parse: {
+            pageid: 1,
+            title: "Moon",
+            revid: 10,
+            text: `
+              <div class="navbox"><a href="/wiki/Gravity">Gravity</a></div>
+              <h2 id="See_also">See also</h2>
+              <p><a href="/wiki/Physics">Physics</a></p>
+              <h2 id="References">References</h2>
+              <p><a href="/wiki/Astronomy">Astronomy</a></p>
+            `,
+          },
+        });
+      }
+      return url.searchParams.get("titles") === "Moon"
+        ? queryResponse({ pageid: 1, ns: 0, title: "Moon" })
+        : queryResponse({ pageid: 2, ns: 0, title: "Gravity" });
+    });
+    const validator = createWikipediaChallengeValidator({ fetchImpl });
+
+    await expect(validator.validateChallengeArticles({
+      startTitle: "Moon",
+      targetTitle: "Gravity",
+    })).rejects.toMatchObject({
+      code: "start_has_no_allowed_links",
+      status: 400,
+    });
+  });
+
+  it("V1h returns a typed upstream error without reading or logging its body", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     let bodyRead = false;
-    const response = new Response("SECRET_WIKIPEDIA_RESPONSE_BODY", { status: 403 });
+    const response = new Response("SECRET_WIKIPEDIA_RESPONSE_BODY", {
+      status: 403,
+      statusText: "STATUS_SECRET",
+    });
     Object.defineProperty(response, "text", {
       value: async () => {
         bodyRead = true;
@@ -216,20 +254,117 @@ describe("Wikipedia challenge validator", () => {
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(
       "SECRET_WIKIPEDIA_RESPONSE_BODY",
     );
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("STATUS_SECRET");
   });
 
-  it("V1h converts malformed JSON and network failures to typed boundary errors", async () => {
+  it("V1i attaches a deadline signal to every Wikipedia request", async () => {
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      const url = new URL(String(input));
+      if (url.searchParams.get("action") === "parse") {
+        return parseArticleResponse({
+          pageid: 1,
+          title: "Moon",
+          links: [{ ns: 0, title: "Gravity", exists: true }],
+        });
+      }
+      return url.searchParams.get("titles") === "Moon"
+        ? queryResponse({ pageid: 1, ns: 0, title: "Moon" })
+        : queryResponse({ pageid: 2, ns: 0, title: "Gravity" });
+    });
+    const validator = createWikipediaChallengeValidator({ fetchImpl, timeoutMs: 5_000 });
+
+    await validator.validateChallengeArticles({ startTitle: "Moon", targetTitle: "Gravity" });
+
+    expect(signals).toHaveLength(3);
+    expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+  });
+
+  it("V1j aborts a Wikipedia request at its configured deadline", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const validator = createWikipediaChallengeValidator({
+      timeoutMs: 10,
+      fetchImpl: vi.fn((_input, init) => {
+        signal = init?.signal as AbortSignal | undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        });
+      }),
+    });
+
+    const pending = validator.validateChallengeArticles({
+      startTitle: "Moon",
+      targetTitle: "Gravity",
+    });
+    const rejection = expect(pending).rejects.toMatchObject({
+      code: "wikipedia_validation_failed",
+      status: 502,
+    });
+    await vi.advanceTimersByTimeAsync(11);
+
+    expect(signal?.aborted).toBe(true);
+    await rejection;
+  });
+
+  it("V1k rejects oversized Wikipedia responses before parsing their body", async () => {
+    const response = new Response(JSON.stringify({ query: { pages: {} } }), {
+      headers: { "Content-Length": "101", "Content-Type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json");
+    const validator = createWikipediaChallengeValidator({
+      fetchImpl: vi.fn(async () => response),
+      maxResponseBytes: 100,
+    });
+
+    await expect(validator.validateChallengeArticles({
+      startTitle: "Moon",
+      targetTitle: "Gravity",
+    })).rejects.toMatchObject({ code: "wikipedia_validation_failed", status: 502 });
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  it("V1l rejects oversized rendered HTML before Worker DOM parsing", async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.searchParams.get("action") === "parse") {
+        return Response.json({
+          parse: {
+            pageid: 1,
+            title: "Moon",
+            revid: 10,
+            text: `<p>${"x".repeat(101)}<a href="/wiki/Gravity">Gravity</a></p>`,
+          },
+        });
+      }
+      return url.searchParams.get("titles") === "Moon"
+        ? queryResponse({ pageid: 1, ns: 0, title: "Moon" })
+        : queryResponse({ pageid: 2, ns: 0, title: "Gravity" });
+    });
+    const validator = createWikipediaChallengeValidator({
+      fetchImpl,
+      maxArticleHtmlBytes: 100,
+    });
+
+    await expect(validator.validateChallengeArticles({
+      startTitle: "Moon",
+      targetTitle: "Gravity",
+    })).rejects.toMatchObject({ code: "wikipedia_validation_failed", status: 502 });
+  });
+
+  it("V1m converts malformed JSON and network failures to typed boundary errors without logging exception text", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const malformed = createWikipediaChallengeValidator({
       fetchImpl: vi.fn(async () =>
-        new Response("not-json", {
+        new Response("BODYLEAK", {
           headers: { "Content-Type": "application/json" },
         }),
       ),
     });
     const network = createWikipediaChallengeValidator({
       fetchImpl: vi.fn(async () => {
-        throw new Error("network unavailable");
+        throw new Error("NETWORK_SECRET");
       }),
     });
 
@@ -240,6 +375,12 @@ describe("Wikipedia challenge validator", () => {
       network.validateChallengeArticles({ startTitle: "Moon", targetTitle: "Gravity" }),
     ).rejects.toMatchObject({ code: "wikipedia_validation_failed", status: 502 });
     expect(errorSpy).toHaveBeenCalled();
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(
+      "BODYLEAK",
+    );
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(
+      "NETWORK_SECRET",
+    );
   });
 });
 
@@ -253,6 +394,20 @@ function queryResponse(page: Record<string, unknown>): Response {
   });
 }
 
-function parseLinksResponse(parse: Record<string, unknown>): Response {
-  return Response.json({ parse });
+function parseArticleResponse(parse: Record<string, unknown>): Response {
+  const links = Array.isArray(parse.links) ? parse.links : [];
+  const text = links.map((value) => {
+    const link = value as Record<string, unknown>;
+    const title = String(link.title ?? link["*"] ?? "");
+    const encodedTitle = title
+      .split("/")
+      .map((segment) => encodeURIComponent(segment.replaceAll(" ", "_")))
+      .join("/");
+    const missingClass = Object.prototype.hasOwnProperty.call(link, "exists")
+      ? ""
+      : ' class="new"';
+    return `<a${missingClass} href="/wiki/${encodedTitle}">${title}</a>`;
+  }).join(" ");
+  const { links: _links, ...rest } = parse;
+  return Response.json({ parse: { ...rest, revid: 10, text } });
 }

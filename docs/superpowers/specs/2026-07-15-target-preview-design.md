@@ -12,9 +12,10 @@ target without exposing the target's full article or changing ranked gameplay.
 
 - The pre-start Play view shows a read-only `Target preview` for the selected
   challenge.
-- The preview contains the canonical target title, one representative image
-  when Wikipedia provides one, the first meaningful lead paragraph, and
-  Wikipedia revision/license attribution.
+- The preview contains the canonical target title, the first meaningful lead
+  paragraph, and Wikipedia revision/license attribution.
+- Preview media is intentionally omitted because Wikimedia files can carry
+  licenses and attribution requirements that differ from the article text.
 - Internal article links are removed from the preview. The preview is context,
   not a second navigation surface.
 - Loading and unavailable states preserve the challenge route and Start action.
@@ -29,7 +30,7 @@ target without exposing the target's full article or changing ranked gameplay.
 
 The existing sanitized Wikipedia gateway fetches the selected target only while
 the controller is idle. A small pure preview extractor parses sanitized HTML and
-returns only a lead paragraph and representative image markup. The App owns an
+returns only a lead paragraph. The App owns an
 abortable, generation-keyed preview request so stale target responses cannot
 overwrite a newer selection.
 
@@ -44,12 +45,13 @@ gateway cache and timing lifecycle isolated.
   Start Challenge.
 - Page-ID mismatches are rejected when the challenge stores a canonical target
   page ID.
-- Preview extraction falls back to text-only when no usable image exists.
+- Preview extraction never copies embedded media without file-specific
+  attribution metadata.
 
 ## Verification
 
-- Unit tests cover representative image/lead extraction, link removal, and
-  empty-content fallback.
+- Unit tests cover lead extraction, link/media removal, and empty-content
+  fallback.
 - App tests cover target-keyed loading, stale response rejection, non-blocking
   failure, disappearance during play, and completed-run reset on selection.
 - Browser QA covers desktop and 390px pre-start layouts plus start transition.

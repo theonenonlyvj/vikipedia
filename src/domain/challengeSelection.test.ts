@@ -1,0 +1,63 @@
+import { describe, expect, it } from "vitest";
+import type { Challenge } from "./types";
+import { selectDefaultChallenge } from "./challengeSelection";
+
+const challenges = [
+  challenge("challenge-0001"),
+  challenge("challenge-0002"),
+  challenge("challenge-0003", { origin: "daily", dailyDate: "2026-07-15" }),
+];
+
+describe("default challenge selection", () => {
+  it("prioritizes a resumable active run over a direct URL and today's daily", () => {
+    expect(selectDefaultChallenge(challenges, {
+      activeChallengeId: "challenge-0002",
+      requestedChallengeId: "challenge-0001",
+      todayUtc: "2026-07-15",
+    })?.id).toBe("challenge-0002");
+  });
+
+  it("prioritizes a valid direct URL over today's daily", () => {
+    expect(selectDefaultChallenge(challenges, {
+      requestedChallengeId: "challenge-0002",
+      todayUtc: "2026-07-15",
+    })?.id).toBe("challenge-0002");
+  });
+
+  it("selects today's daily when there is no active run or valid direct URL", () => {
+    expect(selectDefaultChallenge(challenges, {
+      requestedChallengeId: "challenge-missing",
+      todayUtc: "2026-07-15",
+    })?.id).toBe("challenge-0003");
+  });
+
+  it("falls back to the first active challenge", () => {
+    expect(selectDefaultChallenge(challenges, {
+      todayUtc: "2026-07-16",
+    })?.id).toBe("challenge-0001");
+  });
+
+  it("never selects inactive challenges", () => {
+    const rows = [challenge("challenge-0001", { isActive: false }), challenge("challenge-0002")];
+    expect(selectDefaultChallenge(rows, {
+      activeChallengeId: "challenge-0001",
+      requestedChallengeId: "challenge-0001",
+      todayUtc: "2026-07-15",
+    })?.id).toBe("challenge-0002");
+  });
+});
+
+function challenge(id: string, overrides: Partial<Challenge> = {}): Challenge {
+  return {
+    id,
+    label: `Challenge #${Number(id.slice(-4))}`,
+    mode: "daily",
+    start: { title: `${id} start` },
+    target: { title: `${id} target` },
+    ruleset: "ranked_classic",
+    source: "curated",
+    origin: "manual",
+    isActive: true,
+    ...overrides,
+  };
+}

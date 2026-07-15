@@ -1,265 +1,210 @@
 # VWiki Race Cloudflare Deployment Handoff
 
-Date: 2026-07-14
+Date: 2026-07-15
 
-## Current State
+Status: release procedures and production inventory for the current hardening
+release. Verify the live commit and deployment state before any future rollout;
+this file is not an incident log.
 
-- GitHub repo: `https://github.com/theonenonlyvj/vwiki-race.git`
-- Production branch: `main`
-- Current implementation: VGames identity + D1 tracking is in `main`
+## Production Inventory
+
+- GitHub: `https://github.com/theonenonlyvj/vwiki-race`
 - Cloudflare Pages project: `vwikirace`
-- Production URL: `https://vwikirace.pages.dev`
-- Identity: VGames identity worker
-- Run data store: Cloudflare D1 database `vwiki-race`
-- VGames realtime rooms: not needed for VWiki Race v0
+- Public Pages URL: `https://vwikirace.pages.dev`
+- Canonical API Worker name: `vwikirace-api`
+- D1 database: `vwiki-race`
+- D1 binding: `VWIKI_RACE_DB`
+- D1 database id: `bbd89b81-078a-47e0-9db4-5d170a3f78b4`
+- Identity origin: `https://viota-worker.theonenonlyvj.workers.dev`
 
-The current v0 is designed to be tracked from game 0. VGames owns account
-identity, including ghost guests and secured unique names. VWiki Race owns
-challenges, runs, clicks, completions, paths, and per-challenge leaderboards.
-Guest play must be claimable later into a secured VGames name without losing
-stats.
+VGames owns identity, unique names, ghost accounts, login, and account merges.
+VWiki Race owns challenges, creator attribution, runs, accepted click events,
+paths, account stats, and challenge leaderboards. Realtime rooms are not used.
 
-## Superseding Note
+## Architecture
 
-The earlier standalone Supabase launch path is superseded. Supabase code,
-migration files, and the VWiki Race-local `players` namespace have been removed
-from the current implementation. Do not recreate them for v0.
+1. Cloudflare Pages serves the static Vite build from `dist`.
+2. The canonical `vwikirace-api` Worker owns authorization, validation, rate
+   limits, run protocol, daily scheduling, and all D1 access.
+3. Retained `functions/api/*` Pages Functions are bounded compatibility proxies
+   for old `/api/*` clients. They do not bind D1 or duplicate game logic.
+4. VGames issues and introspects account tokens. VWiki Race stores canonical
+   VGames account IDs and aliases, never a separate player namespace.
+5. The API Worker runs `7 * * * *` in UTC. Only a claimed D1 daily-job lease may
+   contact Wikipedia; accepted days make no Wikipedia request.
 
-## Verified Before Handoff
+## Data And Game Guarantees
 
-These commands passed locally on 2026-07-14:
+- Every run is stored server-side from its accepted start.
+- Protocol 2 accepts only canonical transitions from the server-accepted current
+  page and completes only through the accepted target click.
+- Leaderboards sort by active decision time, then clicks, then accepted
+  completion time.
+- Guest stats remain attached to the VGames ghost and survive a later claim or
+  canonical account merge.
+- Challenge creation accepts a Wikipedia title or English article URL, then
+  validates canonical page IDs and a playable start before insertion.
+- The pre-start target preview uses sanitized Wikipedia content, contains no
+  playable article links, aborts stale selections, and never blocks Start when
+  Wikipedia is unavailable.
+- Manual and daily creation use one transactional global number sequence. Dates
+  never determine numbers: an existing Challenge #15 makes the next accepted
+  challenge #16.
+- Daily generation uses two separate MediaWiki random requests and one start
+  render per pair, at most three pairs/nine Wikipedia calls, with five-second
+  request and 25-second phase limits.
 
-```bash
-npm test
-npm run build
-```
+## Required Configuration
 
-Last known results:
-
-- `npm test`: 16 test files passed, 59 tests passed
-- `npm run build`: TypeScript and Vite production build passed
-- viota targeted worker test: `pnpm exec vitest run test/accounts.test.ts
-  --reporter=verbose` passed outside the sandbox
-
-## Deployment Architecture
-
-- Static app: Vite/React build output in `dist`
-- Canonical API layer: Cloudflare Worker in `src/server/worker.ts`
-- Compatibility API layer: bounded Pages proxies in `functions/api/*`
-- Identity: VGames worker at `https://viota-worker.theonenonlyvj.workers.dev`
-- VWiki Race data: Cloudflare D1 tables keyed by VGames `account_id`
-- Realtime rooms: not applicable
-
-Do not duplicate VGames accounts with a standalone VWiki Race player identity.
-
-## Step 1: VGames Identity Fit
-
-Implemented locally:
-
-1. Guest play calls VGames `/auth/quick`.
-2. New VGames ghost accounts are created with `game: 'vwiki-race'`.
-3. Securing a display name claims the current ghost through VGames
-   `/auth/set-credentials`.
-4. Existing users can use VGames `/auth/login`.
-5. VWiki Race run rows store VGames `account_id`, not a local `players.id`.
-6. Leaderboards display the secured VGames unique name/handle when available.
-7. Guest stats remain claimable when the guest later secures or logs into an
-   account.
-
-VGames-side change in `/Users/vijayram/Cursor/viota`: `vwiki-race` was added to
-the allowed `origin_game` values and covered by
-`packages/worker/test/accounts.test.ts`. That change is pushed to viota `main`
-as `899520f` and deployed to the viota worker as version
-`ba23146a-71c1-4ffe-814a-429cdff4cb08`.
-
-## Step 2: Create D1
-
-Use one D1 database for VWiki Race-owned data.
-
-Recommended database name:
+Canonical Worker variables:
 
 ```txt
-vwiki-race
+VGAMES_URL=https://viota-worker.theonenonlyvj.workers.dev
+ALLOWED_ORIGINS=https://vwikirace.pages.dev
 ```
 
-Required canonical Worker binding name:
+Canonical Worker bindings:
 
 ```txt
-VWIKI_RACE_DB
+VWIKI_RACE_DB -> D1 database vwiki-race
+CLICK_RATE_LIMITER -> configured rate-limit namespace
+ACCOUNT_READ_RATE_LIMITER -> configured rate-limit namespace
 ```
 
-Migration file:
+Pages production environment:
 
 ```txt
-d1/migrations/0001_vwiki_race_tracking.sql
+VITE_VWIKI_RACE_API_URL=https://<canonical-worker-origin>
+VWIKI_RACE_API_URL=https://<canonical-worker-origin>
 ```
 
-Created database id:
+The frontend production build rejects a missing, noncanonical, or non-HTTPS API
+origin. Loopback HTTP is allowed only for local development.
+
+Pages build settings:
 
 ```txt
-bbd89b81-078a-47e0-9db4-5d170a3f78b4
-```
-
-Dashboard path: Workers & Pages -> D1 SQL Database -> Create database, then
-apply the SQL migration. CLI equivalent if wrangler is available:
-
-```bash
-wrangler d1 create vwiki-race
-wrangler d1 migrations apply vwiki-race --remote --migrations-dir d1/migrations
-```
-
-## Step 3: Cloudflare Pages Project
-
-The `vwikirace` Pages project has been created. If rebuilding manually:
-
-1. Open Cloudflare dashboard.
-2. Go to Workers & Pages.
-3. Select Create application.
-4. Select Pages.
-5. Select Import from an existing Git repository.
-6. Connect GitHub if prompted.
-7. Choose repo: `theonenonlyvj/vwiki-race`.
-
-Use these build settings:
-
-```txt
-Project name: vwikirace
 Production branch: main
-Framework preset: React / Vite, or None if entering manually
 Root directory: /
 Build command: npm run build
 Build output directory: dist
 Functions directory: functions
 ```
 
-The repo root is already the VWiki Race app, so do not set a nested root
-directory.
+## Migrations
 
-## Step 4: Add Cloudflare Environment Values
-
-Set the VGames identity origin and D1 binding on the canonical API Worker:
+Apply all files in order:
 
 ```txt
-VGAMES_URL = https://viota-worker.theonenonlyvj.workers.dev
+d1/migrations/0001_vwiki_race_tracking.sql
+d1/migrations/0002_challenge_creators.sql
+d1/migrations/0003_hardening_protocol.sql
+d1/migrations/0004_daily_challenges.sql
 ```
 
-Bind the D1 database to that Worker:
+`0003` has already been applied and must remain unchanged. `0004` adds challenge
+provenance, the shared number sequence, daily jobs, and daily-date uniqueness.
+Apply migrations before deploying Worker code that references their tables or
+columns.
 
-```txt
-Binding name: VWIKI_RACE_DB
-Database: vwiki-race
-```
-
-Set both frontend and retained Pages compatibility routing to the same
-canonical Worker origin:
-
-```txt
-VITE_VWIKI_RACE_API_URL = https://<vwiki-race-api-worker>
-VWIKI_RACE_API_URL = https://<vwiki-race-api-worker>
-```
-
-Do not bind D1 or `VGAMES_URL` to the Pages Functions. Retained `/api/*`
-Functions enforce the 16 KiB request limit and proxy to the Worker so stale
-clients cannot bypass canonical authorization, quotas, rate limits, or path
-disclosure policy.
-
-## Step 5: Deploy
-
-Trigger the production deploy from Cloudflare Pages. Cloudflare should:
-
-1. Install npm dependencies.
-2. Run `npm run build`.
-3. Upload `dist`.
-4. Attach Pages Functions from `functions/api/*`.
-
-The first live URL should be similar to:
-
-```txt
-https://vwikirace.pages.dev
-```
-
-## Step 6: Smoke Test Production
-
-After deploy completes, test:
-
-```txt
-https://vwikirace.pages.dev/api/challenges
-```
-
-Expected result: JSON with at least `challenge-0001`.
-
-Then test the app flow:
-
-1. Open `https://vwikirace.pages.dev`.
-2. Enter a display name.
-3. Confirm `Challenge #1` shows `Moon -> Gravity`.
-4. Start the challenge.
-5. Click one Wikipedia link.
-6. Check that the click path updates.
-7. Open the Leaderboard tab.
-8. Confirm the leaderboard row is associated with the VGames identity.
-
-If API requests fail, check Worker and Pages deployment logs first, then verify
-that `VGAMES_URL` and `VWIKI_RACE_DB` exist on the Worker and
-`VWIKI_RACE_API_URL` exists on Pages.
-
-## Useful Routes
-
-- `GET /api/challenges`
-- `POST /api/challenges`
-- `GET /api/challenges/:challengeId/leaderboard`
-- `POST /api/identity/guest`
-- `POST /api/identity/secure`
-- `POST /api/identity/login`
-- `POST /api/runs/start`
-- `POST /api/runs/:runId/click`
-- `GET /api/runs/:runId/path`
-- `POST /api/runs/:runId/complete`
-- `POST /api/runs/:runId/abandon`
-
-## Common Failure Modes
-
-- Build fails: confirm Cloudflare is running from repo root and using
-  `npm run build` with output directory `dist`.
-- Guest auth fails: confirm `VGAMES_URL` points at the viota worker and that the
-  viota worker deployment includes `game: 'vwiki-race'`.
-- D1 errors: confirm the canonical Worker binding is exactly `VWIKI_RACE_DB`
-  and the migration has been applied; Pages must not have direct D1 access.
-- Leaderboard identity is wrong: confirm runs are keyed by VGames `account_id`
-  and display uses the canonical secured VGames name/handle when present.
-- The frontend loads but cannot play: inspect browser network requests to
-  `/api/*` and Cloudflare Pages Function logs.
-- Leaderboard is empty: complete at least one run; localStorage alone does not
-  create leaderboard rows in v0.
-
-## Handoff Notes For The Next Agent
-
-Start with:
+Remote command:
 
 ```bash
-cd /Users/vijayram/Cursor/vwiki-race
-git status --short --branch
-npm test
-npm run build
+npx wrangler d1 migrations apply vwiki-race --remote --config wrangler.api.toml
 ```
 
-Before changing deployment code, read:
+## Fixed Rollout Order
 
-- `README.md`
-- `AGENTS.md`
-- `docs/game-principles-and-rules.md`
-- `docs/superpowers/specs/2026-07-14-vgames-identity-v0-design.md`
-- `docs/superpowers/specs/2026-07-14-server-tracked-v0-design.md`
-- `docs/superpowers/plans/2026-07-14-server-tracked-v0.md`
+Do not reverse these steps.
 
-Do not commit Cloudflare tokens or VGames secrets.
+1. Confirm the VGames identity Worker is healthy.
+2. Run all local release gates listed below.
+3. Apply D1 migrations remotely and inspect the migration result.
+4. Deploy the canonical API Worker from `wrangler.api.toml`.
+5. Smoke-test the canonical Worker directly, including the v2 challenge catalog.
+6. Set both Pages API-origin environment values to that Worker origin.
+7. Deploy the Pages project from the reviewed commit.
+8. Smoke-test a guest/claimed start, one click, completion, path disclosure,
+   stats, direct challenge link, and challenge creation.
+9. Confirm the cron trigger is present. Do not manually fan out scheduled
+   invocations; one normal invocation is enough for a smoke test.
 
-## Recommended Next Work
+This ordering prevents a new Worker from querying columns that are not yet in
+D1 and prevents Pages from pointing at an unverified API deployment.
 
-1. Inspect the latest Cloudflare Pages deployment and logs if production
-   behavior differs from local.
-2. Verify guest play, `/api/challenges`, and a full run in
-   production.
-3. Implement challenge deep links and Wikipedia node validation from
-   `docs/backlog.md`.
-4. Add a custom domain if Vijay wants one.
+## Release Gates
+
+From `/Users/vijayram/Cursor/vwiki-race`:
+
+```bash
+npm test
+npm run test:worker
+VITE_VWIKI_RACE_API_URL=https://vwikirace-api.example.workers.dev npm run build
+npm run verify:bundle
+npm audit --omit=dev
+git diff --check
+npx wrangler deploy --config wrangler.api.toml --dry-run
+```
+
+The placeholder HTTPS origin is for build validation only. A real deploy must
+use the actual canonical Worker URL.
+
+## V2 Routes
+
+- `GET /api/v2/challenges`
+- `POST /api/v2/challenges`
+- `POST /api/v2/runs/start`
+- `GET /api/v2/runs/active`
+- `POST /api/v2/runs/:runId/click`
+- `POST /api/v2/runs/:runId/abandon`
+- `GET /api/v2/runs/:runId/recovery-path` (authenticated active-run recovery)
+- `GET /api/v2/runs/:runId/path`
+- `GET /api/v2/challenges/:challengeId/leaderboard`
+- `GET /api/v2/accounts/me/stats`
+
+Identity compatibility routes remain under `/api/identity/*`. Old run and
+challenge routes remain bounded compatibility surfaces, but new clients should
+use v2.
+
+## Production Smoke Test
+
+1. Open `https://vwikirace.pages.dev/?challenge=challenge-0002` and confirm the
+   header and selected row stay on Challenge #2. Confirm its target preview has
+   a short lead and source attribution without playable links.
+2. Start as an existing claimed account; it should not show the identity dialog.
+3. Start as a returning ghost; Claim should be primary and Continue as Guest
+   should preserve that ghost.
+4. Confirm the start article appears only after the run is accepted and the
+   timer begins at zero.
+5. Click a table/prose/infobox game link. Syncing feedback should appear
+   immediately, and the old article must remain until server acceptance.
+6. Complete a run. Confirm speed, click count, personal-best context, and lazy
+   winning-path disclosure on that challenge's leaderboard.
+7. Open Stats and confirm server totals plus top starts, targets, and visited
+   pages.
+8. Create a challenge from two valid Wikipedia URLs. Confirm its canonical
+   titles, creator, next global number, direct URL, and separate leaderboard.
+9. Confirm the catalog accepts both manual and daily provenance rows.
+
+## Failure Triage
+
+- `no such table/column`: migration was skipped or Worker deployed too early.
+- catalog rejected after daily creation: verify Pages is on the client build
+  that accepts coherent `wikipedia_random` provenance.
+- guest/login failures: verify `VGAMES_URL` and VGames health; do not create a
+  local identity fallback.
+- CORS failures: add the exact Pages origin to `ALLOWED_ORIGINS`.
+- empty leaderboard: confirm the run reached an accepted protocol-2 target click
+  and is `ranked_eligible`.
+- daily job retries: inspect structured `daily_challenge_job` and
+  `daily_challenge_candidate` logs plus D1 job status. Candidate diagnostics are
+  bounded to boundary/status/error metadata. Do not loop cron calls or manually
+  spray Wikipedia requests.
+- unexpectedly high request count: disable the cron trigger in a reviewed Worker
+  deploy and inspect lease/job state before testing again.
+
+## Safety
+
+Do not commit Cloudflare credentials, VGames secrets, session tokens, or D1
+exports. Do not bind D1 to Pages Functions. Do not deploy, push, or mutate remote
+data from an unreviewed dirty worktree.

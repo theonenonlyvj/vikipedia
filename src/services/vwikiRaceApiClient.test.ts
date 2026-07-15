@@ -211,6 +211,50 @@ describe("VWiki Race API client", () => {
     });
   });
 
+  it("accepts coherent manual, daily, and legacy curated challenge provenance", async () => {
+    const challenges = [
+      validChallenge(),
+      { ...validChallenge(), id: "challenge-manual", origin: "manual", dailyDate: null },
+      {
+        ...validChallenge(),
+        id: "challenge-daily",
+        origin: "daily",
+        source: "wikipedia_random",
+        dailyDate: "2026-07-15",
+      },
+    ];
+    const client = createVWikiRaceApiClient(
+      vi.fn(async () => Response.json({ challenges })),
+      { apiOrigin },
+    );
+
+    await expect(client.listChallenges()).resolves.toEqual(challenges);
+  });
+
+  it.each([
+    ["daily source", { origin: "daily", source: "curated", dailyDate: "2026-07-15" }],
+    ["daily date omission", { origin: "daily", source: "wikipedia_random" }],
+    ["daily date format", { origin: "daily", source: "wikipedia_random", dailyDate: "2026-7-15" }],
+    ["daily calendar date", { origin: "daily", source: "wikipedia_random", dailyDate: "2026-02-30" }],
+    ["manual source", { origin: "manual", source: "wikipedia_random" }],
+    ["manual daily date", { origin: "manual", source: "curated", dailyDate: "2026-07-15" }],
+    ["legacy source", { source: "wikipedia_random" }],
+    ["legacy daily date", { source: "curated", dailyDate: "2026-07-15" }],
+    ["unknown origin", { origin: "scheduled", source: "wikipedia_random", dailyDate: "2026-07-15" }],
+  ])("rejects incoherent %s provenance", async (_case, override) => {
+    const client = createVWikiRaceApiClient(
+      vi.fn(async () => Response.json({
+        challenges: [{ ...validChallenge(), ...override }],
+      })),
+      { apiOrigin },
+    );
+
+    await expect(client.listChallenges()).rejects.toMatchObject({
+      code: "invalid_response",
+      status: 502,
+    });
+  });
+
   it.each([
     ["mode", { mode: "tournament" }],
     ["ruleset", { ruleset: "casual" }],
@@ -270,6 +314,43 @@ describe("VWiki Race API client", () => {
           "Idempotency-Key": expect.any(String),
         }),
       }),
+    );
+  });
+
+  it("reuses one deterministic idempotency key across separate abandon calls", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
+      runId: "globally-unique-run-1",
+      runStatus: "abandoned",
+    }));
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await client.abandonRun("globally-unique-run-1", "jwt-claimed");
+    await client.abandonRun("globally-unique-run-1", "jwt-claimed");
+
+    const keys = fetchImpl.mock.calls.map(([, init]) =>
+      (init?.headers as Record<string, string> | undefined)?.["Idempotency-Key"]);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[0]).toContain("globally-unique-run-1");
+    expect(fetchImpl.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({}));
+  });
+
+  it("authenticates active-run paths while keeping completed disclosure public", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ path: [] }));
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await expect(client.getActiveRunPath("run-active", "jwt-owner")).resolves.toEqual([]);
+    await expect(client.getRunPath("run-completed")).resolves.toEqual([]);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `${apiOrigin}/api/v2/runs/run-active/recovery-path`,
+      expect.objectContaining({
+        headers: { Authorization: "Bearer jwt-owner" },
+      }),
+    );
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `${apiOrigin}/api/v2/runs/run-completed/path`,
+      expect.objectContaining({ headers: undefined }),
     );
   });
 

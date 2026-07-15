@@ -24,6 +24,6 @@ describe("path strip compression", () => {
         ["Moon", "Astronomy", "Orbit", "Mass", "Gravity"],
         "Gravity",
       ),
-    ).toEqual(["...", "Orbit", "Mass", "Gravity"]);
+    ).toEqual(["...", "Astronomy", "Orbit", "Mass", "Gravity"]);
   });
 });

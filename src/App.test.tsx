@@ -1,7 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import type { Challenge, ServerPathStep } from "./domain/types";
+import type { VGamesIdentityRepository, VGamesIdentitySession } from "./services/vgamesIdentity";
 import { appleParseResponse, fruitParseResponse } from "./test/fixtures";
 
 const apiOrigin = "http://localhost:8787";
@@ -34,6 +36,75 @@ describe("VWiki Race app", () => {
     expect(screen.queryByText(/enter vwiki race/i)).toBeNull();
   });
 
+  it("shows a short read-only target preview before start and removes it during play", async () => {
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const preview = await screen.findByRole("region", { name: /target preview/i });
+    await within(preview).findByText(/seed-bearing structure/i);
+    expect(within(preview).getByRole("heading", { name: "Fruit" })).toBeVisible();
+    expect(within(preview).getByText(/seed-bearing structure/i)).toBeVisible();
+    expect(within(preview).queryByRole("img")).toBeNull();
+    expect(within(preview).getByRole("link", { name: /source revision/i })).toHaveAttribute(
+      "href",
+      expect.stringContaining("oldid=78910"),
+    );
+    expect(within(preview).queryByRole("link", { name: /^fruit$/i })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /start challenge #1/i }));
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: /target preview/i })).toBeNull();
+  });
+
+  it("keeps Start enabled when the target preview is unavailable", async () => {
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ targetPreviewFailure: true })}
+        storage={claimedStorage()}
+      />,
+    );
+
+    const preview = await screen.findByRole("region", { name: /target preview/i });
+    await within(preview).findByText(/preview unavailable/i);
+    expect(within(preview).getByText(/preview unavailable/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /start challenge #1/i })).toBeEnabled();
+  });
+
+  it("selects and labels today's daily challenge when no deep link is present", async () => {
+    const challenges: Challenge[] = [
+      ...twoChallenges(),
+      {
+        id: "challenge-0016",
+        label: "Challenge #16",
+        sortOrder: 16,
+        isActive: true,
+        mode: "daily",
+        start: { title: "Maraba coffee" },
+        target: { title: "Moon landing conspiracy theories" },
+        ruleset: "ranked_classic",
+        origin: "daily",
+        dailyDate: "2026-07-15",
+        source: "wikipedia_random",
+      },
+    ];
+
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ challenges })}
+        storage={memoryStorage()}
+        todayUtc={() => "2026-07-15"}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /start challenge #16/i })).toBeVisible();
+    expect(screen.getAllByText("Daily").length).toBeGreaterThan(0);
+    expect(screen.getByRole("region", { name: /target preview/i })).toBeVisible();
+    expect(window.location.search).toBe("?challenge=challenge-0016");
+  });
+
   it("does not reload the challenge catalog on every render with the default fetch", async () => {
     const fetchImpl = createFetchMock();
     vi.stubGlobal("fetch", fetchImpl);
@@ -62,11 +133,17 @@ describe("VWiki Race app", () => {
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
 
-    expect(await screen.findByRole("dialog", { name: /save your stats/i })).toBeVisible();
+    const identityDialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    expect(identityDialog).toBeVisible();
+    expect(within(identityDialog).getByRole("group", { name: /identity options/i })).toBeVisible();
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
     await user.click(screen.getByRole("button", { name: /continue as guest/i }));
 
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(screen.getByRole("region", { name: /wikipedia article/i })).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
     expect(JSON.parse(storage.getItem("vwiki-race:vgames-session") ?? "{}")).toEqual({
       accountId: "acc-guest",
       displayName: "Vijay",
@@ -119,6 +196,39 @@ describe("VWiki Race app", () => {
     expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent(
       "Vijay",
     );
+    expect(screen.getByRole("link", { name: /source revision/i })).toHaveAttribute(
+      "href",
+      expect.stringContaining("oldid="),
+    );
+    expect(screen.getByRole("link", { name: /cc by-sa 4\.0/i })).toHaveAttribute(
+      "href",
+      "https://creativecommons.org/licenses/by-sa/4.0/",
+    );
+  });
+
+  it("clears the article cache between completed runs", async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({
+        accountId: "acc-1",
+        displayName: "Vijay",
+        token: "jwt-claimed",
+        status: "claimed",
+      }),
+    );
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+    expect(await screen.findByText(/target reached/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /play again/i }));
+
+    await waitFor(() => {
+      expect(wikipediaArticleCalls(fetchImpl, "Apple")).toBe(2);
+    });
   });
 
   it("prompts ghost sessions to claim or continue before each challenge start", async () => {
@@ -224,9 +334,642 @@ describe("VWiki Race app", () => {
 
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
-    expect(await screen.findByText(/opening fruit/i)).toBeVisible();
+    expect(
+      within(screen.getByRole("banner")).getByText(/opening fruit/i),
+    ).toBeVisible();
     fruitArticle.resolve();
+    expect(await screen.findByRole("heading", { name: "Fruit" })).toHaveFocus();
+  });
+
+  it("keeps End Run visible but disabled while a click mutation is unresolved", async () => {
+    const clickResponse = createDeferredResponse(completedClickResponse());
+    const fetchImpl = createFetchMock({ delayedClickResponse: clickResponse.promise });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+    await waitFor(() => expect(clickRequestBodies(fetchImpl)).toHaveLength(1));
+
+    expect(screen.getByRole("button", { name: /^end run$/i })).toBeDisabled();
+    clickResponse.resolve();
+    expect(await screen.findByText(/target reached/i)).toBeVisible();
+  });
+
+  it("keeps End Run disabled while an exact click retry remains pending", async () => {
+    const fetchImpl = createFetchMock({ clickSyncFailureOnce: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+
+    expect(await screen.findByRole("button", { name: /retry click/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^end run$/i })).toBeDisabled();
+  });
+
+  it("shows Timer in active run metrics and freezes it throughout syncing and completion", async () => {
+    let now = 1_000;
+    const fruitArticle = createDeferredResponse(fruitParseResponse);
+    const fetchImpl = createFetchMock({ delayedFruitArticle: fruitArticle.promise });
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        now={() => now}
+        storage={claimedStorage()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    const metrics = screen.getByLabelText(/current run/i);
+    const timer = within(metrics).getByText("Timer").nextElementSibling;
+    expect(timer).toHaveTextContent("0.0s");
+
+    now = 2_500;
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+    expect(await screen.findByText(/opening fruit/i)).toBeVisible();
+    await waitFor(() => expect(timer).toHaveTextContent("1.5s"));
+    now = 9_000;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(timer).toHaveTextContent("1.5s");
+
+    fruitArticle.resolve();
+    expect(await screen.findByText(/target reached/i)).toBeVisible();
+    expect(timer).toHaveTextContent("1.5s");
+  });
+
+  it("keeps playable article nodes connected while the timer updates", async () => {
+    let now = 1_000;
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock()}
+        now={() => now}
+        storage={claimedStorage()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    const link = await screen.findByRole("link", { name: /fruit/i });
+    now = 2_000;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+
+    expect(link.isConnected).toBe(true);
+    expect(screen.getByRole("link", { name: /fruit/i })).toBe(link);
+  });
+
+  it("refreshes the completed challenge leaderboard exactly once after acceptance", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+    expect(await screen.findByText(/target reached/i)).toBeVisible();
+    expect(screen.getByText(/personal best/i)).toBeVisible();
+    expect(screen.getByText(/rank #1/i)).toBeVisible();
+    const result = screen.getByText(/target reached/i).closest("aside");
+    const article = screen.getByRole("article");
+    expect(result?.compareDocumentPosition(article)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.getByRole("button", { name: /play again/i })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /view leaderboard/i }));
+    expect(screen.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^play$/i }));
+    await user.click(screen.getByRole("button", { name: /choose another challenge/i }));
+    expect(screen.getByRole("heading", { name: "Challenges" })).toBeVisible();
+    await waitFor(() => expect(leaderboardCalls(fetchImpl, "challenge-0001")).toBe(2));
+    expect(completeRunCalls(fetchImpl)).toBe(0);
+  });
+
+  it("locks solution-bearing views throughout an active run", async () => {
+    const fetchImpl = createFetchMock({ leaderboardRows: [leaderboardRow()] });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /leaderboard/i }));
+    expect(await screen.findByText(/view winning path/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /start challenge #1/i }));
+
+    expect(screen.getByRole("button", { name: /^play$/i })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /leaderboard/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /challenges/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /stats/i })).toBeDisabled();
+    expect(screen.queryByText(/view winning path/i)).toBeNull();
+  });
+
+  it("does not present a prior personal-best rank as the current run's rank", async () => {
+    const fetchImpl = createFetchMock({
+      leaderboardContext: { isPersonalBest: false, rank: 4 },
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+
+    expect(await screen.findByText(/not a personal best/i)).toBeVisible();
+    expect(screen.queryByText(/rank #4/i)).toBeNull();
+  });
+
+  it("unlocks challenge selection after a completed run", async () => {
+    const fetchImpl = createFetchMock({ challenges: twoChallenges() });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+    expect(await screen.findByText(/target reached/i)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /challenges/i }));
+    const challengeTwo = screen.getByRole("button", { name: /challenge #2/i });
+    expect(challengeTwo).toBeEnabled();
+    await user.click(challengeTwo);
+
+    await waitFor(() => {
+      expect(window.location.search).toBe("?challenge=challenge-0002");
+    });
+    expect(screen.getByRole("button", { name: /start challenge #2/i })).toBeEnabled();
+  });
+
+  it("clears the completed result and path when another challenge is selected", async () => {
+    const fetchImpl = createFetchMock({ challenges: twoChallenges() });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+    expect(await screen.findByText(/target reached/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /challenges/i }));
+    await user.click(screen.getByRole("button", { name: /challenge #2/i }));
+
+    expect(screen.queryByText(/target reached/i)).toBeNull();
+    expect(screen.queryByRole("navigation", { name: /run path/i })).toBeNull();
+    expect(screen.getByRole("heading", { name: "Water" })).toBeVisible();
+  });
+
+  it("clears a stale 401 identity, retains Start intent, and resumes after login", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ startUnauthorizedOnce: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    const startButton = await screen.findByRole("button", { name: /start challenge #1/i });
+    await user.click(startButton);
+    const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    expect(dialog).toBeVisible();
+    expect(storage.getItem("vwiki-race:vgames-session")).toBeNull();
+
+    await user.type(screen.getByLabelText(/username/i), "vijay");
+    await user.type(screen.getByLabelText(/password/i), "secret-pass");
+    const loginForm = screen.getByLabelText(/password/i).closest("form");
+    expect(loginForm).not.toBeNull();
+    await user.click(within(loginForm as HTMLFormElement).getByRole("button", { name: /^log in$/i }));
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(startRunCalls(fetchImpl)).toBe(2);
+  });
+
+  it("retains an exact pending click through 401 login and retries without refetching", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ clickUnauthorizedOnce: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    const fruitCallsBeforeClick = wikipediaArticleCalls(fetchImpl, "Fruit");
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+
+    expect(await screen.findByRole("dialog", { name: /save your stats/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /retry click/i })).toBeVisible();
+    expect(storage.getItem("vwiki-race:vgames-session")).toBeNull();
+    const firstBody = clickRequestBodies(fetchImpl)[0];
+    expect(firstBody).toMatchObject({ clientEventId: expect.any(String) });
+
+    await user.type(screen.getByLabelText(/username/i), "vijay");
+    await user.type(screen.getByLabelText(/password/i), "secret-pass");
+    const loginForm = screen.getByLabelText(/password/i).closest("form");
+    await user.click(within(loginForm as HTMLFormElement).getByRole("button", { name: /^log in$/i }));
+
+    expect(await screen.findByText(/target reached/i)).toBeVisible();
+    const bodies = clickRequestBodies(fetchImpl);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).toEqual(firstBody);
+    expect(JSON.stringify(bodies[1])).toBe(JSON.stringify(firstBody));
+    expect(wikipediaArticleCalls(fetchImpl, "Fruit")).toBe(fruitCallsBeforeClick + 1);
+  });
+
+  it("contains identity-dialog focus, closes on Escape, and restores the trigger", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+
+    const trigger = await screen.findByRole("button", { name: /start challenge #1/i });
+    await user.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    const close = screen.getByRole("button", { name: /close identity prompt/i });
+    await user.type(screen.getByLabelText(/display name/i), "Vijay");
+    const continueButton = screen.getByRole("button", { name: /continue as guest/i });
+    continueButton.focus();
+    await user.tab();
+    expect(document.activeElement).toBe(close);
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("offers End Old Run for protocol-1 recovery and sends the recovery abandon", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ activeRun: activeRunFixture({ protocolVersion: 1 }) });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    const endOldRun = await screen.findByRole("button", { name: /end old run/i });
+    await user.click(endOldRun);
+    const dialog = screen.getByRole("dialog", { name: /end this run/i });
+    expect(dialog.parentElement).toHaveClass("modal-backdrop");
+    await user.click(screen.getByRole("button", { name: /confirm end old run/i }));
+
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledWith(
+      apiUrl("/api/v2/runs/run-old/abandon"),
+      expect.objectContaining({
+        body: JSON.stringify({ recoveryProtocolVersion: 1 }),
+        method: "POST",
+      }),
+    ));
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeEnabled();
+  });
+
+  it("locks recovery challenge creation and history as well as selection", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({
+      activeRun: activeRunFixture({ protocolVersion: 1 }),
+      challenges: twoChallenges(),
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    expect(await screen.findByRole("button", { name: /end old run/i })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /challenges/i }));
+    const startInput = screen.getByLabelText(/start article/i);
+    const targetInput = screen.getByLabelText(/target article/i);
+    expect(startInput).toBeDisabled();
+    expect(targetInput).toBeDisabled();
+    expect(screen.getByRole("button", { name: /create challenge/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /challenge #2/i })).toBeDisabled();
+
+    fireEvent.submit(startInput.closest("form") as HTMLFormElement);
+    expect(createChallengeCalls(fetchImpl)).toBe(0);
+    window.history.pushState({}, "", "/?challenge=challenge-0002");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(window.location.search).toBe("?challenge=challenge-0001"));
+  });
+
+  it("keeps Start unavailable until authenticated active-run discovery settles", async () => {
+    const storage = claimedStorage();
+    const activeDiscovery = createDeferredResponse({ run: null });
+    const fetchImpl = createFetchMock({ delayedActiveRun: activeDiscovery.promise });
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    const start = await screen.findByRole("button", { name: /start challenge #1/i });
+    await waitFor(() => expect(activeRunCalls(fetchImpl)).toBe(1));
+    expect(start).toBeDisabled();
+
+    await act(async () => {
+      activeDiscovery.resolve();
+      await activeDiscovery.promise;
+    });
+    await waitFor(() => expect(start).toBeEnabled());
+  });
+
+  it("offers End Old Run when Start receives active_run_exists", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({
+      activeRun: activeRunFixture({ protocolVersion: 1 }),
+      activeRunAfterConflict: true,
+      startConflictOnce: true,
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+
+    expect(await screen.findByRole("button", { name: /end old run/i })).toBeVisible();
+    expect(screen.getByText(/end the old run/i)).toBeVisible();
+    expect(startRunCalls(fetchImpl)).toBe(1);
+  });
+
+  it("resumes a validated protocol-2 article and accepted path with its challenge URL locked", async () => {
+    const storage = claimedStorage();
+    const resumableChallenge = {
+      ...twoChallenges()[0],
+      target: { title: "Water" },
+    };
+    const acceptedPath = [{
+      stepNumber: 1,
+      sourceTitle: "Apple",
+      clickedAnchorText: "fruit",
+      destinationTitle: "Fruit",
+      destinationPageId: 10843,
+      elapsedSinceStartMs: 500,
+      createdAt: "2026-07-14T01:00:00.500Z",
+    }];
+    const fetchImpl = createFetchMock({
+      activeRun: activeRunFixture({
+        clickCount: 1,
+        lastPageId: 10843,
+        lastTitle: "Fruit",
+        targetTitle: "Water",
+      }),
+      challenges: [resumableChallenge],
+      runOldPath: acceptedPath,
+    });
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
     expect(await screen.findByRole("heading", { name: "Fruit" })).toBeVisible();
+    const path = screen.getByRole("navigation", { name: /run path/i });
+    expect(within(path).getByText("Apple")).toBeVisible();
+    expect(within(path).getByText("Fruit")).toBeVisible();
+    expect(window.location.search).toBe("?challenge=challenge-0001");
+    expect(screen.getByRole("button", { name: /start challenge #1/i })).toBeDisabled();
+    expect(fetchImpl).toHaveBeenCalledWith(
+      apiUrl("/api/v2/runs/run-old/recovery-path"),
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer jwt-claimed" }),
+      }),
+    );
+  });
+
+  it("locks challenge history to the active run and honors popstate while idle", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ challenges: twoChallenges() });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    window.history.pushState({}, "", "/?challenge=challenge-0002");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await waitFor(() => expect(window.location.search).toBe("?challenge=challenge-0001"));
+
+    await user.click(screen.getByRole("button", { name: /end run/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+    window.history.pushState({}, "", "/?challenge=challenge-0002");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect((await screen.findAllByText(/mars -> water/i)).length).toBeGreaterThan(0);
+    await waitFor(() => expect(leaderboardCalls(fetchImpl, "challenge-0002")).toBeGreaterThan(0));
+  });
+
+  it("loads a winning path only when disclosed and memoizes repeat disclosure", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ leaderboardRows: [leaderboardRow()] });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /leaderboard/i }));
+    expect(runPathCalls(fetchImpl, "run-ranked")).toBe(0);
+    const disclosure = await screen.findByText(/view winning path/i);
+    await user.click(disclosure);
+    expect((await screen.findAllByText(/apple -> fruit/i)).length).toBeGreaterThan(1);
+    await user.click(disclosure);
+    await user.click(disclosure);
+    expect(runPathCalls(fetchImpl, "run-ranked")).toBe(1);
+  });
+
+  it("loads account stats only from the authenticated account-stats projection", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ accountAttempts: 7 });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /^stats$/i }));
+
+    expect(await screen.findByText("7")).toBeVisible();
+    expect(accountStatsCalls(fetchImpl)).toBe(1);
+  });
+
+  it("keeps Stats unavailable while a timed run is active", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+
+    expect(screen.getByRole("button", { name: /^stats$/i })).toBeDisabled();
+  });
+
+  it("keys account stats by identity and ignores an older token response", async () => {
+    const friendBStats = deferredValue<Response>();
+    const baseFetch = createFetchMock();
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl("/api/v2/accounts/me/stats")) {
+        const token = (init?.headers as Record<string, string> | undefined)?.Authorization;
+        if (token === "Bearer token-a") return Promise.resolve(jsonResponse({ stats: accountStatsFixture(7) }));
+        if (token === "Bearer token-b") return friendBStats.promise;
+        if (token === "Bearer token-c") return Promise.resolve(jsonResponse({ stats: accountStatsFixture(2) }));
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const repositoryA = identityRepository(identity("Friend A", "token-a"));
+    const repositoryB = identityRepository(identity("Friend B", "token-b"));
+    const repositoryC = identityRepository(identity("Friend C", "token-c"));
+    const user = userEvent.setup();
+    const view = render(
+      <App apiOrigin={apiOrigin} fetchImpl={fetchImpl} identityRepository={repositoryA} />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /^stats$/i }));
+    expect(await screen.findByText("7")).toBeVisible();
+    view.rerender(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} identityRepository={repositoryB} />);
+    await waitFor(() => expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent("Friend B"));
+    expect(screen.queryByText("7")).toBeNull();
+
+    view.rerender(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} identityRepository={repositoryC} />);
+    expect(await screen.findByText("2")).toBeVisible();
+    friendBStats.resolve(jsonResponse({ stats: accountStatsFixture(9) }));
+    await act(async () => { await friendBStats.promise; });
+    await waitFor(() => expect(screen.queryByText("9")).toBeNull());
+    expect(screen.getByText("2")).toBeVisible();
+  });
+
+  it("clears stale identity and prior stats when the stats projection returns 401", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ accountAttempts: 7, statsUnauthorizedAfterFirst: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /^stats$/i }));
+    expect(await screen.findByText("7")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^play$/i }));
+    await user.click(screen.getByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /^end run$/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+    await user.click(screen.getByRole("button", { name: /^stats$/i }));
+
+    await waitFor(() => expect(storage.getItem("vwiki-race:vgames-session")).toBeNull());
+    expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent("Guest");
+    expect(screen.queryByText("7")).toBeNull();
+  });
+
+  it("clears a stale Create 401 identity and resumes the exact intent after login", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ createUnauthorizedOnce: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /challenges/i }));
+    await user.type(screen.getByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    expect(dialog).toBeVisible();
+    expect(storage.getItem("vwiki-race:vgames-session")).toBeNull();
+    await user.type(screen.getByLabelText(/username/i), "vijay");
+    await user.type(screen.getByLabelText(/password/i), "secret-pass");
+    const loginForm = screen.getByLabelText(/password/i).closest("form");
+    await user.click(within(loginForm as HTMLFormElement).getByRole("button", { name: /^log in$/i }));
+
+    expect(await screen.findByRole("button", { name: /start challenge #2/i })).toBeVisible();
+    expect(createChallengeCalls(fetchImpl)).toBe(2);
+  });
+
+  it("traps End Run focus, closes on Escape, and restores its trigger", async () => {
+    const storage = claimedStorage();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={storage} />);
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+
+    const trigger = screen.getByRole("button", { name: /^end run$/i });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: /end this run/i });
+    expect(dialog.parentElement).toHaveClass("modal-backdrop");
+    const cancel = within(dialog).getByRole("button", { name: /continue run/i });
+    const confirm = within(dialog).getByRole("button", { name: /confirm end run/i });
+    confirm.focus();
+    await user.tab();
+    expect(document.activeElement).toBe(cancel);
+    await user.tab({ shift: true });
+    expect(document.activeElement).toBe(confirm);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: /end this run/i })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps End Run open and restores the active phase after an abandon failure", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ abandonFailsOnce: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(screen.getByRole("button", { name: /^end run$/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /end this run/i });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/offline/i);
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: /confirm end run/i })).toBeEnabled());
+    expect(screen.getByRole("button", { name: /^end run$/i })).toBeVisible();
+  });
+
+  it("retains End Run intent through a stale 401 and resumes after login", async () => {
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({ abandonUnauthorizedOnce: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(screen.getByRole("button", { name: /^end run$/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+
+    const identityDialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    expect(identityDialog).toBeVisible();
+    expect(storage.getItem("vwiki-race:vgames-session")).toBeNull();
+    await user.type(screen.getByLabelText(/username/i), "vijay");
+    await user.type(screen.getByLabelText(/password/i), "secret-pass");
+    const loginForm = screen.getByLabelText(/password/i).closest("form");
+    await user.click(within(loginForm as HTMLFormElement).getByRole("button", { name: /^log in$/i }));
+
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeEnabled();
+    expect(abandonRunCalls(fetchImpl, "run-1")).toBe(2);
+  });
+
+  it("ignores stale catalog and leaderboard responses", async () => {
+    const staleCatalog = createDeferredResponse({ challenges: [twoChallenges()[0]] });
+    const staleFetch = createFetchMock({ delayedChallenges: staleCatalog.promise });
+    const currentFetch = createFetchMock({ challenges: [twoChallenges()[1]] });
+    const catalogStorage = memoryStorage();
+    const catalogView = render(<App apiOrigin={apiOrigin} fetchImpl={staleFetch} storage={catalogStorage} />);
+    catalogView.rerender(<App apiOrigin={apiOrigin} fetchImpl={currentFetch} storage={catalogStorage} />);
+    expect((await screen.findAllByText(/mars -> water/i)).length).toBeGreaterThan(0);
+    await act(async () => {
+      staleCatalog.resolve();
+      await staleCatalog.promise;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitFor(() => expect(screen.queryByText(/apple -> fruit/i)).toBeNull());
+    catalogView.unmount();
+
+    const staleLeaderboard = createDeferredResponse({ leaderboard: [leaderboardRow({ displayName: "Apple Runner", runId: "run-apple" })] });
+    const baseFetch = createFetchMock({ challenges: twoChallenges() });
+    let delayedOldLeaderboard = true;
+    const racingFetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (delayedOldLeaderboard && String(input) === apiUrl("/api/v2/challenges/challenge-0001/leaderboard")) {
+        delayedOldLeaderboard = false;
+        return staleLeaderboard.promise;
+      }
+      if (String(input) === apiUrl("/api/v2/challenges/challenge-0002/leaderboard")) {
+        return Promise.resolve(jsonResponse({ leaderboard: [leaderboardRow({ challengeId: "challenge-0002", displayName: "Mars Runner", runId: "run-mars" })] }));
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    const view = render(<App apiOrigin={apiOrigin} fetchImpl={racingFetch} storage={memoryStorage()} />);
+    await user.click(await screen.findByRole("button", { name: /challenge #2/i }));
+    await user.click(screen.getByRole("button", { name: /leaderboard/i }));
+    expect(await screen.findByText("Mars Runner")).toBeVisible();
+    await act(async () => {
+      staleLeaderboard.resolve();
+      await staleLeaderboard.promise;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await waitFor(() => expect(screen.queryByText("Apple Runner")).toBeNull());
+    view.unmount();
+  });
+
+  it("never renders a prior challenge leaderboard while the current one loads or fails", async () => {
+    const challengeTwoLeaderboard = deferredValue<Response>();
+    const baseFetch = createFetchMock({ challenges: twoChallenges() });
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      if (requestUrl === apiUrl("/api/v2/challenges/challenge-0001/leaderboard")) {
+        return Promise.resolve(jsonResponse({
+          leaderboard: [leaderboardRow({ displayName: "Apple Runner", runId: "run-apple" })],
+        }));
+      }
+      if (requestUrl === apiUrl("/api/v2/challenges/challenge-0002/leaderboard")) {
+        return challengeTwoLeaderboard.promise;
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /leaderboard/i }));
+    expect(await screen.findByText("Apple Runner")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^play$/i }));
+    await user.click(screen.getByRole("button", { name: /challenge #2/i }));
+    await user.click(screen.getByRole("button", { name: /leaderboard/i }));
+    expect(screen.queryByText("Apple Runner")).toBeNull();
+    expect(screen.getByText(/no completed runs yet/i)).toBeVisible();
+
+    challengeTwoLeaderboard.resolve(jsonError("leaderboard_unavailable", "Leaderboard unavailable.", 400));
+    await act(async () => { await challengeTwoLeaderboard.promise; });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/leaderboard unavailable/i);
+    expect(screen.queryByText("Apple Runner")).toBeNull();
   });
 
   it("creates the next numbered challenge from the Challenges tab", async () => {
@@ -335,21 +1078,37 @@ describe("VWiki Race app", () => {
 });
 
 function createFetchMock(options?: {
-  challenges?: Array<{
-    id: string;
-    label: string;
-    sortOrder: number;
-    isActive: boolean;
-    mode: string;
-    start: { title: string };
-    target: { title: string };
-    ruleset: string;
-    source: string;
-  }>;
+  challenges?: Challenge[];
   delayedFruitArticle?: Promise<Response>;
+  delayedClickResponse?: Promise<Response>;
+  delayedChallenges?: Promise<Response>;
+  startUnauthorizedOnce?: boolean;
+  clickUnauthorizedOnce?: boolean;
+  clickSyncFailureOnce?: boolean;
+  startConflictOnce?: boolean;
+  activeRunAfterConflict?: boolean;
+  createUnauthorizedOnce?: boolean;
+  abandonFailsOnce?: boolean;
+  abandonUnauthorizedOnce?: boolean;
+  activeRun?: ReturnType<typeof activeRunFixture> | null;
+  delayedActiveRun?: Promise<Response>;
+  targetPreviewFailure?: boolean;
+  leaderboardRows?: ReturnType<typeof leaderboardRow>[];
+  runOldPath?: ServerPathStep[];
+  accountAttempts?: number;
+  leaderboardContext?: { isPersonalBest: boolean; rank: number | null };
+  statsUnauthorizedAfterFirst?: boolean;
 }) {
   let completed = false;
-  let challenges = options?.challenges ?? [
+  let unauthorizedStartRemaining = options?.startUnauthorizedOnce ? 1 : 0;
+  let unauthorizedClickRemaining = options?.clickUnauthorizedOnce ? 1 : 0;
+  let clickSyncFailuresRemaining = options?.clickSyncFailureOnce ? 2 : 0;
+  let conflictingStartRemaining = options?.startConflictOnce ? 1 : 0;
+  let unauthorizedCreateRemaining = options?.createUnauthorizedOnce ? 1 : 0;
+  let abandonFailuresRemaining = options?.abandonFailsOnce ? 2 : 0;
+  let unauthorizedAbandonRemaining = options?.abandonUnauthorizedOnce ? 1 : 0;
+  let statsReads = 0;
+  let challenges: Challenge[] = options?.challenges ?? [
     {
       id: "challenge-0001",
       label: "Challenge #1",
@@ -375,7 +1134,11 @@ function createFetchMock(options?: {
         startTitle: "Mars",
         targetTitle: "Water",
       });
-      const challenge = {
+      if (unauthorizedCreateRemaining > 0) {
+        unauthorizedCreateRemaining -= 1;
+        return jsonError("unauthorized", "Session expired.", 401);
+      }
+      const challenge: Challenge = {
         id: "challenge-0002",
         label: "Challenge #2",
         sortOrder: 2,
@@ -393,6 +1156,10 @@ function createFetchMock(options?: {
       };
       challenges = [...challenges, challenge];
       return jsonResponse({ challenge });
+    }
+
+    if (url === "/api/v2/challenges" && options?.delayedChallenges) {
+      return options.delayedChallenges;
     }
 
     if (url === "/api/v2/challenges") {
@@ -443,6 +1210,14 @@ function createFetchMock(options?: {
       expect(init?.headers).toMatchObject({
         Authorization: expect.stringMatching(/^Bearer jwt-/),
       });
+      if (unauthorizedStartRemaining > 0) {
+        unauthorizedStartRemaining -= 1;
+        return jsonError("unauthorized", "Session expired.", 401);
+      }
+      if (conflictingStartRemaining > 0) {
+        conflictingStartRemaining -= 1;
+        return jsonError("active_run_exists", "End the old run first.", 409);
+      }
       const challenge = challenges.find((item) => item.id === startBody.challengeId) ?? challenges[0];
       return jsonResponse({
         run: {
@@ -460,6 +1235,28 @@ function createFetchMock(options?: {
       });
     }
 
+    if (url === "/api/v2/runs/active") {
+      if (options?.delayedActiveRun) return options.delayedActiveRun;
+      return jsonResponse({
+        run: options?.activeRunAfterConflict && conflictingStartRemaining > 0
+          ? null
+          : options?.activeRun ?? null,
+      });
+    }
+
+    if (url === "/api/v2/accounts/me/stats") {
+      statsReads += 1;
+      if (options?.statsUnauthorizedAfterFirst && statsReads > 1) {
+        return jsonError("unauthorized", "Session expired.", 401);
+      }
+      return jsonResponse({
+        stats: {
+          totals: { attempts: options?.accountAttempts ?? 0, completed: 0, abandoned: 0, timedCompleted: 0, totalClicks: 0, bestClicks: null, bestElapsedMs: null, averageClicks: 0, averageElapsedMs: 0 },
+          topStarts: [], topTargets: [], mostVisited: [],
+        },
+      });
+    }
+
     if (url === "/api/v2/runs/run-1/click") {
       expect(readJsonBody(init)).toMatchObject({
         clientEventId: expect.any(String),
@@ -470,24 +1267,57 @@ function createFetchMock(options?: {
         requestedTitle: "Fruit",
         destinationTitle: "Fruit",
         destinationPageId: 10843,
-        decisionElapsedMs: 1500,
+        decisionElapsedMs: expect.any(Number),
       });
+      if (unauthorizedClickRemaining > 0) {
+        unauthorizedClickRemaining -= 1;
+        return jsonError("unauthorized", "Session expired.", 401);
+      }
+      if (clickSyncFailuresRemaining > 0) {
+        clickSyncFailuresRemaining -= 1;
+        return jsonError("network_error", "Offline while syncing click.", 503);
+      }
+      if (options?.delayedClickResponse) {
+        return options.delayedClickResponse.then((response) => {
+          completed = true;
+          return response;
+        });
+      }
       completed = true;
-      return jsonResponse({
-        transition: {
-          runId: "run-1",
-          clickCount: 1,
-          runStatus: "completed",
-          completedAt: "2026-07-14T01:00:01.500Z",
-          elapsedMs: 1500,
-        },
-        leaderboardContext: { isPersonalBest: true, rank: 1 },
-      });
+      return jsonResponse(completedClickResponse(options?.leaderboardContext));
+    }
+
+    if (url === "/api/v2/runs/run-old/abandon") {
+      if (abandonFailuresRemaining > 0) {
+        abandonFailuresRemaining -= 1;
+        return jsonError("network_error", "Offline while ending run.", 503);
+      }
+      return jsonResponse({ runId: "run-old", runStatus: "abandoned", outcome: "legacy_recovery_abandoned" });
+    }
+
+    if (url === "/api/v2/runs/run-1/abandon") {
+      if (unauthorizedAbandonRemaining > 0) {
+        unauthorizedAbandonRemaining -= 1;
+        return jsonError("unauthorized", "Session expired.", 401);
+      }
+      if (abandonFailuresRemaining > 0) {
+        abandonFailuresRemaining -= 1;
+        return jsonError("network_error", "Offline while ending run.", 503);
+      }
+      return jsonResponse({ runId: "run-1", runStatus: "abandoned", outcome: "abandoned" });
+    }
+
+    if (url === "/api/v2/runs/run-old/recovery-path") {
+      return jsonResponse({ path: options?.runOldPath ?? [] });
+    }
+
+    if (url === "/api/v2/runs/run-ranked/path") {
+      return jsonResponse({ path: [{ stepNumber: 1, sourceTitle: "Apple", clickedAnchorText: "fruit", destinationTitle: "Fruit", destinationPageId: 10843, elapsedSinceStartMs: 1500, createdAt: "2026-07-14T01:00:01.500Z" }] });
     }
 
     if (url.startsWith("/api/v2/challenges/") && url.endsWith("/leaderboard")) {
       return jsonResponse({
-        leaderboard: completed && url.includes("challenge-0001")
+        leaderboard: options?.leaderboardRows ?? (completed && url.includes("challenge-0001")
           ? [
               {
                 rank: 1,
@@ -500,17 +1330,29 @@ function createFetchMock(options?: {
                 completedAt: "2026-07-14T01:00:01.500Z",
               },
             ]
-          : [],
+          : []),
       });
     }
 
     if (url.includes("page=Fruit") && options?.delayedFruitArticle) {
       return options.delayedFruitArticle;
     }
+    if (url.includes("page=Fruit") && options?.targetPreviewFailure) {
+      return jsonError("wikipedia_unavailable", "Preview unavailable.", 503);
+    }
 
-    const body = url.includes("page=Fruit")
+    const requestedPage = new URL(requestUrl).searchParams.get("page");
+    const body = requestedPage === "Fruit"
       ? fruitParseResponse
-      : appleParseResponse;
+      : requestedPage && requestedPage !== "Apple"
+        ? {
+            parse: {
+              ...appleParseResponse.parse,
+              title: requestedPage,
+              pageid: 900_000,
+            },
+          }
+        : appleParseResponse;
     return jsonResponse(body);
   });
 }
@@ -518,6 +1360,13 @@ function createFetchMock(options?: {
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function jsonError(code: string, message: string, status: number): Response {
+  return new Response(JSON.stringify({ error: { code, message } }), {
+    status,
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -534,6 +1383,130 @@ function challengeCatalogCalls(fetchImpl: ReturnType<typeof createFetchMock>): n
   ).length;
 }
 
+function leaderboardCalls(fetchImpl: ReturnType<typeof createFetchMock>, challengeId: string): number {
+  return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl(`/api/v2/challenges/${challengeId}/leaderboard`)).length;
+}
+
+function startRunCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
+  return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl("/api/v2/runs/start")).length;
+}
+
+function activeRunCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
+  return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl("/api/v2/runs/active")).length;
+}
+
+function completeRunCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
+  return fetchImpl.mock.calls.filter(([input]) => /\/api\/v2\/runs\/[^/]+\/complete$/.test(String(input))).length;
+}
+
+function abandonRunCalls(
+  fetchImpl: ReturnType<typeof createFetchMock>,
+  runId: string,
+): number {
+  return fetchImpl.mock.calls.filter(
+    ([input]) => String(input) === apiUrl(`/api/v2/runs/${runId}/abandon`),
+  ).length;
+}
+
+function clickRequestBodies(fetchImpl: ReturnType<typeof createFetchMock>): Array<Record<string, unknown>> {
+  return fetchImpl.mock.calls
+    .filter(([input]) => String(input) === apiUrl("/api/v2/runs/run-1/click"))
+    .map(([, init]) => readJsonBody(init) as Record<string, unknown>);
+}
+
+function createChallengeCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
+  return fetchImpl.mock.calls.filter(([input, init]) =>
+    String(input) === apiUrl("/api/v2/challenges") && init?.method === "POST"
+  ).length;
+}
+
+function accountStatsCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
+  return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl("/api/v2/accounts/me/stats")).length;
+}
+
+function runPathCalls(fetchImpl: ReturnType<typeof createFetchMock>, runId: string): number {
+  return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl(`/api/v2/runs/${runId}/path`)).length;
+}
+
+function claimedStorage(): Storage {
+  const storage = memoryStorage();
+  storage.setItem("vwiki-race:vgames-session", JSON.stringify({ accountId: "acc-1", displayName: "Vijay", token: "jwt-claimed", status: "claimed" }));
+  return storage;
+}
+
+function identity(displayName: string, token: string): VGamesIdentitySession {
+  return { accountId: `account-${token}`, displayName, token, status: "claimed" };
+}
+
+function identityRepository(session: VGamesIdentitySession): VGamesIdentityRepository {
+  let current: VGamesIdentitySession | null = session;
+  return {
+    clearSession: () => { current = null; },
+    getDeviceCredential: () => "device-credential",
+    getSession: () => current,
+    saveSession: (next) => { current = next; },
+  };
+}
+
+function accountStatsFixture(attempts: number) {
+  return {
+    totals: {
+      attempts,
+      completed: 0,
+      abandoned: 0,
+      timedCompleted: 0,
+      totalClicks: 0,
+      bestClicks: null,
+      bestElapsedMs: null,
+      averageClicks: 0,
+      averageElapsedMs: 0,
+    },
+    topStarts: [],
+    topTargets: [],
+    mostVisited: [],
+  };
+}
+
+function completedClickResponse(
+  leaderboardContext = { isPersonalBest: true, rank: 1 as number | null },
+) {
+  return {
+    transition: {
+      runId: "run-1",
+      clickCount: 1,
+      runStatus: "completed",
+      completedAt: "2026-07-14T01:00:01.500Z",
+      elapsedMs: 1500,
+    },
+    leaderboardContext,
+  };
+}
+
+function activeRunFixture(override: Record<string, unknown> = {}) {
+  return { id: "run-old", challengeId: "challenge-0001", accountId: "acc-1", canonicalAccountId: "acc-1", status: "active", startTitle: "Apple", targetTitle: "Fruit", clickCount: 0, startedAt: "2026-07-14T01:00:00.000Z", protocolVersion: 2, lastTitle: "Apple", lastPageId: 18978754, ...override };
+}
+
+function leaderboardRow(override: Record<string, unknown> = {}) {
+  return { rank: 1, runId: "run-ranked", challengeId: "challenge-0001", accountId: "acc-1", displayName: "Vijay", elapsedMs: 1500, clickCount: 1, completedAt: "2026-07-14T01:00:01.500Z", ...override };
+}
+
+function twoChallenges(): Challenge[] {
+  return [
+    { id: "challenge-0001", label: "Challenge #1", sortOrder: 1, isActive: true, mode: "daily", start: { title: "Apple" }, target: { title: "Fruit" }, ruleset: "ranked_classic", source: "curated" },
+    { id: "challenge-0002", label: "Challenge #2", sortOrder: 2, isActive: true, mode: "daily", start: { title: "Mars" }, target: { title: "Water" }, ruleset: "ranked_classic", source: "curated" },
+  ];
+}
+
+function wikipediaArticleCalls(
+  fetchImpl: ReturnType<typeof createFetchMock>,
+  title: string,
+): number {
+  return fetchImpl.mock.calls.filter(([input]) => {
+    const url = new URL(String(input));
+    return url.hostname === "en.wikipedia.org" && url.searchParams.get("page") === title;
+  }).length;
+}
+
 function createDeferredResponse(body: unknown): {
   promise: Promise<Response>;
   resolve: () => void;
@@ -545,4 +1518,10 @@ function createDeferredResponse(body: unknown): {
     }),
     resolve: () => resolvePromise(jsonResponse(body)),
   };
+}
+
+function deferredValue<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 }

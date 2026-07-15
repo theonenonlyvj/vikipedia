@@ -27,6 +27,7 @@ export interface VWikiRaceApiClient {
   createChallenge(input: CreateTrackedChallengeRequest, token: string): Promise<Challenge>;
   startRun(input: StartTrackedRunRequest, token: string): Promise<ActiveRunRecord>;
   getActiveRun(token: string): Promise<ActiveRunRecord | null>;
+  getActiveRunPath(runId: string, token: string): Promise<ServerPathStep[]>;
   recordClick(runId: string, input: RecordTrackedClickRequest, token: string): Promise<ClickV2Response>;
   abandonRun(
     runId: string,
@@ -85,6 +86,13 @@ export function createVWikiRaceApiClient(
     async getActiveRun(token) {
       return (await authenticatedRead(urlPath.activeRun, token, isActiveRunResponse)).run;
     },
+    async getActiveRunPath(runId, token) {
+      return (await authenticatedRead(
+        urlPath.run(runId, "recovery-path"),
+        token,
+        isRunPathResponse,
+      )).path;
+    },
     async recordClick(runId, input, token) {
       const response = await write(urlPath.run(runId, "click"), input, token, isClickResponse, true);
       invalidateStats();
@@ -93,10 +101,11 @@ export function createVWikiRaceApiClient(
     async abandonRun(runId, token, input) {
       const response = await write(
         urlPath.run(runId, "abandon"),
-        input,
+        input ?? {},
         token,
         isAbandonRunResponse,
         true,
+        abandonIdempotencyKey(runId),
       );
       invalidateStats();
       return response;
@@ -143,6 +152,7 @@ export function createVWikiRaceApiClient(
     token: string,
     validate: (value: unknown) => value is T,
     retryable = false,
+    stableIdempotencyKey?: string,
   ): Promise<T> {
     return requestJson(fetchImpl, url(path), {
       method: "POST",
@@ -150,7 +160,9 @@ export function createVWikiRaceApiClient(
       token,
       timeoutMs: MUTATION_TIMEOUT_MS,
       retry: retryable ? "idempotent-once" : "never",
-      idempotencyKey: retryable ? createIdempotencyKey() : undefined,
+      idempotencyKey: retryable
+        ? stableIdempotencyKey ?? createIdempotencyKey()
+        : undefined,
       validate,
     });
   }
@@ -244,8 +256,30 @@ function isChallenge(value: unknown): value is Challenge {
     isArticleRef(value.start) &&
     isArticleRef(value.target) &&
     value.ruleset === "ranked_classic" &&
-    value.source === "curated" &&
+    hasCoherentChallengeProvenance(value) &&
     (value.createdBy === undefined || isChallengeCreator(value.createdBy));
+}
+
+function hasCoherentChallengeProvenance(value: Record<string, unknown>): boolean {
+  const hasNoDailyDate = value.dailyDate === undefined || value.dailyDate === null;
+  if (value.origin === undefined) {
+    return value.source === "curated" && hasNoDailyDate;
+  }
+  if (value.origin === "manual") {
+    return value.source === "curated" && hasNoDailyDate;
+  }
+  if (value.origin === "daily") {
+    return value.source === "wikipedia_random" && isStrictCalendarDate(value.dailyDate);
+  }
+  return false;
+}
+
+function isStrictCalendarDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function hasString(value: Record<string, unknown>, key: string): boolean {
@@ -356,4 +390,8 @@ function isPathStep(value: unknown): value is ServerPathStep {
 
 function createIdempotencyKey(): string {
   return globalThis.crypto.randomUUID();
+}
+
+function abandonIdempotencyKey(runId: string): string {
+  return `vwiki-race-abandon:${runId}`;
 }

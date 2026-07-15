@@ -1,7 +1,9 @@
 import {
   normalizeTitle,
-  parseWikipediaArticleTarget,
+  parseWikipediaArticleInput,
 } from "../domain/rules";
+import { sanitizeWikipediaArticleHtml } from "../services/wikipediaSanitizer";
+import { DOMParser as WorkerDOMParser } from "linkedom/worker";
 import { ApiError } from "./http";
 
 export interface ValidatedWikipediaArticle {
@@ -45,20 +47,36 @@ interface WikipediaQueryResponse {
 interface WikipediaParseResponse {
   parse?: {
     pageid?: number;
+    revid?: number;
     title?: string;
-    links?: unknown[];
+    text?: string;
   };
 }
 
 const WIKIMEDIA_API_USER_AGENT =
   "VWiki Race/0.0 (https://vwikirace.pages.dev; contact: https://github.com/theonenonlyvj/vwiki-race)";
+const DEFAULT_TIMEOUT_MS = 5_000;
+const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MAX_ARTICLE_HTML_BYTES = 1_500 * 1024;
 
 export function createWikipediaChallengeValidator(options: {
   fetchImpl?: typeof fetch;
   endpoint?: string;
+  timeoutMs?: number;
+  maxResponseBytes?: number;
+  maxArticleHtmlBytes?: number;
 } = {}): WikipediaChallengeValidator {
   const fetchImpl = options.fetchImpl ?? fetch;
   const endpoint = options.endpoint ?? "https://en.wikipedia.org/w/api.php";
+  const timeoutMs = positiveBound(options.timeoutMs, DEFAULT_TIMEOUT_MS);
+  const maxResponseBytes = positiveBound(
+    options.maxResponseBytes,
+    DEFAULT_MAX_RESPONSE_BYTES,
+  );
+  const maxArticleHtmlBytes = positiveBound(
+    options.maxArticleHtmlBytes,
+    DEFAULT_MAX_ARTICLE_HTML_BYTES,
+  );
 
   return {
     async validateChallengeArticles(input) {
@@ -107,6 +125,8 @@ export function createWikipediaChallengeValidator(options: {
       fetchImpl,
       url,
       label,
+      timeoutMs,
+      maxResponseBytes,
     )) as WikipediaQueryResponse;
     const pages = payload.query?.pages;
     const page = Array.isArray(pages)
@@ -139,14 +159,15 @@ export function createWikipediaChallengeValidator(options: {
 
     const canonicalTitle =
       typeof page.title === "string" ? page.title.trim() : "";
-    if (!canonicalTitle || !parseWikipediaArticleTarget(canonicalTitle)) {
+    const canonicalTarget = parseWikipediaArticleInput(canonicalTitle);
+    if (!canonicalTarget) {
       throw invalidWikipediaResponse();
     }
 
     return {
       allowedLinkCount: 0,
       pageId: Number(page.pageid),
-      title: canonicalTitle,
+      title: canonicalTarget.title,
     };
   }
 
@@ -159,13 +180,15 @@ export function createWikipediaChallengeValidator(options: {
       formatversion: "2",
       origin: "*",
       page: start.title,
-      prop: "links|revid",
+      prop: "text|revid",
       redirects: "1",
     });
     const payload = (await requestWikipediaJson(
       fetchImpl,
       url,
       "start_links",
+      timeoutMs,
+      maxResponseBytes,
     )) as WikipediaParseResponse;
     const parse = payload.parse;
     if (
@@ -173,31 +196,21 @@ export function createWikipediaChallengeValidator(options: {
       parse.pageid !== start.pageId ||
       typeof parse.title !== "string" ||
       normalizeTitle(parse.title) !== normalizeTitle(start.title) ||
-      !Array.isArray(parse.links)
+      !Number.isSafeInteger(parse.revid) ||
+      typeof parse.text !== "string"
     ) {
       throw invalidWikipediaResponse();
     }
-
-    let allowedLinkCount = 0;
-    for (const link of parse.links) {
-      if (!isRecord(link) || link.ns !== 0 || !hasExistingLinkMarker(link)) {
-        continue;
-      }
-      const rawTitle =
-        typeof link.title === "string"
-          ? link.title
-          : typeof link["*"] === "string"
-            ? link["*"]
-            : "";
-      const target = parseWikipediaArticleTarget(rawTitle);
-      if (
-        target &&
-        normalizeTitle(target.title) !== normalizeTitle(start.title)
-      ) {
-        allowedLinkCount += 1;
-      }
+    if (new TextEncoder().encode(parse.text).byteLength > maxArticleHtmlBytes) {
+      throw wikipediaBoundaryError();
     }
-    return allowedLinkCount;
+    try {
+      return sanitizeWikipediaArticleHtml(parse.text, start.title, {
+        parseDocument: parseWorkerDocument,
+      }).links.length;
+    } catch {
+      throw invalidWikipediaResponse();
+    }
   }
 }
 
@@ -205,7 +218,7 @@ function parseManualArticleInput(
   label: "start" | "target",
   rawTitle: string,
 ): string {
-  const target = parseWikipediaArticleTarget(rawTitle);
+  const target = parseWikipediaArticleInput(rawTitle);
   if (!target) {
     throw new ApiError(
       `invalid_${label}_article`,
@@ -219,7 +232,11 @@ async function requestWikipediaJson(
   fetchImpl: typeof fetch,
   url: string,
   label: "start" | "target" | "start_links",
+  timeoutMs: number,
+  maxResponseBytes: number,
 ): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response: Response;
   try {
     response = await fetchImpl(url, {
@@ -227,15 +244,14 @@ async function requestWikipediaJson(
         "Api-User-Agent": WIKIMEDIA_API_USER_AGENT,
         "User-Agent": WIKIMEDIA_API_USER_AGENT,
       },
+      signal: controller.signal,
     });
-  } catch (caught) {
+  } catch {
     console.error(
       "wikipedia_validation_fetch_failed",
-      JSON.stringify({
-        error: describeCaughtError(caught),
-        label,
-      }),
+      JSON.stringify({ label }),
     );
+    clearTimeout(timeout);
     throw wikipediaBoundaryError();
   }
 
@@ -245,9 +261,9 @@ async function requestWikipediaJson(
       JSON.stringify({
         label,
         status: response.status,
-        statusText: response.statusText,
       }),
     );
+    clearTimeout(timeout);
     throw new ApiError(
       "wikipedia_validation_failed",
       `Could not verify those Wikipedia articles right now. Wikipedia returned status ${response.status}.`,
@@ -256,16 +272,15 @@ async function requestWikipediaJson(
   }
 
   try {
-    return await response.json();
-  } catch (caught) {
+    return await readBoundedJson(response, maxResponseBytes);
+  } catch {
     console.error(
       "wikipedia_validation_invalid_json",
-      JSON.stringify({
-        error: describeCaughtError(caught),
-        label,
-      }),
+      JSON.stringify({ label }),
     );
     throw wikipediaBoundaryError();
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -276,14 +291,6 @@ function wikipediaApiUrl(
   const url = new URL(endpoint);
   url.search = new URLSearchParams(parameters).toString();
   return url.toString();
-}
-
-function hasExistingLinkMarker(link: Record<string, unknown>): boolean {
-  return (
-    Object.prototype.hasOwnProperty.call(link, "exists") &&
-    link.exists !== false &&
-    link.exists !== null
-  );
 }
 
 function invalidWikipediaResponse(): ApiError {
@@ -302,13 +309,57 @@ function wikipediaBoundaryError(): ApiError {
   );
 }
 
-function describeCaughtError(caught: unknown): string {
-  if (caught instanceof Error) {
-    return `${caught.name}: ${caught.message}`;
-  }
-  return String(caught);
+function parseWorkerDocument(rawHtml: string): Document {
+  const document = new WorkerDOMParser().parseFromString(
+    "<!doctype html><html><head></head><body></body></html>",
+    "text/html",
+  );
+  document.body.innerHTML = rawHtml;
+  return document as unknown as Document;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+async function readBoundedJson(
+  response: Response,
+  maxBytes: number,
+): Promise<unknown> {
+  const declaredLength = response.headers.get("Content-Length");
+  if (
+    declaredLength &&
+    (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)
+  ) {
+    throw new Error("Wikipedia response exceeded the validation limit.");
+  }
+
+  if (!response.body) {
+    throw new Error("Wikipedia response body was missing.");
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const next = await reader.read();
+    if (next.done) {
+      break;
+    }
+    total += next.value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("Wikipedia response exceeded the validation limit.");
+    }
+    chunks.push(next.value);
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(body));
+}
+
+function positiveBound(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && Number(value) > 0
+    ? Number(value)
+    : fallback;
 }

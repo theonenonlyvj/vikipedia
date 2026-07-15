@@ -1,9 +1,10 @@
 # VWiki Race Game Principles and Rules
 
-Status: initial research draft  
-Date: 2026-07-13  
-Intent: define the core game and ranked baseline before deeper brainstorming or
-implementation.
+Status: v0 ranked baseline
+
+Date: 2026-07-15
+
+Intent: define the game contract implemented by the friend-ready v0.
 
 ## Research Basis
 
@@ -135,7 +136,6 @@ Allowed:
 3. Infobox links.
 4. Article table/list links when the table or list is part of the article's
    substantive content.
-5. "See also" article links.
 
 Disallowed:
 
@@ -149,6 +149,7 @@ Disallowed:
 8. Red links or nonexistent pages.
 9. Special, Help, Wikipedia, User, Talk, Template, Module, Portal, and Category
    namespace pages.
+10. "See also", references, further-reading, and external-link sections.
 
 ### Win Condition
 
@@ -163,24 +164,31 @@ Disallowed:
 
 ### Scoring
 
-1. Primary score: fewest valid clicks.
-2. Tiebreaker: elapsed time from round start to target load.
-3. If both click count and time are equal within system precision, the result is
-   a tie.
+1. Primary score: fastest accepted active decision time.
+2. Tiebreaker: fewest valid clicks.
+3. If decision time and click count are equal within system precision, the
+   earlier accepted completion ranks first.
 4. Invalid moves void the run for ranked play.
 5. Hints, escapes, backtracking, or rule exceptions must move the run to a
    separate leaderboard.
 
 ### Timing
 
-1. The timer starts when the article content is available to the player and the
-   round becomes interactive.
-2. The timer stops when the target article is resolved and accepted by the app.
-3. Loading delays should be measured consistently. If practical, separate
-   "wall-clock time" from "active decision time" in logs, but rank by the
-   published mode metric.
-4. Network failures, app reloads, or desyncs should mark a run incomplete unless
-   the app can reconstruct the full valid path.
+1. The timer starts at zero only after the server accepts the run and the
+   preloaded start article becomes interactive.
+2. Activating a valid link freezes the timer immediately. Wikipedia fetch and
+   server synchronization latency do not count as player decision time.
+3. The timer resumes only after the server accepts the move and the next
+   article becomes interactive.
+4. A target click stops the timer when that transition is accepted by the
+   server. The target must still be clicked; merely displaying its link is not
+   a finish.
+5. The server stores cumulative monotonic decision time on every accepted
+   transition. That accepted value, not a client-only stopwatch, determines the
+   leaderboard.
+6. Network failures restore the last accepted article without accepting a
+   move. Reloads may resume only from the server's accepted path and timing
+   state.
 
 ### Fair Play
 
@@ -210,8 +218,8 @@ These are known or natural variants worth preserving as explicit modes later.
 
 | Mode | Primary Goal | Key Rule Difference |
 | --- | --- | --- |
-| Speed Race | Fastest finish | Time is primary; clicks are secondary or ignored. |
-| Click Race / WikiGolf | Fewest clicks | Same as Ranked Classic; time breaks ties. |
+| Ranked Classic | Fastest decision time | Time is primary; clicks break ties. |
+| Click Race / WikiGolf | Fewest clicks | Separate mode and leaderboard; time breaks ties. |
 | Daily Challenge | Shared puzzle of the day | One or more attempts against a daily global board. |
 | Wikispeedia | Short path on fixed snapshot/subset | Uses a static article set; supports reproducible research-style play. |
 | Philosophy Mode | Reach Philosophy | Often restricts each page to its first valid internal link. |
@@ -228,14 +236,31 @@ These are known or natural variants worth preserving as explicit modes later.
    tab.
 2. The app needs deterministic link extraction per article version.
 3. Prompt generation needs validation for reachability and likely difficulty.
-4. Multiplayer needs synchronized start conditions and server-authoritative run
-   logs.
+4. Challenge leaderboards need server-authoritative run logs, but do not need a
+   realtime room: each player's accepted run begins independently.
 5. Replays and path comparison should be part of the core data model.
 6. Wikimedia API calls must use a meaningful User-Agent or Api-User-Agent,
    honor throttling/rate-limit responses, cache where appropriate, and follow
    content license attribution requirements.
 7. If any Wikipedia text is displayed or cached, the UI must provide source
    attribution and license notice appropriate to the reused content.
+
+## Daily Challenge Contract
+
+1. The system eventually creates at most one immutable daily challenge for
+   each UTC date after Wikipedia and the database are available.
+2. Start and target come from two separate English Wikipedia random-article
+   requests, then pass the same canonical page and playable-link validation as
+   manual challenges.
+3. Daily creation never falls back to hard-coded pages and never inserts a
+   partially validated pair.
+4. Manual and daily challenges share one transactional global number sequence.
+   The date never determines or resets the number: if `#15` is the latest
+   accepted challenge, the next accepted daily challenge is `#16`.
+5. The UTC date is provenance and an idempotency key. Historical daily
+   challenges remain playable at their permanent numbered challenge URLs.
+6. Default selection order is an accepted resumable run, a valid direct
+   challenge URL, today's daily challenge, then the first active challenge.
 
 ## Open Questions For Later Brainstorming
 
@@ -248,4 +273,3 @@ These are known or natural variants worth preserving as explicit modes later.
 4. Should hints ever exist in competitive play, or only in learning mode?
 5. Should the product tone lean more toward party game, speedrunning community,
    educational puzzle, or serious graph-navigation sport?
-

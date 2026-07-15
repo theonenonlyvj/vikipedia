@@ -1,4 +1,8 @@
-import { normalizeTitle, wikipediaArticleUrl } from "../domain/rules";
+import {
+  normalizeTitle,
+  parseWikipediaArticleInput,
+  wikipediaArticleUrl,
+} from "../domain/rules";
 import type { Article } from "../domain/types";
 import {
   sanitizeWikipediaArticleHtml,
@@ -7,7 +11,7 @@ import {
 
 const DEFAULT_ENDPOINT = "https://en.wikipedia.org/w/api.php";
 const DEFAULT_RULESET = "ranked_classic";
-const WIKIMEDIA_API_USER_AGENT =
+export const WIKIMEDIA_API_USER_AGENT =
   "VWiki Race/0.0 (https://vwikirace.pages.dev; contact: https://github.com/theonenonlyvj/vwiki-race)";
 
 export interface GetWikipediaArticleOptions {
@@ -40,8 +44,8 @@ export class WikipediaGatewayError extends Error {
 interface CacheEntry {
   controller: AbortController;
   promise: Promise<Article>;
-  requestSignal?: AbortSignal;
   settled: boolean;
+  subscribers: Set<symbol>;
 }
 
 export function createWikipediaGateway(options: {
@@ -55,12 +59,13 @@ export function createWikipediaGateway(options: {
   const endpoint = options.endpoint ?? DEFAULT_ENDPOINT;
   const sanitizeHtml = options.sanitizeHtml ?? sanitizeWikipediaArticleHtml;
   const articleCache = new Map<string, CacheEntry>();
+  const activeEntries = new Set<CacheEntry>();
   let generation = 0;
 
   return {
     clear() {
       generation += 1;
-      const entries = new Set(articleCache.values());
+      const entries = new Set(activeEntries);
       articleCache.clear();
       for (const entry of entries) {
         entry.controller.abort();
@@ -96,17 +101,14 @@ export function createWikipediaGateway(options: {
         ruleset,
       );
       const cached = articleCache.get(cacheKey);
-      if (
-        cached &&
-        (cached.settled || cached.requestSignal === requestOptions.signal)
-      ) {
-        return cached.promise;
+      if (cached?.controller.signal.aborted) {
+        evictEntry(articleCache, cached);
+      } else if (cached) {
+        return subscribeToEntry(cached, requestOptions.signal);
       }
 
       const requestGeneration = generation;
       const controller = new AbortController();
-      const abortFromCaller = () => controller.abort();
-      requestOptions.signal?.addEventListener("abort", abortFromCaller, { once: true });
 
       let entry!: CacheEntry;
       const articleRequest = raceWithAbort(
@@ -146,17 +148,18 @@ export function createWikipediaGateway(options: {
           throw normalizeGatewayError(caught);
         })
         .finally(() => {
-          requestOptions.signal?.removeEventListener("abort", abortFromCaller);
+          activeEntries.delete(entry);
         });
 
       entry = {
         controller,
         promise: articleRequest,
-        requestSignal: requestOptions.signal,
         settled: false,
+        subscribers: new Set(),
       };
+      activeEntries.add(entry);
       articleCache.set(cacheKey, entry);
-      return articleRequest;
+      return subscribeToEntry(entry, requestOptions.signal);
     },
   };
 }
@@ -173,9 +176,10 @@ async function fetchArticle(options: {
   title: string;
 }): Promise<Article> {
   const url = buildParseUrl(options.endpoint, options.title, options.revisionId);
+  const fetchImpl = options.fetchImpl;
   let response: Response;
   try {
-    response = await options.fetchImpl(url, {
+    response = await fetchImpl(url, {
       headers: {
         "Api-User-Agent": WIKIMEDIA_API_USER_AGENT,
       },
@@ -220,6 +224,14 @@ async function fetchArticle(options: {
   }
 
   const parse = readParsePayload(payload);
+  const canonicalTarget = parseWikipediaArticleInput(parse.canonicalTitle);
+  if (!canonicalTarget) {
+    throw new WikipediaGatewayError(
+      "invalid_response",
+      "Wikipedia returned a non-article destination.",
+      502,
+    );
+  }
   if (
     options.revisionId !== undefined &&
     parse.revisionId !== options.revisionId
@@ -243,15 +255,14 @@ async function fetchArticle(options: {
     );
   }
 
-  const sourceUrl = wikipediaArticleUrl(parse.canonicalTitle);
+  const sourceUrl = wikipediaArticleUrl(canonicalTarget.title);
   return {
     attribution: `Wikipedia revision ${parse.revisionId}, available under CC BY-SA 4.0.`,
     attributionUrl: revisionAttributionUrl(
-      parse.canonicalTitle,
+      canonicalTarget.title,
       parse.revisionId,
     ),
-    canonicalTitle: parse.canonicalTitle,
-    html: sanitized.sanitizedHtml,
+    canonicalTitle: canonicalTarget.title,
     links: sanitized.links,
     pageId: parse.pageId,
     revisionId: parse.revisionId,
@@ -385,6 +396,47 @@ function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> 
       },
       (caught: unknown) => {
         cleanup();
+        reject(caught);
+      },
+    );
+  });
+}
+
+function subscribeToEntry(
+  entry: CacheEntry,
+  signal?: AbortSignal,
+): Promise<Article> {
+  if (signal?.aborted) {
+    return Promise.reject(abortError());
+  }
+
+  const subscriber = Symbol("wikipedia-request-subscriber");
+  entry.subscribers.add(subscriber);
+  return new Promise<Article>((resolve, reject) => {
+    let finished = false;
+    const finish = (aborted: boolean) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      signal?.removeEventListener("abort", handleAbort);
+      entry.subscribers.delete(subscriber);
+      if (aborted && !entry.settled && entry.subscribers.size === 0) {
+        entry.controller.abort();
+      }
+    };
+    const handleAbort = () => {
+      finish(true);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", handleAbort, { once: true });
+    entry.promise.then(
+      (article) => {
+        finish(false);
+        resolve(article);
+      },
+      (caught: unknown) => {
+        finish(false);
         reject(caught);
       },
     );

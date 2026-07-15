@@ -63,6 +63,10 @@ other code may allocate with `MAX(sort_order) + 1`. The sequence increments
 only in the same successful transaction, so failed/rejected operations do not
 consume a number.
 
+The daily date never determines or resets the challenge number. A daily row
+receives the next number in the same global sequence when it is accepted: if
+Challenges #1 through #15 already exist, that day's row is Challenge #16.
+
 Challenge provenance is explicit:
 
 - `origin: "manual" | "daily"`;

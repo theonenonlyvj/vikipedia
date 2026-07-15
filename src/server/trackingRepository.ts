@@ -61,6 +61,20 @@ export interface CreateChallengeV2Input {
   requestFingerprint?: string;
 }
 
+export interface DailyChallengeJob {
+  dailyDate: string;
+  attemptCount: number;
+  leaseToken: string;
+  leaseExpiresAt: string;
+}
+
+export interface DailyChallengeInput {
+  startTitle: string;
+  startPageId: number;
+  targetTitle: string;
+  targetPageId: number;
+}
+
 export interface LegacyClickInput {
   sourceTitle: string;
   clickedAnchorText: string;
@@ -125,6 +139,10 @@ export interface TrackingRepository {
 }
 
 export interface RunProtocolRepository extends TrackingRepository {
+  ensureDailyChallengeJob(dailyDate: string): Promise<void>;
+  claimDueDailyChallengeJob(): Promise<DailyChallengeJob | null>;
+  failDailyChallengeJob(job: DailyChallengeJob, failureCode: string): Promise<void>;
+  acceptDailyChallenge(job: DailyChallengeJob, input: DailyChallengeInput): Promise<Challenge>;
   findChallengeCreationReplay(
     account: AuthorizedAccount,
     input: { idempotencyKey: string; requestFingerprint: string },
@@ -164,6 +182,10 @@ export interface RunProtocolRepository extends TrackingRepository {
     input: AbandonRunV2Input,
   ): Promise<AbandonRunTransition>;
   findActiveRun(account: AuthorizedAccount): Promise<ActiveRunRecord | null>;
+  getRecoveryRunPath(
+    account: AuthorizedAccount,
+    runId: string,
+  ): Promise<ServerPathStep[]>;
   getAccountStats(account: AuthorizedAccount): Promise<AccountStats>;
   getPublicRunPath(runId: string): Promise<ServerPathStep[]>;
 }

@@ -15,6 +15,7 @@
     "@fontsource/fredoka": "^5.2.10",
     "@fontsource/luckiest-guy": "^5.2.8",
     "@vitejs/plugin-react": "^4.3.4",
+    "linkedom": "^0.18.13",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.7.2",

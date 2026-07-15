@@ -8,6 +8,7 @@ import {
   createD1TrackingRepository,
   type D1DatabaseLike,
 } from "./d1TrackingRepository";
+import { ApiError } from "./http";
 import { createWorker, type WorkerTracking } from "./worker";
 
 const account: AuthorizedAccount = {
@@ -49,6 +50,9 @@ beforeEach(async () => {
   `);
   await env.VWIKI_RACE_DB.prepare(
     "DELETE FROM challenges WHERE id NOT IN ('challenge-0001', 'challenge-0002', 'challenge-0003')",
+  ).run();
+  await env.VWIKI_RACE_DB.prepare(
+    "UPDATE challenge_number_sequence SET next_sort_order = 4 WHERE sequence_name = 'global'",
   ).run();
 });
 
@@ -1361,6 +1365,7 @@ describe("Task 4 D1 projections", () => {
     expect(created).toMatchObject({
       id: "challenge-0004",
       sortOrder: 4,
+      isActive: true,
       start: { title: "Mars", pageId: 123 },
       target: { title: "Water", pageId: 456 },
       createdBy: { accountId: account.accountId, displayName: "Casey" },
@@ -1580,6 +1585,147 @@ describe("Task 4 D1 projections", () => {
     ]);
     await expect(repository.getPublicRunPath("private-path-run")).rejects.toMatchObject({
       code: "run_path_not_found", status: 404,
+    });
+  });
+
+  it("returns an owned active protocol-2 zero-click recovery path through the authenticated rate-limited Worker route", async () => {
+    const { repository } = fixture();
+    const run = await repository.startRunV2(account, start);
+    const authorize = vi.fn(async (request: Request) => {
+      if (request.headers.get("Authorization") !== "Bearer recovery-token") {
+        throw new ApiError("unauthorized", "Sign in before recovering a run.", 401);
+      }
+      return account;
+    });
+    const accountReadLimit = vi.fn(async () => ({ success: true }));
+    const worker = createWorker({
+      createTracking: () => ({
+        handlers: createApiHandlers(repository),
+        identity: {},
+        runProtocol: repository,
+        authorize,
+      } as unknown as WorkerTracking),
+    });
+    const route = `https://worker.example/api/v2/runs/${run.id}/recovery-path`;
+    const workerEnv = {
+      VWIKI_RACE_DB: env.VWIKI_RACE_DB,
+      VGAMES_URL: "https://vgames.example",
+      CLICK_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      ACCOUNT_READ_RATE_LIMITER: { limit: accountReadLimit },
+    };
+
+    const unauthorized = await worker.fetch(new Request(route), workerEnv);
+    expect(unauthorized.status).toBe(401);
+    expect(accountReadLimit).not.toHaveBeenCalled();
+
+    const response = await worker.fetch(new Request(route, {
+      headers: { Authorization: "Bearer recovery-token" },
+    }), workerEnv);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ path: [] });
+    expect(authorize).toHaveBeenCalledTimes(2);
+    expect(accountReadLimit).toHaveBeenCalledWith({
+      key: "recovery-path:account-canonical",
+    });
+
+    const limitedWorker = createWorker({
+      createTracking: () => ({
+        handlers: createApiHandlers(repository),
+        identity: {},
+        runProtocol: repository,
+        authorize,
+      } as unknown as WorkerTracking),
+    });
+    const limited = await limitedWorker.fetch(new Request(route, {
+      headers: { Authorization: "Bearer recovery-token" },
+    }), {
+      ...workerEnv,
+      ACCOUNT_READ_RATE_LIMITER: { limit: async () => ({ success: false }) },
+    });
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBe("60");
+    await expect(limited.json()).resolves.toMatchObject({
+      error: { code: "account_read_rate_limited" },
+    });
+  });
+
+  it("returns only accepted path rows for an owned active protocol-2 run", async () => {
+    const { repository } = fixture();
+    const run = await repository.startRunV2(account, start);
+    await repository.recordClickV2(account, {
+      ...targetClick,
+      runId: run.id,
+      clientEventId: "00000000-0000-4000-8000-000000000301",
+      destinationTitle: "Orbit",
+      destinationPageId: 1234,
+    });
+
+    await expect(repository.getRecoveryRunPath(account, run.id)).resolves.toEqual([
+      expect.objectContaining({
+        stepNumber: 1,
+        sourceTitle: "Moon",
+        destinationTitle: "Orbit",
+        destinationPageId: 1234,
+      }),
+    ]);
+  });
+
+  it("resolves recovery-path ownership through the canonical account aliases", async () => {
+    const aliasAccount = {
+      ...account,
+      accountId: "account-old",
+      aliases: [],
+    };
+    const { repository } = fixture();
+    const run = await repository.startRunV2(aliasAccount, start);
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO account_aliases (alias_account_id, canonical_account_id, updated_at)
+       VALUES ('account-old', ?, '2026-07-14T01:00:00.000Z')`,
+    ).bind(account.accountId).run();
+
+    await expect(repository.getRecoveryRunPath({
+      ...account,
+      aliases: ["account-old"],
+    }, run.id)).resolves.toEqual([]);
+  });
+
+  it("does not disclose foreign, inactive, or legacy recovery paths", async () => {
+    const { repository } = fixture();
+    const active = await repository.startRunV2(account, start);
+    const foreignAccount = {
+      ...account,
+      accountId: "account-foreign",
+      aliases: [],
+    };
+    await expect(repository.getRecoveryRunPath(foreignAccount, active.id)).rejects.toMatchObject({
+      code: "recovery_path_not_found",
+      status: 404,
+    });
+
+    await repository.abandonRunV2(account, {
+      runId: active.id,
+      idempotencyKey: "abandon-recovery-run",
+    });
+    await expect(repository.getRecoveryRunPath(account, active.id)).rejects.toMatchObject({
+      code: "recovery_path_not_found",
+      status: 404,
+    });
+
+    await insertCompletedV2({
+      id: "completed-recovery-run",
+      accountId: account.accountId,
+      elapsedMs: 4200,
+      completedAt: "2026-07-14T01:00:04.200Z",
+    });
+    await expect(repository.getRecoveryRunPath(account, "completed-recovery-run")).rejects.toMatchObject({
+      code: "recovery_path_not_found",
+      status: 404,
+    });
+
+    await insertLegacyRun({ id: "legacy-recovery-run", accountId: account.accountId });
+    await expect(repository.getRecoveryRunPath(account, "legacy-recovery-run")).rejects.toMatchObject({
+      code: "recovery_path_not_found",
+      status: 404,
     });
   });
 

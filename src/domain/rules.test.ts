@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { extractTitleFromHref, isAllowedArticleHref } from "./rules";
+import {
+  extractTitleFromHref,
+  isAllowedArticleHref,
+  parseWikipediaArticleInput,
+} from "./rules";
 
 describe("ranked classic link rules", () => {
   it.each([
@@ -78,6 +82,7 @@ describe("ranked classic link rules", () => {
       "MediaWiki talk:Common.css",
       "Template:Infobox",
       "Template talk:Infobox",
+      "TM:Infobox",
       "Help:Contents",
       "Help talk:Contents",
       "Category:Physics",
@@ -86,6 +91,12 @@ describe("ranked classic link rules", () => {
       "Portal talk:Current events",
       "Draft:Example",
       "Draft talk:Example",
+      "MOS:Example",
+      "MOS talk:Example",
+      "Event:Example",
+      "Event talk:Example",
+      "Education Program:Example",
+      "Education Program talk:Example",
       "TimedText:Example.ogv.en.srt",
       "TimedText talk:Example.ogv.en.srt",
       "Module:Example",
@@ -108,6 +119,29 @@ describe("ranked classic link rules", () => {
     }
   });
 
+  it.each([
+    "/wiki/User__talk:Example",
+    "/wiki/USER_%20_TALK:Example",
+    "/wiki/Project__talk:About",
+    "/wiki/Education__Program:Example",
+    "/wiki/education_%20_program_TALK:Example",
+  ])(
+    "collapses MediaWiki-equivalent namespace whitespace before classification: %s",
+    (href) => {
+      expect(isAllowedArticleHref(href)).toBe(false);
+      expect(extractTitleFromHref(href)).toBeNull();
+    },
+  );
+
+  it.each([
+    "/wiki/:Category:Physics",
+    "/wiki/:%20User__talk:Example",
+    "/wiki/::Template:Infobox",
+  ])("rejects leading-colon namespace escapes: %s", (href) => {
+    expect(isAllowedArticleHref(href)).toBe(false);
+    expect(extractTitleFromHref(href)).toBeNull();
+  });
+
   it("does not treat a colon in an ordinary mainspace title as a namespace", () => {
     const allowed = [
       "/wiki/Star_Trek:_The_Next_Generation",
@@ -117,6 +151,30 @@ describe("ranked classic link rules", () => {
     for (const href of allowed) {
       expect(isAllowedArticleHref(href)).toBe(true);
     }
+  });
+
+  it.each([
+    ["Mission: Impossible", "Mission: Impossible"],
+    ["Star Trek: The Next Generation", "Star Trek: The Next Generation"],
+    ["AC%2FDC", "AC/DC"],
+    ["https://en.wikipedia.org/wiki/Mission:_Impossible#Cast", "Mission: Impossible"],
+  ])("accepts valid manual mainspace titles with colons: %s", (input, title) => {
+    expect(parseWikipediaArticleInput(input)?.title).toBe(title);
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "data:text/html,unsafe",
+    "mailto:editor@example.com",
+    "ftp://en.wikipedia.org/wiki/Moon",
+    "http://en.wikipedia.org/wiki/Moon",
+    "https://fr.wikipedia.org/wiki/Moon",
+    "https://en.wikipedia.org.evil.test/wiki/Moon",
+    "https:Moon",
+    "Education__Program:Example",
+    "User__talk:Example",
+  ])("rejects unsafe, external, and namespaced manual input: %s", (input) => {
+    expect(parseWikipediaArticleInput(input)).toBeNull();
   });
 
   it("retains the original namespace regression examples", () => {

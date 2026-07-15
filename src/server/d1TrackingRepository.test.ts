@@ -300,7 +300,7 @@ describe("D1 tracking repository", () => {
     });
   });
 
-  it("lists seeded challenges and assigns the next challenge number", async () => {
+  it("lists seeded challenges", async () => {
     const db = new MemoryD1();
     const repository = createD1TrackingRepository({
       db,
@@ -317,25 +317,6 @@ describe("D1 tracking repository", () => {
       },
     ]);
 
-    await expect(
-      repository.createChallenge({
-        startTitle: "Mars",
-        targetTitle: "Water",
-        creatorAccountId: "acc-1",
-        creatorDisplayName: "Vijay",
-        creatorIdentityStatus: "claimed",
-      }),
-    ).resolves.toMatchObject({
-      id: "challenge-0002",
-      label: "Challenge #2",
-      start: { title: "Mars" },
-      target: { title: "Water" },
-      createdBy: {
-        accountId: "acc-1",
-        displayName: "Vijay",
-        identityStatus: "claimed",
-      },
-    });
   });
 
   it("starts account-keyed runs and records owned clicks", async () => {

@@ -12,7 +12,8 @@
 - Extend challenge contracts and catalog mapping without changing existing IDs.
 - Replace every legacy/v2 `MAX(sort_order)+1` path with the same sequence
   primitive used by daily acceptance. Failed/rejected transactions consume no
-  number.
+  number. The UTC date never determines the number; daily acceptance takes the
+  next global challenge number after every manual or prior daily challenge.
 - Add conditional claim/reclaim, failure-backoff, and atomic acceptance
   operations keyed by UTC date and lease token.
 - Test fresh/upgrade migrations, claim races/expiry, backlog across date change,

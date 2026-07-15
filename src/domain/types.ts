@@ -59,7 +59,9 @@ export interface Challenge {
   start: ArticleRef;
   target: ArticleRef;
   ruleset: Ruleset;
-  source: "curated";
+  origin?: "manual" | "daily";
+  dailyDate?: string | null;
+  source: "curated" | "wikipedia_random";
   createdBy?: ChallengeCreator;
 }
 
@@ -71,14 +73,18 @@ export interface ArticleLink {
   sourceSection?: string;
 }
 
+declare const sanitizedWikipediaHtmlBrand: unique symbol;
+export type SanitizedWikipediaHtml = string & {
+  readonly [sanitizedWikipediaHtmlBrand]: true;
+};
+
 export interface Article {
   pageId: number;
   canonicalTitle: string;
   revisionId: number;
   sourceUrl: string;
   attributionUrl: string;
-  sanitizedHtml: string;
-  html: string;
+  sanitizedHtml: SanitizedWikipediaHtml;
   links: ArticleLink[];
   attribution: string;
 }

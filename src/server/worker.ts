@@ -9,6 +9,8 @@ import {
   type VGamesIdentityClient,
 } from "./vgamesIdentityClient";
 import { createWikipediaChallengeValidator } from "./wikipediaChallengeValidator";
+import { createDailyChallengeCandidateSource, type DailyChallengeCandidate } from "./dailyChallengeCandidates";
+import { createWorkerWikipediaGateway } from "./workerWikipediaGateway";
 import type { RunProtocolRepository } from "./trackingRepository";
 import { legacyCreateOperationKey } from "./runProtocol";
 
@@ -35,10 +37,19 @@ export interface WorkerTracking {
 
 export interface WorkerOptions {
   createTracking?: (env: Env) => WorkerTracking;
+  createDailyCandidateSource?: () => {
+    findCandidate(): Promise<DailyChallengeCandidate>;
+  };
 }
 
 export function createWorker(options: WorkerOptions = {}) {
   const buildTracking = options.createTracking ?? createTracking;
+  const buildDailyCandidateSource = options.createDailyCandidateSource ?? (() =>
+    createDailyChallengeCandidateSource({
+      fetchImpl: fetch,
+      gateway: createWorkerWikipediaGateway(fetch),
+      onDiagnostic: logDailyCandidateDiagnostic,
+    }));
 
   return {
     async fetch(request: Request, env: Env): Promise<Response> {
@@ -68,6 +79,42 @@ export function createWorker(options: WorkerOptions = {}) {
       response.headers.set("X-Request-Id", requestId);
       logRequest(request, response.status, requestId, startedAt, response.status >= 400 ? "request_failed" : undefined);
       return response;
+    },
+
+    async scheduled(
+      controller: Pick<ScheduledController, "scheduledTime">,
+      env: Env,
+    ): Promise<void> {
+      const tracking = buildTracking(env);
+      const repository = protocol(tracking);
+      const scheduledAt = new Date(controller.scheduledTime);
+      const dailyDate = utcDateKey(scheduledAt);
+      await repository.ensureDailyChallengeJob(dailyDate);
+      const job = await repository.claimDueDailyChallengeJob();
+      if (!job) {
+        logDailyJob("no_due_job", { dailyDate });
+        return;
+      }
+
+      logDailyJob("claimed", { dailyDate: job.dailyDate, attemptCount: job.attemptCount });
+      try {
+        const candidate = await buildDailyCandidateSource().findCandidate();
+        const challenge = await repository.acceptDailyChallenge(job, candidate);
+        logDailyJob("accepted", {
+          dailyDate: job.dailyDate,
+          attemptCount: job.attemptCount,
+          challengeId: challenge.id,
+        });
+      } catch (caught) {
+        const failureCode = dailyFailureCode(caught);
+        try {
+          await repository.failDailyChallengeJob(job, failureCode);
+        } catch {
+          logDailyJob("failure_record_failed", { dailyDate: job.dailyDate, failureCode });
+        }
+        logDailyJob("failed", { dailyDate: job.dailyDate, attemptCount: job.attemptCount, failureCode });
+        throw caught;
+      }
     },
   };
 }
@@ -156,6 +203,15 @@ async function dispatchV2(
   if (runMatch?.[1] && runMatch[2]) {
     const runId = decodeURIComponent(runMatch[1]);
     const action = runMatch[2];
+    if (request.method === "GET" && action === "recovery-path") {
+      const account = await tracking.authorize(request);
+      await enforceAccountReadRateLimit(env, account.accountId, "recovery-path");
+      return json(
+        { path: await protocol(tracking).getRecoveryRunPath(account, runId) },
+        undefined,
+        corsHeaders,
+      );
+    }
     if (request.method === "GET" && action === "path") {
       return json({ path: await protocol(tracking).getPublicRunPath(runId) }, undefined, corsHeaders);
     }
@@ -365,6 +421,32 @@ function createTracking(env: Env): WorkerTracking {
   };
 }
 
+function utcDateKey(value: Date): string {
+  if (!Number.isFinite(value.getTime())) {
+    throw new Error("Scheduled event did not include a valid time.");
+  }
+  return value.toISOString().slice(0, 10);
+}
+
+function dailyFailureCode(caught: unknown): string {
+  if (caught && typeof caught === "object" && "code" in caught &&
+      typeof (caught as { code?: unknown }).code === "string") {
+    return (caught as { code: string }).code;
+  }
+  return "daily_persistence_failed";
+}
+
+function logDailyJob(event: string, fields: Record<string, string | number>): void {
+  console.info("daily_challenge_job", JSON.stringify({ event, ...fields }));
+}
+
+function logDailyCandidateDiagnostic(
+  event: string,
+  fields: Record<string, string | number | boolean>,
+): void {
+  console.info("daily_challenge_candidate", JSON.stringify({ event, ...fields }));
+}
+
 async function authorizeVGamesRequest(
   request: Request,
   identity: Pick<VGamesIdentityClient, "introspect">,
@@ -516,7 +598,7 @@ async function enforceClickRateLimit(env: Env, accountId: string): Promise<void>
 async function enforceAccountReadRateLimit(
   env: Env,
   accountId: string,
-  route: "active" | "stats",
+  route: "active" | "recovery-path" | "stats",
 ): Promise<void> {
   if (!env.ACCOUNT_READ_RATE_LIMITER) {
     throw new ApiError(

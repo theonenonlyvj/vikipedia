@@ -11,22 +11,24 @@ export function resolveApiOrigin(
   if (!configured && !options.production) {
     return "";
   }
-  const origin = readCanonicalHttpsOrigin(configured);
+  const origin = readCanonicalApiOrigin(configured, !options.production);
   if (!origin) {
     throw new Error(
       options.production
         ? "VITE_VWIKI_RACE_API_URL must be a configured HTTPS Worker origin for production builds."
-        : "VITE_VWIKI_RACE_API_URL must be a canonical HTTPS origin.",
+        : "VITE_VWIKI_RACE_API_URL must be a canonical HTTPS or loopback HTTP origin.",
     );
   }
 
   return origin;
 }
 
-function readCanonicalHttpsOrigin(value: string): string | null {
+function readCanonicalApiOrigin(value: string, allowLoopbackHttp: boolean): string | null {
   try {
     const url = new URL(value);
-    const valid = url.protocol === "https:" &&
+    const validProtocol = url.protocol === "https:" ||
+      (allowLoopbackHttp && url.protocol === "http:" && isLoopback(url.hostname));
+    const valid = validProtocol &&
       url.username === "" &&
       url.password === "" &&
       url.pathname === "/" &&
@@ -37,4 +39,8 @@ function readCanonicalHttpsOrigin(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function isLoopback(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }

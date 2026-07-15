@@ -5,12 +5,13 @@ export function compressPathForStrip(
 ): string[] {
   const cleanPath = pathTitles.filter(Boolean);
   const targetIsCurrent = cleanPath.at(-1) === targetTitle;
-  const fullPath = targetIsCurrent ? cleanPath : [...cleanPath, targetTitle];
-  const visibleCount = targetIsCurrent ? recentCount : recentCount + 1;
+  const visitedBeforeTarget = targetIsCurrent ? cleanPath.slice(0, -1) : cleanPath;
+  const fullPath = [...visitedBeforeTarget, targetTitle];
+  const visibleCount = recentCount + 1;
 
   if (fullPath.length <= visibleCount) {
     return fullPath;
   }
 
-  return ["...", ...fullPath.slice(-1 * visibleCount)];
+  return ["...", ...visitedBeforeTarget.slice(-recentCount), targetTitle];
 }

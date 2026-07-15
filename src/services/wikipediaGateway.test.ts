@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { DOMParser as WorkerDOMParser } from "linkedom/worker";
 import { createWikipediaGateway } from "./wikipediaGateway";
+import { sanitizeWikipediaArticleHtml } from "./wikipediaSanitizer";
 
 describe("wikipedia gateway", () => {
   it("P8 preserves faithful article structure and unwraps forbidden anchors", async () => {
@@ -82,6 +84,10 @@ describe("wikipedia gateway", () => {
         <p>notes-on marker <a href="/wiki/Apple_cultivation">Cultivation</a></p>
         <h2><span class="mw-headline" id="Afterword">Afterword</span></h2>
         <p>afterword survives</p>
+        <h3 id="See_also_3">See also</h3>
+        <p>nested see marker <a href="/wiki/Crabapple">Crabapple</a></p>
+        <h3 id="Cultivation">Cultivation</h3>
+        <p>nested cultivation marker <a href="/wiki/Orchard">Orchard</a></p>
         <nav><a href="/wiki/Site_navigation">site nav marker</a></nav>
         <div role="navigation"><a href="/wiki/Role_navigation">role nav marker</a></div>
         <div class="toc">toc marker</div>
@@ -98,9 +104,11 @@ describe("wikipedia gateway", () => {
     expect(article.sanitizedHtml).toContain("legacy section survives");
     expect(article.sanitizedHtml).toContain("notes-on marker");
     expect(article.sanitizedHtml).toContain("afterword survives");
+    expect(article.sanitizedHtml).toContain("nested cultivation marker");
     expect(article.links.map((link) => link.title)).toEqual([
       "History of apples",
       "Apple cultivation",
+      "Orchard",
     ]);
     for (const removed of [
       "legacy see marker",
@@ -114,6 +122,7 @@ describe("wikipedia gateway", () => {
       "navbox marker",
       "category chrome marker",
       "portal marker",
+      "nested see marker",
     ]) {
       expect(article.sanitizedHtml).not.toContain(removed);
     }
@@ -213,7 +222,7 @@ describe("wikipedia gateway", () => {
         "https://en.wikipedia.org/w/index.php?title=Apple&oldid=123456",
       attribution: "Wikipedia revision 123456, available under CC BY-SA 4.0.",
     });
-    expect(article.html).toBe(article.sanitizedHtml);
+    expect(article).not.toHaveProperty("html");
   });
 
   it("P12b deduplicates per instance, aliases canonical titles, and clear refetches", async () => {
@@ -280,11 +289,14 @@ describe("wikipedia gateway", () => {
     const superseded = gateway.getArticle("Apple", {
       signal: abortController.signal,
     });
+    const supersededRejection = expect(superseded).rejects.toMatchObject({
+      name: "AbortError",
+    });
     abortController.abort();
-    await expect(superseded).rejects.toMatchObject({ name: "AbortError" });
-
+    const currentRequest = gateway.getArticle("Apple");
+    await supersededRejection;
+    const current = await currentRequest;
     pending.resolve(parseResponse("<p>Late</p>", { revid: 111 }));
-    const current = await gateway.getArticle("Apple");
     expect(current.revisionId).toBe(222);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
@@ -306,6 +318,88 @@ describe("wikipedia gateway", () => {
     expect(current.revisionId).toBe(222);
     expect((await gateway.getArticle("Apple")).revisionId).toBe(222);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("P12g clear aborts every superseded request, not only the current cache entry", () => {
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      return new Promise<Response>(() => undefined);
+    });
+    const gateway = createWikipediaGateway({ fetchImpl });
+    const firstCaller = new AbortController();
+    const secondCaller = new AbortController();
+
+    void gateway.getArticle("Apple", { signal: firstCaller.signal }).catch(() => undefined);
+    void gateway.getArticle("Apple", { signal: secondCaller.signal }).catch(() => undefined);
+    gateway.clear();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(signals).toHaveLength(1);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it("P12h keeps a shared fetch alive while another subscriber still needs it", async () => {
+    const pending = deferred<Response>();
+    let sharedSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      sharedSignal = init?.signal as AbortSignal;
+      return pending.promise;
+    });
+    const gateway = createWikipediaGateway({ fetchImpl });
+    const firstCaller = new AbortController();
+    const secondCaller = new AbortController();
+
+    const first = gateway.getArticle("Apple", { signal: firstCaller.signal });
+    const second = gateway.getArticle("Apple", { signal: secondCaller.signal });
+    firstCaller.abort();
+
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    expect(sharedSignal?.aborted).toBe(false);
+    pending.resolve(parseResponse("<p>Shared</p>"));
+    await expect(second).resolves.toMatchObject({ canonicalTitle: "Apple" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("P12i rejects a canonical response that normalizes into a forbidden namespace", async () => {
+    const gateway = createWikipediaGateway({
+      fetchImpl: vi.fn(async () => parseResponse("<p>Body</p>", {
+        title: "User  talk:Example",
+      })),
+    });
+
+    await expect(gateway.getArticle("Example")).rejects.toMatchObject({
+      code: "invalid_response",
+    });
+  });
+
+  it("P12j applies the same move policy in browser and Worker DOM implementations", () => {
+    const rawHtml = `
+      <p><a href="/wiki/Fruit">Fruit</a></p>
+      <table><tbody><tr><td><a href="/wiki/Orchard">Orchard</a></td></tr></tbody></table>
+      <div class="navbox"><a href="/wiki/Hidden_nav">Hidden nav</a></div>
+      <h3 id="References">References</h3>
+      <p><a href="/wiki/Hidden_reference">Hidden reference</a></p>
+      <h3 id="History">History</h3>
+      <p>history survives <a href="/wiki/Apple_history">Apple history</a></p>
+    `;
+
+    const browser = sanitizeWikipediaArticleHtml(rawHtml, "Apple");
+    const worker = sanitizeWikipediaArticleHtml(rawHtml, "Apple", {
+      parseDocument: parseWorkerDocument,
+    });
+
+    expect(worker.links).toEqual(browser.links);
+    expect(worker.links.map((link) => link.title)).toEqual([
+      "Fruit",
+      "Orchard",
+      "Apple history",
+    ]);
+    for (const result of [browser, worker]) {
+      expect(result.sanitizedHtml).toContain("history survives");
+      expect(result.sanitizedHtml).not.toContain("Hidden nav");
+      expect(result.sanitizedHtml).not.toContain("Hidden reference");
+    }
   });
 });
 
@@ -336,6 +430,15 @@ function parseResponse(
 
 function parseResult(html: string): Document {
   return new DOMParser().parseFromString(html, "text/html");
+}
+
+function parseWorkerDocument(rawHtml: string): Document {
+  const document = new WorkerDOMParser().parseFromString(
+    "<!doctype html><html><head></head><body></body></html>",
+    "text/html",
+  );
+  document.body.innerHTML = rawHtml;
+  return document as unknown as Document;
 }
 
 function deferred<T>() {

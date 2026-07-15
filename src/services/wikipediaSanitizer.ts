@@ -2,7 +2,10 @@ import {
   normalizeTitle,
   parseWikipediaArticleTarget,
 } from "../domain/rules";
-import type { ArticleLink } from "../domain/types";
+import type {
+  ArticleLink,
+  SanitizedWikipediaHtml,
+} from "../domain/types";
 
 const REMOVE_SELECTORS = [
   "[role='navigation']",
@@ -204,15 +207,22 @@ const WIKIMEDIA_MEDIA_HOSTS = new Set([
 ]);
 
 export interface SanitizedWikipediaArticle {
-  sanitizedHtml: string;
+  sanitizedHtml: SanitizedWikipediaHtml;
   links: ArticleLink[];
+}
+
+export interface WikipediaSanitizerOptions {
+  parseDocument?: (rawHtml: string) => Document;
 }
 
 export function sanitizeWikipediaArticleHtml(
   rawHtml: string,
   currentTitle: string,
+  options: WikipediaSanitizerOptions = {},
 ): SanitizedWikipediaArticle {
-  const document = new DOMParser().parseFromString(rawHtml, "text/html");
+  const document = options.parseDocument
+    ? options.parseDocument(rawHtml)
+    : new DOMParser().parseFromString(rawHtml, "text/html");
   const root = document.body;
 
   for (const element of root.querySelectorAll(REMOVE_SELECTORS.join(","))) {
@@ -227,7 +237,7 @@ export function sanitizeWikipediaArticleHtml(
 
   return {
     links,
-    sanitizedHtml: root.innerHTML,
+    sanitizedHtml: root.innerHTML as SanitizedWikipediaHtml,
   };
 }
 
@@ -262,12 +272,19 @@ function rewriteArticleLinks(
 }
 
 function removeRuleExcludedSections(root: HTMLElement): void {
-  const headings = [...root.querySelectorAll("h2, .mw-heading2")];
+  const headingSelector = [2, 3, 4, 5, 6]
+    .flatMap((level) => [`h${level}`, `.mw-heading${level}`])
+    .join(", ");
+  const headings = [...root.querySelectorAll(headingSelector)];
   const handled = new Set<Element>();
   for (const candidate of headings) {
-    const heading = candidate.matches("h2")
+    const level = sectionHeadingLevel(candidate);
+    if (level === null) {
+      continue;
+    }
+    const heading = candidate.matches(`h${level}`)
       ? candidate
-      : candidate.querySelector("h2") ?? candidate;
+      : candidate.querySelector(`h${level}`) ?? candidate;
     const sectionLabels = [
       heading.textContent ?? "",
       heading.getAttribute("id") ?? "",
@@ -278,17 +295,22 @@ function removeRuleExcludedSections(root: HTMLElement): void {
     }
 
     const section = heading.closest("section[data-mw-section-id]");
-    if (section) {
+    const firstSectionHeading = section?.querySelector(headingSelector) ?? null;
+    if (
+      section &&
+      firstSectionHeading &&
+      (firstSectionHeading === heading || firstSectionHeading.contains(heading))
+    ) {
       section.remove();
       continue;
     }
 
-    const sectionStart = heading.closest(".mw-heading2") ?? heading;
+    const sectionStart = heading.closest(`.mw-heading${level}`) ?? heading;
     if (handled.has(sectionStart)) {
       continue;
     }
     handled.add(sectionStart);
-    removeLegacySectionFrom(sectionStart);
+    removeLegacySectionFrom(sectionStart, level);
   }
 }
 
@@ -297,9 +319,9 @@ function isExcludedSectionLabel(label: string): boolean {
   return REMOVE_SECTION_TITLES.has(labelWithoutDuplicateSuffix);
 }
 
-function removeLegacySectionFrom(sectionStart: Element): void {
+function removeLegacySectionFrom(sectionStart: Element, level: number): void {
   let sibling = sectionStart.nextElementSibling;
-  while (sibling && !isTopLevelSectionHeading(sibling)) {
+  while (sibling && !isSectionBoundary(sibling, level)) {
     const next = sibling.nextElementSibling;
     sibling.remove();
     sibling = next;
@@ -307,8 +329,18 @@ function removeLegacySectionFrom(sectionStart: Element): void {
   sectionStart.remove();
 }
 
-function isTopLevelSectionHeading(element: Element): boolean {
-  return element.matches("h2, .mw-heading2");
+function isSectionBoundary(element: Element, removedLevel: number): boolean {
+  const level = sectionHeadingLevel(element);
+  return level !== null && level <= removedLevel;
+}
+
+function sectionHeadingLevel(element: Element): number | null {
+  for (let level = 2; level <= 6; level += 1) {
+    if (element.matches(`h${level}, .mw-heading${level}`)) {
+      return level;
+    }
+  }
+  return null;
 }
 
 function normalizeSectionLabel(value: string): string {
@@ -484,7 +516,7 @@ function sanitizeTokenAttribute(
 }
 
 function removeComments(root: HTMLElement): void {
-  const iterator = root.ownerDocument.createNodeIterator(root, NodeFilter.SHOW_COMMENT);
+  const iterator = root.ownerDocument.createNodeIterator(root, 128);
   const comments: Node[] = [];
   let node: Node | null;
   while ((node = iterator.nextNode())) {
