@@ -43,7 +43,10 @@ instead of 502ing — keep the order anyway. Also recorded in
    validation (link cache table, fail-closed for ranked runs, async `ranked_eligible` promotion).
    Everything competitive here is gated on this.
 2. **Migration 0003 resets competitive history at cutover** (legacy runs → `ranked_eligible=0`,
-   only 3 challenges survive). Vijay must accept or mitigate before this branch deploys.
+   only 3 challenges survive). **→ DECIDED (Vijay, 2026-07-15): NOT acceptable — no history
+   reset; carry over ALL history and database structure.** Binding requirement:
+   `docs/decisions/2026-07-15-no-history-reset-at-cutover.md`. Rework 0003 (and 0004 if
+   affected) before any production cutover.
 3. **Race-the-ghost** (replay a rival's public path as a pace ghost + finish delta) is the
    council's top engagement feature for this game — zero new data, and it doubles as visible
    anti-cheat. Build only after #1.
