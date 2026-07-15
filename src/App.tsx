@@ -810,8 +810,13 @@ function IdentityPrompt({
                   autoFocus
                   maxLength={24}
                   onChange={(event) => onDisplayNameChange(event.target.value)}
+                  placeholder="e.g. a nickname"
                   value={displayNameDraft}
                 />
+                <p className="name-hint">
+                  Your name and winning paths appear on the public leaderboard —
+                  use a nickname if you&apos;d rather stay anonymous.
+                </p>
               </label>
             ) : (
               <div className="identity-current-name">
@@ -845,8 +850,13 @@ function IdentityPrompt({
                   autoFocus
                   maxLength={24}
                   onChange={(event) => onDisplayNameChange(event.target.value)}
+                  placeholder="e.g. a nickname"
                   value={displayNameDraft}
                 />
+                <p className="name-hint">
+                  Your name and winning paths appear on the public leaderboard —
+                  use a nickname if you&apos;d rather stay anonymous.
+                </p>
               </label>
             ) : null}
             <label className="name-control">

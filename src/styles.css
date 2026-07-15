@@ -356,6 +356,16 @@ h1 {
   outline: 2px solid rgba(13, 235, 215, 0.22);
 }
 
+.name-hint {
+  margin: 0;
+  max-width: 240px;
+  color: #9fb8bd;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.35;
+  text-transform: none;
+}
+
 .account-chip {
   align-self: end;
   color: #0debd7;

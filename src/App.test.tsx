@@ -75,6 +75,29 @@ describe("VWiki Race app", () => {
     });
   });
 
+  it("discloses that names and winning paths are public and suggests a nickname", async () => {
+    const storage = memoryStorage();
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: /start challenge #1/i }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", { name: /save your stats/i }),
+    ).toBeVisible();
+    expect(screen.getByLabelText(/display name/i)).toHaveAttribute(
+      "placeholder",
+      "e.g. a nickname",
+    );
+    expect(
+      screen.getByText(/appear on the public leaderboard/i),
+    ).toBeVisible();
+  });
+
   it("starts immediately for claimed sessions", async () => {
     const storage = memoryStorage();
     storage.setItem(
