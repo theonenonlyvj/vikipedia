@@ -6,7 +6,16 @@ import "@fontsource/fredoka/500.css";
 import "@fontsource/fredoka/600.css";
 import "@fontsource/fredoka/700.css";
 import App from "./App";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { resolveApiOrigin } from "./services/apiOrigin";
+import { createErrorReporter } from "./services/errorReporting";
 import "./styles.css";
+
+const apiOrigin = resolveApiOrigin(import.meta.env.VITE_VWIKI_RACE_API_URL, {
+  production: import.meta.env.PROD,
+});
+const errorReporter = createErrorReporter({ apiOrigin });
+errorReporter.installGlobalHandlers(window);
 
 const root = document.getElementById("root");
 
@@ -16,6 +25,8 @@ if (!root) {
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary reporter={errorReporter}>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

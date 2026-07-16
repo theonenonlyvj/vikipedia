@@ -107,6 +107,21 @@ ol {
   place-items: center;
 }
 
+.crash-screen {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  gap: 14px;
+  padding: 20px;
+  text-align: center;
+  font-family: var(--viota-ui-font);
+}
+
+.crash-screen p {
+  color: var(--text);
+  font-size: 1.1rem;
+}
+
 .entry-gate {
   width: min(520px, 100%);
   border: 1px solid rgba(130, 246, 239, 0.24);
