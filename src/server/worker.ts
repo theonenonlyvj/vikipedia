@@ -26,6 +26,7 @@ export interface Env {
   CLICK_RATE_LIMITER: RateLimiter;
   ACCOUNT_READ_RATE_LIMITER: RateLimiter;
   CHALLENGE_CREATE_RATE_LIMITER: RateLimiter;
+  CLIENT_ERROR_RATE_LIMITER?: RateLimiter;
 }
 
 type AuthorizedVGamesAccount = AuthorizedAccount;
@@ -71,14 +72,14 @@ export function createWorker(options: WorkerOptions = {}) {
       const tracking = buildTracking(env);
 
       try {
-        const v2Response = await dispatchV2(request, url, tracking, corsHeaders, env);
+        const v2Response = await dispatchV2(request, url, tracking, corsHeaders, env, requestId);
         if (v2Response) {
           response = v2Response;
         } else {
           response = await dispatchLegacy(request, url, tracking, corsHeaders, env);
         }
       } catch (caught) {
-        response = error(caught, corsHeaders);
+        response = error(caught, corsHeaders, requestId);
       }
       response.headers.set("X-Request-Id", requestId);
       logRequest(request, response.status, requestId, startedAt, response.status >= 400 ? "request_failed" : undefined);
@@ -147,7 +148,12 @@ async function dispatchV2(
   tracking: WorkerTracking,
   corsHeaders: HeadersInit,
   env: Env,
+  requestId: string,
 ): Promise<Response | null> {
+  if (request.method === "POST" && url.pathname === "/api/client-error") {
+    return handleClientError(request, env, corsHeaders, requestId);
+  }
+
   if (!url.pathname.startsWith("/api/v2/")) {
     return null;
   }
@@ -518,10 +524,10 @@ function readBearerToken(request: Request): string {
   return match[1].trim();
 }
 
-async function readJson(request: Request): Promise<unknown> {
+async function readJson(request: Request, maxBytes = 16 * 1024): Promise<unknown> {
   const declaredLength = request.headers.get("Content-Length");
-  if (declaredLength && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > 16 * 1024)) {
-    throw new ApiError("body_too_large", "Request body must be 16 KiB or smaller.", 413);
+  if (declaredLength && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxBytes)) {
+    throw new ApiError("body_too_large", `Request body must be ${maxBytes / 1024} KiB or smaller.`, 413);
   }
   try {
     const reader = request.body?.getReader();
@@ -532,9 +538,9 @@ async function readJson(request: Request): Promise<unknown> {
       const next = await reader.read();
       if (next.done) break;
       total += next.value.byteLength;
-      if (total > 16 * 1024) {
+      if (total > maxBytes) {
         await reader.cancel();
-        throw new ApiError("body_too_large", "Request body must be 16 KiB or smaller.", 413);
+        throw new ApiError("body_too_large", `Request body must be ${maxBytes / 1024} KiB or smaller.`, 413);
       }
       chunks.push(next.value);
     }
@@ -630,6 +636,90 @@ function clickInput(value: unknown) {
       ? undefined
       : boundedString(body.clientObservedAt, "invalid_client_observed_at", 64),
   };
+}
+
+const CLIENT_ERROR_SOURCES = new Set([
+  "window",
+  "unhandledrejection",
+  "error-boundary",
+  "manual",
+]);
+
+const CLIENT_ERROR_BODY_MAX_BYTES = 8 * 1024;
+
+interface ClientErrorInput {
+  source: string;
+  name: string;
+  message: string;
+  stack?: string;
+  url?: string;
+  userAgent?: string;
+  ts?: string;
+}
+
+async function handleClientError(
+  request: Request,
+  env: Env,
+  corsHeaders: HeadersInit,
+  requestId: string,
+): Promise<Response> {
+  await enforceClientErrorRateLimit(env, clientErrorRateLimitKey(request));
+  const input = clientErrorInput(await readJson(request, CLIENT_ERROR_BODY_MAX_BYTES));
+  console.error(JSON.stringify({ type: "client_error", requestId, ...input }));
+  return new Response(null, { status: 204, headers: corsHeaders });
+}
+
+function clientErrorInput(value: unknown): ClientErrorInput {
+  const body = requireObject(value);
+  if (typeof body.source !== "string" || !CLIENT_ERROR_SOURCES.has(body.source)) {
+    throw new ApiError("invalid_source", "Request field is invalid.", 400);
+  }
+  if (typeof body.name !== "string" || !body.name) {
+    throw new ApiError("invalid_name", "Request field is invalid.", 400);
+  }
+  if (typeof body.message !== "string" || !body.message) {
+    throw new ApiError("invalid_message", "Request field is invalid.", 400);
+  }
+  return {
+    source: body.source,
+    name: body.name,
+    message: body.message.slice(0, 512),
+    stack: optionalClientErrorString(body.stack, "invalid_stack", 4096),
+    url: optionalClientErrorString(body.url, "invalid_url", 512),
+    userAgent: optionalClientErrorString(body.userAgent, "invalid_user_agent", 512),
+    ts: optionalClientErrorString(body.ts, "invalid_ts", 64),
+  };
+}
+
+function optionalClientErrorString(
+  value: unknown,
+  code: string,
+  maxLength: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new ApiError(code, "Request field is invalid.", 400);
+  }
+  return value.slice(0, maxLength);
+}
+
+function clientErrorRateLimitKey(request: Request): string {
+  return request.headers.get("CF-Connecting-IP") ?? "unknown-client";
+}
+
+async function enforceClientErrorRateLimit(env: Env, key: string): Promise<void> {
+  if (!env.CLIENT_ERROR_RATE_LIMITER) {
+    return;
+  }
+  const result = await env.CLIENT_ERROR_RATE_LIMITER.limit({ key });
+  if (!result.success) {
+    throw new ApiError(
+      "client_error_rate_limited",
+      "Too many client error reports. Try again shortly.",
+      429,
+      60,
+    );
+  }
 }
 
 async function enforceClickRateLimit(env: Env, accountId: string): Promise<void> {
@@ -874,7 +964,7 @@ function json(value: unknown, init: ResponseInit | undefined, corsHeaders: Heade
   });
 }
 
-function error(caught: unknown, corsHeaders: HeadersInit): Response {
+function error(caught: unknown, corsHeaders: HeadersInit, requestId: string): Response {
   if (caught instanceof ApiError) {
     return json(
       { error: { code: caught.code, message: caught.message } },
@@ -887,9 +977,36 @@ function error(caught: unknown, corsHeaders: HeadersInit): Response {
       corsHeaders,
     );
   }
+  const { name, message, stack } = describeUnhandledError(caught);
+  console.error(JSON.stringify({ type: "unhandled_error", requestId, name, message, stack }));
   return json(
     { error: { code: "internal_error", message: "Something went wrong." } },
     { status: 500 },
     corsHeaders,
   );
+}
+
+function describeUnhandledError(
+  caught: unknown,
+): { name: string; message: string; stack?: string } {
+  if (caught instanceof Error) {
+    return {
+      name: caught.name,
+      message: caught.message,
+      stack: caught.stack ? caught.stack.slice(0, 4096) : undefined,
+    };
+  }
+  return {
+    name: "NonErrorThrown",
+    message: stringifyUnknownThrown(caught).slice(0, 4096),
+  };
+}
+
+function stringifyUnknownThrown(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
