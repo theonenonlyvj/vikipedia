@@ -8,8 +8,8 @@ gate.
 
 ## Operational Gates
 
-- Complete responsive production browser QA and resolve any P0/P1 council
-  finding before declaring the friend release complete.
+- Repeat responsive production browser QA and resolve any P0/P1 council finding
+  before each friend release.
 - Run the complete release gate in the Cloudflare handoff on every shipment.
 - Deploy Worker before Pages when both changed, then run the documented
   production smoke test.

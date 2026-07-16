@@ -2,10 +2,8 @@
 
 Date: 2026-07-16
 
-Status: pre-release handoff. Implementation exists locally, but final council
-review, responsive production QA, push, Worker deployment, Pages deployment,
-and production smoke are unverified until the Release Record is populated. Do
-not assume production serves this release.
+Status: deployed friend release. The API Worker and Pages production deployment
+listed in the Release Record passed direct and responsive smoke checks.
 
 ## Product In One Paragraph
 
@@ -212,8 +210,6 @@ latency and request cost materially worse.
 
 ## Release Record
 
-To be completed after final council review and deployment:
-
 - Client tests: `322/322` passed before deployment.
 - Worker tests: `77/77` passed before deployment.
 - Build/bundle: TypeScript, Vite production build, and bundle verification passed.
@@ -225,11 +221,21 @@ To be completed after final council review and deployment:
   two accepted daily jobs with zero writes performed by the audit.
 - Private backup (required only for data changes/new migrations): not required;
   this release has no migration or direct data mutation.
-- Git push:
+- Git push: release/runtime commits through `bb45a4f` pushed to GitHub `main`.
 - Worker deployment/version and UTC time: `vwikirace-api` version
   `d699460b-a34a-4b6d-a3c7-5139311b1f0d`, verified by direct smoke at
   `2026-07-16T17:42:07Z`. Catalog returned all five active challenges with
   manual=`solo`, daily=`daily`, correct dates/CORS/cache; Challenge #3 retained
   both existing leaderboard rows and returned `Cache-Control: no-store`.
-- Pages mechanism, commit/deployment ID, URL, and UTC time:
-- Desktop/mobile production smoke:
+- Pages mechanism, commit/deployment ID, URL, and UTC time: manual Wrangler
+  deploy (Git provider `No`), source `bb45a4f`, deployment
+  `31a577e2-b537-4ee0-b218-8ed85536e214`,
+  `https://31a577e2.vwikirace.pages.dev`, verified at
+  `2026-07-16T17:47:13Z`; canonical URL is `https://vwikirace.pages.dev`.
+- Desktop/mobile production smoke: canonical Challenge #3 deep link, target
+  preview, five-row catalog, `Today`/historical daily badges, identity gate,
+  and two-row preserved leaderboard passed. Desktop 1440x900 and mobile
+  360x800, 390x844, and 430x932 showed no horizontal overflow. At 360px the
+  dialog remained inside the dynamic viewport, locked body scroll, and exposed
+  five 44px controls. Active/sync/result behavior remains covered by the 322
+  automated client tests; no synthetic production run was created just for QA.
