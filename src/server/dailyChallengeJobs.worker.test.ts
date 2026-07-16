@@ -3,7 +3,12 @@ import { applyD1Migrations, createScheduledController } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthorizedAccount } from "../domain/types";
 import { createD1TrackingRepository } from "./d1TrackingRepository";
-import { createWorker, type WorkerTracking } from "./worker";
+import {
+  centralDailyDateAtFive,
+  createWorker,
+  type Env as WorkerEnv,
+  type WorkerTracking,
+} from "./worker";
 
 beforeEach(async () => {
   await env.VWIKI_RACE_DB.exec(`
@@ -15,6 +20,28 @@ beforeEach(async () => {
 });
 
 describe("daily challenge D1 jobs", () => {
+  it.each([
+    ["summer", "2026-07-15T10:00:00.000Z", "2026-07-15"],
+    ["winter", "2026-01-15T11:00:00.000Z", "2026-01-15"],
+  ])("recognizes the 5:00 AM Central %s trigger", (_season, timestamp, dailyDate) => {
+    expect(centralDailyDateAtFive(new Date(timestamp))).toBe(dailyDate);
+  });
+
+  it.each([
+    ["summer", "2026-07-15T11:00:00.000Z"],
+    ["winter", "2026-01-15T10:00:00.000Z"],
+  ])("exits before building tracking for the alternate %s trigger", async (_season, timestamp) => {
+    const createTracking = vi.fn();
+    const worker = createWorker({ createTracking });
+
+    await worker.scheduled(createScheduledController({
+      scheduledTime: new Date(timestamp),
+      cron: timestamp.includes("T10:") ? "0 10 * * *" : "0 11 * * *",
+    }), env as unknown as WorkerEnv);
+
+    expect(createTracking).not.toHaveBeenCalled();
+  });
+
   it("applies migrations 0001 through 0004 in order and seeds the global sequence", async () => {
     await applyD1Migrations(
       env.MIGRATION_TEST_DB,
@@ -156,7 +183,7 @@ describe("daily challenge D1 jobs", () => {
     ).first()).resolves.toEqual({ next_attempt_at: "2026-07-16T03:00:00.000Z" });
   });
 
-  it("creates the UTC scheduled-date job and lets only the lease winner fetch Wikipedia", async () => {
+  it("creates the Central scheduled-date job and lets only the lease winner fetch Wikipedia", async () => {
     const repository = createD1TrackingRepository({ db: env.VWIKI_RACE_DB });
     const findCandidate = vi.fn(async () => ({
       startTitle: "Start",
@@ -178,12 +205,12 @@ describe("daily challenge D1 jobs", () => {
 
     await Promise.all([
       worker.scheduled(createScheduledController({
-        scheduledTime: new Date("2026-07-15T07:00:00.000Z"),
-        cron: "7 * * * *",
+        scheduledTime: new Date("2026-07-15T10:00:00.000Z"),
+        cron: "0 10 * * *",
       }), env),
       worker.scheduled(createScheduledController({
-        scheduledTime: new Date("2026-07-15T07:00:00.000Z"),
-        cron: "7 * * * *",
+        scheduledTime: new Date("2026-07-15T10:00:00.000Z"),
+        cron: "0 10 * * *",
       }), env),
     ]);
 

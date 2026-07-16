@@ -86,10 +86,17 @@ export function createWorker(options: WorkerOptions = {}) {
       controller: Pick<ScheduledController, "scheduledTime">,
       env: Env,
     ): Promise<void> {
+      const scheduledAt = new Date(controller.scheduledTime);
+      const dailyDate = centralDailyDateAtFive(scheduledAt);
+      if (!dailyDate) {
+        logDailyJob("outside_central_window", {
+          scheduledAt: scheduledAt.toISOString(),
+        });
+        return;
+      }
+
       const tracking = buildTracking(env);
       const repository = protocol(tracking);
-      const scheduledAt = new Date(controller.scheduledTime);
-      const dailyDate = utcDateKey(scheduledAt);
       await repository.ensureDailyChallengeJob(dailyDate);
       const job = await repository.claimDueDailyChallengeJob();
       if (!job) {
@@ -432,11 +439,30 @@ export function resolveVGamesFetch(
   return (input, init) => binding.fetch(input, init);
 }
 
-function utcDateKey(value: Date): string {
+const CENTRAL_DAILY_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Chicago",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+export function centralDailyDateAtFive(value: Date): string | null {
   if (!Number.isFinite(value.getTime())) {
     throw new Error("Scheduled event did not include a valid time.");
   }
-  return value.toISOString().slice(0, 10);
+
+  const parts = Object.fromEntries(
+    CENTRAL_DAILY_FORMATTER.formatToParts(value)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  if (parts.hour !== "05" || parts.minute !== "00") {
+    return null;
+  }
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function dailyFailureCode(caught: unknown): string {

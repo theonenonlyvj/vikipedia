@@ -3,7 +3,7 @@ main = "src/server/worker.ts"
 compatibility_date = "2026-07-08"
 
 [triggers]
-crons = ["7 * * * *"]
+crons = ["0 10 * * *", "0 11 * * *"]
 
 [[d1_databases]]
 binding = "VWIKI_RACE_DB"

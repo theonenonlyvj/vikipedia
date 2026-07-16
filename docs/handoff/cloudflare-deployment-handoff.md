@@ -30,8 +30,10 @@ paths, account stats, and challenge leaderboards. Realtime rooms are not used.
    for old `/api/*` clients. They do not bind D1 or duplicate game logic.
 4. VGames issues and introspects account tokens. VWiki Race stores canonical
    VGames account IDs and aliases, never a separate player namespace.
-5. The API Worker runs `7 * * * *` in UTC. Only a claimed D1 daily-job lease may
-   contact Wikipedia; accepted days make no Wikipedia request.
+5. The API Worker receives `0 10 * * *` and `0 11 * * *` UTC triggers, then runs
+   only the one that is 5:00 AM in `America/Chicago`. The other trigger exits
+   before D1. Only a claimed D1 daily-job lease may contact Wikipedia; accepted
+   days make no Wikipedia request.
 
 ## Data And Game Guarantees
 
@@ -127,8 +129,8 @@ Do not reverse these steps.
 7. Deploy the Pages project from the reviewed commit.
 8. Smoke-test a guest/claimed start, one click, completion, path disclosure,
    stats, direct challenge link, and challenge creation.
-9. Confirm the cron trigger is present. Do not manually fan out scheduled
-   invocations; one normal invocation is enough for a smoke test.
+9. Confirm both cron triggers are present. Do not manually fan out scheduled
+   invocations; the Central-time gate chooses the valid trigger.
 
 This ordering prevents a new Worker from querying columns that are not yet in
 D1 and prevents Pages from pointing at an unverified API deployment.
