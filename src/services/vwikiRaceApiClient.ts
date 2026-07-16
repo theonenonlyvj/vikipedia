@@ -372,9 +372,15 @@ function isLeaderboardRow(value: unknown): value is RankedLeaderboardRow {
     hasString(value, "challengeId") &&
     hasString(value, "accountId") &&
     hasString(value, "displayName") &&
+    (value.status === "completed" || value.status === "abandoned") &&
+    typeof value.isRepeatRun === "boolean" &&
+    hasString(value, "startedAt") &&
     hasNumber(value, "elapsedMs") &&
     hasNumber(value, "clickCount") &&
-    hasString(value, "completedAt") &&
+    hasOptionalString(value, "completedAt") &&
+    hasOptionalString(value, "abandonedAt") &&
+    (value.status !== "completed" || hasString(value, "completedAt")) &&
+    (value.status !== "abandoned" || hasString(value, "abandonedAt")) &&
     (value.protocolVersion === 1 || value.protocolVersion === 2);
 }
 

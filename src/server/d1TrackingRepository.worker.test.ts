@@ -1541,7 +1541,7 @@ describe("Task 4 D1 projections", () => {
     )).resolves.toBe(122);
   });
 
-  it("projects one best protocol-2 completion per canonical account and caps at 100", async () => {
+  it("caps the ordered terminal-attempt leaderboard at 100", async () => {
     for (let index = 0; index < 101; index += 1) {
       await insertCompletedV2({
         id: `leaderboard-${String(index).padStart(3, "0")}`,
@@ -1562,6 +1562,79 @@ describe("Task 4 D1 projections", () => {
     expect(rows[0]?.runId).toBe("leaderboard-000");
     expect(rows.some((row) => row.runId === "repeat-slower")).toBe(false);
     expect(rows[0]).not.toHaveProperty("pathPreview");
+  });
+
+  it("shows every completion plus meaningful DNFs and derives repeat attempts", async () => {
+    await insertCompletedV2({
+      id: "other-fast",
+      accountId: "other-account",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    await insertCompletedV2({
+      id: "same-first",
+      accountId: account.accountId,
+      elapsedMs: 5_000,
+      completedAt: "2026-07-14T01:00:05.000Z",
+    });
+    await insertCompletedV2({
+      id: "same-repeat",
+      accountId: account.accountId,
+      elapsedMs: 6_000,
+      completedAt: "2026-07-14T01:01:06.000Z",
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      `UPDATE runs SET started_at='2026-07-14T01:01:00.000Z',
+         created_at='2026-07-14T01:01:00.000Z' WHERE id='same-repeat'`,
+    ).run();
+
+    await insertLegacyRun({ id: "same-dnf", accountId: account.accountId });
+    await env.VWIKI_RACE_DB.prepare(
+      `UPDATE runs SET status='abandoned', protocol_version=2, click_count=2,
+         started_at='2026-07-14T01:02:00.000Z',
+         abandoned_at='2026-07-14T01:02:15.000Z', elapsed_ms=NULL,
+         wall_elapsed_ms=NULL, updated_at='2026-07-14T01:02:15.000Z'
+       WHERE id='same-dnf'`,
+    ).run();
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO run_path_steps
+         (run_id, step_number, source_title, clicked_anchor_text,
+          destination_title, destination_page_id, elapsed_since_start_ms, created_at)
+       VALUES ('same-dnf', 1, 'Moon', 'space', 'Outer space', 1, 7000,
+               '2026-07-14T01:02:07.000Z'),
+              ('same-dnf', 2, 'Outer space', 'orbit', 'Orbit', 2, 12000,
+               '2026-07-14T01:02:12.000Z')`,
+    ).run();
+
+    await insertLegacyRun({ id: "zero-click-dnf", accountId: "zero-account" });
+    await env.VWIKI_RACE_DB.prepare(
+      `UPDATE runs SET status='abandoned', protocol_version=2,
+         abandoned_at='2026-07-14T01:03:01.000Z', elapsed_ms=1000,
+         wall_elapsed_ms=1000 WHERE id='zero-click-dnf'`,
+    ).run();
+
+    const { repository } = fixture();
+    const rows = await repository.listLeaderboard("challenge-0001");
+
+    expect(rows.map((row) => ({
+      id: row.runId,
+      status: row.status,
+      repeat: row.isRepeatRun,
+    }))).toEqual([
+      { id: "other-fast", status: "completed", repeat: false },
+      { id: "same-first", status: "completed", repeat: false },
+      { id: "same-repeat", status: "completed", repeat: true },
+      { id: "same-dnf", status: "abandoned", repeat: true },
+    ]);
+    expect(rows.at(-1)).toMatchObject({
+      abandonedAt: "2026-07-14T01:02:15.000Z",
+      clickCount: 2,
+      elapsedMs: 15_000,
+      rank: 4,
+      startedAt: "2026-07-14T01:02:00.000Z",
+    });
+    await expect(repository.getPublicRunPath("same-dnf")).resolves.toHaveLength(2);
+    expect(rows.some((row) => row.runId === "zero-click-dnf")).toBe(false);
   });
 
   it("keeps completed protocol-1 runs ranked alongside verified protocol-2 runs", async () => {

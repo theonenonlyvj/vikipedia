@@ -1005,6 +1005,15 @@ h1 {
   font-weight: 900;
 }
 
+.leaderboard li.dnf {
+  border-color: rgba(255, 173, 159, 0.34);
+  background: rgba(255, 118, 95, 0.06);
+}
+
+.leaderboard li.dnf .rank {
+  color: #ffad9f;
+}
+
 .leaderboard-player {
   display: flex;
   min-width: 0;
@@ -1033,6 +1042,11 @@ h1 {
 .provenance-badge.verified {
   border: 1px solid rgba(13, 235, 215, 0.65);
   color: #82f6ef;
+}
+
+.provenance-badge.repeat {
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #d9e7e9;
 }
 
 .leaderboard details {

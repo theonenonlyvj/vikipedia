@@ -12,6 +12,9 @@ const row = (
   challengeId: "challenge-0001",
   accountId: `account-${id}`,
   displayName: id,
+  status: "completed",
+  isRepeatRun: false,
+  startedAt: "2026-07-14T00:00:00Z",
   elapsedMs,
   clickCount,
   completedAt,
@@ -35,7 +38,7 @@ describe("server leaderboard ranking", () => {
     ]);
   });
 
-  it("keeps one best run per account and breaks final ties by run id", () => {
+  it("keeps every attempt and breaks final ties by run id", () => {
     const ranked = rankLeaderboardRows([
       { ...row("slower-repeat", 7000, 2, "2026-07-14T01:00:00Z"), accountId: "same" },
       { ...row("fastest", 4000, 4, "2026-07-14T01:00:00Z"), accountId: "same" },
@@ -51,6 +54,7 @@ describe("server leaderboard ranking", () => {
       "same-time-more-clicks",
       "a-first",
       "z-last",
+      "slower-repeat",
     ]);
     expect(ranked[0]).not.toHaveProperty("pathPreview");
   });

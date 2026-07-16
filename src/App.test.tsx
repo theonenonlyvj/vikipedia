@@ -957,6 +957,7 @@ describe("VWiki Race app", () => {
 
     await user.click(screen.getByRole("button", { name: /end run/i }));
     await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+    await waitFor(() => expect(leaderboardCalls(fetchImpl, "challenge-0001")).toBe(2));
     window.history.pushState({}, "", "/?challenge=challenge-0002");
     window.dispatchEvent(new PopStateEvent("popstate"));
     expect((await screen.findAllByText(/mars -> water/i)).length).toBeGreaterThan(0);
@@ -1001,6 +1002,34 @@ describe("VWiki Race app", () => {
     expect(screen.getByText("Historical")).toBeVisible();
     expect(screen.getByText("Verified")).toBeVisible();
     expect(screen.getAllByText("1 click")).toHaveLength(2);
+  });
+
+  it("shows repeat attempts and keeps a meaningful DNF below completed runs", async () => {
+    const fetchImpl = createFetchMock({
+      leaderboardRows: [
+        leaderboardRow({ isRepeatRun: true }),
+        leaderboardRow({
+          rank: 2,
+          runId: "run-dnf",
+          status: "abandoned",
+          isRepeatRun: true,
+          elapsedMs: 15_000,
+          clickCount: 2,
+          completedAt: undefined,
+          abandonedAt: "2026-07-14T01:02:15.000Z",
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /leaderboard/i }));
+
+    expect(await screen.findByText("#1")).toBeVisible();
+    expect(screen.getByText("DNF")).toBeVisible();
+    expect(screen.getAllByText("Repeat run")).toHaveLength(2);
+    expect(screen.getByText("View winning path")).toBeVisible();
+    expect(screen.getByText("View path")).toBeVisible();
   });
 
   it("loads account stats only from the authenticated account-stats projection", async () => {
@@ -1587,6 +1616,9 @@ function createFetchMock(options?: {
                 challengeId: "challenge-0001",
                 accountId: "acc-guest",
                 displayName: "Vijay",
+                status: "completed",
+                isRepeatRun: false,
+                startedAt: "2026-07-14T01:00:00.000Z",
                 elapsedMs: 1500,
                 clickCount: 1,
                 completedAt: "2026-07-14T01:00:01.500Z",
@@ -1750,7 +1782,7 @@ function activeRunFixture(override: Record<string, unknown> = {}) {
 }
 
 function leaderboardRow(override: Record<string, unknown> = {}) {
-  return { rank: 1, runId: "run-ranked", challengeId: "challenge-0001", accountId: "acc-1", displayName: "Vijay", elapsedMs: 1500, clickCount: 1, completedAt: "2026-07-14T01:00:01.500Z", protocolVersion: 2, ...override };
+  return { rank: 1, runId: "run-ranked", challengeId: "challenge-0001", accountId: "acc-1", displayName: "Vijay", status: "completed", isRepeatRun: false, startedAt: "2026-07-14T01:00:00.000Z", elapsedMs: 1500, clickCount: 1, completedAt: "2026-07-14T01:00:01.500Z", protocolVersion: 2, ...override };
 }
 
 function twoChallenges(): Challenge[] {

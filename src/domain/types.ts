@@ -181,9 +181,13 @@ export interface ServerLeaderboardRow {
   challengeId: string;
   accountId: string;
   displayName: string;
+  status: "completed" | "abandoned";
+  isRepeatRun: boolean;
+  startedAt: string;
   elapsedMs: number;
   clickCount: number;
-  completedAt: string;
+  completedAt?: string;
+  abandonedAt?: string;
   protocolVersion: 1 | 2;
 }
 

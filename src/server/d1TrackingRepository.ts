@@ -975,7 +975,13 @@ export function createD1TrackingRepository(options: {
         db.prepare(
           `UPDATE runs
            SET status = 'abandoned', abandoned_at = ?, updated_at = ?,
-               ranked_eligible = 0
+               ranked_eligible = 0,
+               wall_elapsed_ms = max(0, cast(round(
+                 (julianday(?) - julianday(started_at)) * 86400000
+               ) as integer)),
+               elapsed_ms = max(0, cast(round(
+                 (julianday(?) - julianday(started_at)) * 86400000
+               ) as integer))
            WHERE id = ?
              AND coalesce(canonical_account_id, account_id) = ?
              AND status = 'active'
@@ -990,6 +996,8 @@ export function createD1TrackingRepository(options: {
                  AND resource_id = ? AND outcome_status = 'pending'
              )`,
         ).bind(
+          receivedAt,
+          receivedAt,
           receivedAt,
           receivedAt,
           runId,
@@ -1375,35 +1383,61 @@ export function createD1TrackingRepository(options: {
           `WITH resolved AS (
              SELECT r.id, r.challenge_id,
                     coalesce(a.canonical_account_id, r.canonical_account_id, r.account_id) account_id,
-                    r.elapsed_ms, r.click_count, r.completed_at, r.protocol_version
+                    r.status, r.started_at,
+                    CASE WHEN r.status = 'abandoned' THEN coalesce(
+                      r.elapsed_ms,
+                      r.wall_elapsed_ms,
+                      max(0, cast(round(
+                        (julianday(r.abandoned_at) - julianday(r.started_at)) * 86400000
+                      ) AS integer))
+                    ) ELSE r.elapsed_ms END elapsed_ms,
+                    r.click_count,
+                    r.completed_at, r.abandoned_at, r.protocol_version,
+                    r.ranked_eligible
              FROM runs r
              LEFT JOIN account_aliases a
                ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
-             WHERE r.challenge_id = ? AND r.status = 'completed'
-               AND r.elapsed_ms IS NOT NULL AND r.completed_at IS NOT NULL
-               AND (
-                 (r.protocol_version = 2 AND r.ranked_eligible = 1)
-                 OR r.protocol_version = 1
-               )
-           ), best_per_account AS (
+             WHERE r.challenge_id = ?
+           ), attempted AS (
              SELECT *, row_number() over (
-               PARTITION BY account_id
-               ORDER BY elapsed_ms, click_count, completed_at, id
-             ) account_position
+               PARTITION BY challenge_id, account_id
+               ORDER BY started_at, id
+             ) attempt_number
              FROM resolved
+           ), eligible AS (
+             SELECT *, CASE WHEN status = 'completed' THEN 0 ELSE 1 END result_group
+             FROM attempted
+             WHERE (
+               status = 'completed' AND elapsed_ms IS NOT NULL
+               AND completed_at IS NOT NULL AND (
+                 (protocol_version = 2 AND ranked_eligible = 1)
+                 OR protocol_version = 1
+               )
+             ) OR (
+               status = 'abandoned' AND click_count > 0
+               AND elapsed_ms IS NOT NULL AND abandoned_at IS NOT NULL
+             )
            ), ranked AS (
              SELECT *, row_number() over (
-               ORDER BY elapsed_ms, click_count, completed_at, id
+               ORDER BY result_group,
+                 CASE WHEN result_group = 0 THEN elapsed_ms END ASC,
+                 CASE WHEN result_group = 0 THEN click_count END ASC,
+                 CASE WHEN result_group = 0 THEN completed_at END ASC,
+                 CASE WHEN result_group = 1 THEN elapsed_ms END DESC,
+                 CASE WHEN result_group = 1 THEN click_count END DESC,
+                 CASE WHEN result_group = 1 THEN abandoned_at END ASC,
+                 id
              ) rank
-             FROM best_per_account WHERE account_position = 1
+             FROM eligible
            )
            SELECT ranked.id, ranked.challenge_id, ranked.account_id,
-                  ranked.elapsed_ms, ranked.click_count, ranked.completed_at,
-                  ranked.protocol_version, ranked.rank,
+                  ranked.status, ranked.started_at, ranked.elapsed_ms,
+                  ranked.click_count, ranked.completed_at, ranked.abandoned_at,
+                  ranked.protocol_version, ranked.rank, ranked.attempt_number,
                   p.public_name AS display_name
            FROM ranked
            LEFT JOIN account_profiles p ON p.account_id = ranked.account_id
-           ORDER BY ranked.elapsed_ms, ranked.click_count, ranked.completed_at, ranked.id
+           ORDER BY ranked.rank
            LIMIT 100`,
         )
         .bind(challengeId)
@@ -1414,9 +1448,13 @@ export function createD1TrackingRepository(options: {
         challengeId: row.challenge_id,
         accountId: row.account_id,
         displayName: row.display_name ?? "Unknown",
+        status: row.status,
+        isRepeatRun: Number(row.attempt_number) > 1,
+        startedAt: row.started_at,
         elapsedMs: Number(row.elapsed_ms),
         clickCount: Number(row.click_count),
-        completedAt: row.completed_at,
+        completedAt: row.completed_at ?? undefined,
+        abandonedAt: row.abandoned_at ?? undefined,
         protocolVersion: Number(row.protocol_version) as 1 | 2,
       }));
     },
@@ -1449,12 +1487,15 @@ export function createD1TrackingRepository(options: {
                 p.elapsed_since_start_ms, p.created_at
          FROM run_path_steps p
          JOIN runs r ON r.id = p.run_id
-         WHERE r.id = ? AND r.status = 'completed'
-           AND r.elapsed_ms IS NOT NULL AND r.completed_at IS NOT NULL
-           AND (
-             (r.protocol_version = 2 AND r.ranked_eligible = 1)
-             OR r.protocol_version = 1
-           )
+         WHERE r.id = ? AND (
+           (r.status = 'completed' AND r.elapsed_ms IS NOT NULL
+             AND r.completed_at IS NOT NULL AND (
+               (r.protocol_version = 2 AND r.ranked_eligible = 1)
+               OR r.protocol_version = 1
+             ))
+           OR (r.status = 'abandoned' AND r.click_count > 0
+             AND r.abandoned_at IS NOT NULL)
+         )
          ORDER BY p.step_number`,
       ).bind(runId).all<PathStepRow>();
       if (!results.length) {
@@ -2525,6 +2566,9 @@ async function legacyCompletionRow(
     challengeId: run.challenge_id,
     accountId: run.canonical_account_id ?? run.account_id,
     displayName: profile?.public_name ?? "Unknown",
+    status: "completed",
+    isRepeatRun: false,
+    startedAt: run.started_at,
     elapsedMs: Number(run.elapsed_ms ?? 0),
     clickCount: Number(run.click_count),
     completedAt: run.completed_at ?? "",
@@ -2843,11 +2887,15 @@ interface LeaderboardRunRow {
   id: string;
   challenge_id: string;
   account_id: string;
+  status: "completed" | "abandoned";
+  started_at: string;
   elapsed_ms: number;
   click_count: number;
-  completed_at: string;
+  completed_at?: string | null;
+  abandoned_at?: string | null;
   protocol_version: number;
   rank: number;
+  attempt_number: number;
   display_name?: string | null;
 }
 

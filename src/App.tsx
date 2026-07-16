@@ -681,12 +681,16 @@ export default function App({
     sessionForEnd: VGamesIdentitySession | null = identitySession,
   ) {
     if (!sessionForEnd) return;
+    const endedChallengeId = race.recoveryRun?.challengeId ?? race.challenge?.id ?? null;
     const outcome = await race.endRun(
       sessionForEnd.token,
       race.recoveryRun?.protocolVersion === 1 ? 1 : undefined,
     );
     if (outcome.status === "abandoned" || outcome.status === "completed") {
       setEndConfirmationOpen(false);
+      if (endedChallengeId) {
+        await refreshLeaderboard(endedChallengeId);
+      }
     } else if (outcome.status === "unauthorized") {
       clearStaleIdentity({ type: "end-run" });
       setEndConfirmationOpen(false);
@@ -1637,8 +1641,10 @@ function LeaderboardPanel({
       {leaderboard.length ? (
         <ol className="leaderboard">
           {leaderboard.map((row) => (
-            <li key={row.runId}>
-              <span className="rank">#{row.rank}</span>
+            <li className={row.status === "abandoned" ? "dnf" : undefined} key={row.runId}>
+              <span className="rank">
+                {row.status === "abandoned" ? "DNF" : `#${row.rank}`}
+              </span>
               <span className="leaderboard-player">
                 <span>{row.displayName}</span>
                 <span
@@ -1651,6 +1657,9 @@ function LeaderboardPanel({
                 >
                   {row.protocolVersion === 1 ? "Historical" : "Verified"}
                 </span>
+                {row.isRepeatRun ? (
+                  <span className="provenance-badge repeat">Repeat run</span>
+                ) : null}
               </span>
               <span>{formatElapsed(row.elapsedMs)}</span>
               <span>
@@ -1659,7 +1668,9 @@ function LeaderboardPanel({
               <details onToggle={(event) => {
                 if (event.currentTarget.open) onDisclosePath(row.runId);
               }}>
-                <summary>View winning path</summary>
+                <summary>
+                  {row.status === "abandoned" ? "View path" : "View winning path"}
+                </summary>
                 {runPaths[row.runId] ? (
                   <ol className="winning-path">
                     {runPaths[row.runId].map((step) => (
