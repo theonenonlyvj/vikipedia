@@ -2,6 +2,10 @@ name = "vwikirace-api"
 main = "src/server/worker.ts"
 compatibility_date = "2026-07-08"
 
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [triggers]
 crons = ["0 10 * * *", "0 11 * * *", "17 * * * *"]
 
@@ -33,3 +37,8 @@ simple = { limit = 10, period = 60 }
 name = "CHALLENGE_CREATE_RATE_LIMITER"
 namespace_id = "51003"
 simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "CLIENT_ERROR_RATE_LIMITER"
+namespace_id = "51004"
+simple = { limit = 20, period = 60 }
