@@ -33,35 +33,61 @@ export type VGamesIntrospection =
 export function createVGamesIdentityClient(options: {
   baseUrl: string;
   fetchImpl?: typeof fetch;
+  requestTimeoutMs?: number;
 }): VGamesIdentityClient {
   const fetchImpl = options.fetchImpl ?? fetch;
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
 
   const request = async (
     path: string,
     body: unknown,
     init: { token?: string } = {},
   ): Promise<unknown> => {
-    const response = await fetchImpl(`${baseUrl}${path}`, {
-      method: "POST",
-      headers: {
-        ...(init.token ? { Authorization: `Bearer ${init.token}` } : {}),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    const payload = await readJson(response);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+    try {
+      const response = await fetchImpl(`${baseUrl}${path}`, {
+        method: "POST",
+        headers: {
+          ...(init.token ? { Authorization: `Bearer ${init.token}` } : {}),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const payload = await readJson(response);
 
-    if (!response.ok) {
-      const failure = readVGamesError(payload, response.status);
+      if (!response.ok) {
+        const failure = readVGamesError(payload, response.status);
+        throw new ApiError(
+          failure.code,
+          failure.message,
+          response.status,
+          readRetryAfterSeconds(response.headers),
+        );
+      }
+
+      return payload;
+    } catch (caught) {
+      if (caught instanceof ApiError) {
+        throw caught;
+      }
+      if (controller.signal.aborted) {
+        throw new ApiError(
+          "vgames_identity_timeout",
+          "VGames identity timed out.",
+          504,
+        );
+      }
       throw new ApiError(
-        failure.code,
-        failure.message,
-        response.status,
+        "vgames_identity_unavailable",
+        "VGames identity is temporarily unavailable.",
+        503,
       );
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return payload;
   };
 
   return {
@@ -243,4 +269,21 @@ function readVGamesError(
     code: "vgames_identity_failed",
     message: `VGames identity request failed with status ${status}`,
   };
+}
+
+function readRetryAfterSeconds(headers: Headers): number | null {
+  const value = headers.get("Retry-After");
+  if (!value) {
+    return null;
+  }
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.ceil(seconds);
+  }
+
+  const retryAt = Date.parse(value);
+  return Number.isNaN(retryAt)
+    ? null
+    : Math.max(Math.ceil((retryAt - Date.now()) / 1_000), 0);
 }

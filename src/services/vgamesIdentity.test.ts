@@ -105,6 +105,37 @@ describe("VGames identity repository", () => {
       status: "ghost",
     });
   });
+
+  it("keeps identity usable in tab memory when browser storage is blocked", () => {
+    const storage: StorageLike = {
+      getItem: () => {
+        throw new DOMException("Storage blocked", "SecurityError");
+      },
+      setItem: () => {
+        throw new DOMException("Storage blocked", "SecurityError");
+      },
+      removeItem: () => {
+        throw new DOMException("Storage blocked", "SecurityError");
+      },
+    };
+    const repository = createVGamesIdentityRepository(storage, fixedCrypto());
+
+    const credential = repository.getDeviceCredential();
+    expect(repository.getDeviceCredential()).toBe(credential);
+    expect(repository.getSession()).toBeNull();
+
+    const session = {
+      accountId: "acc-1",
+      displayName: "Vijay",
+      token: "jwt-1",
+      status: "claimed" as const,
+    };
+    repository.saveSession(session);
+    expect(repository.getSession()).toEqual(session);
+
+    repository.clearSession();
+    expect(repository.getSession()).toBeNull();
+  });
 });
 
 describe("VGames identity client", () => {
@@ -217,6 +248,36 @@ describe("VGames identity client", () => {
         }),
       }),
     );
+  });
+
+  it("retries one transient login failure with the same operation key", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { code: "vgames_identity_unavailable", message: "Try again." } },
+          { status: 503 },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json({
+        accountId: "acc-claimed",
+        displayName: "casey",
+        token: "jwt-claimed",
+        status: "claimed",
+      }));
+    const client = createVGamesIdentityClient(fetchImpl, { apiOrigin });
+
+    await expect(client.login({
+      deviceCredential: "cred-123456789012",
+      username: "casey",
+      password: "secret-pass",
+    })).resolves.toMatchObject({ accountId: "acc-claimed", status: "claimed" });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers as Record<string, string>;
+    const secondHeaders = fetchImpl.mock.calls[1]?.[1]?.headers as Record<string, string>;
+    expect(firstHeaders["Idempotency-Key"]).toMatch(/\S/);
+    expect(secondHeaders["Idempotency-Key"]).toBe(firstHeaders["Idempotency-Key"]);
   });
 
   it("surfaces identity API error messages", async () => {

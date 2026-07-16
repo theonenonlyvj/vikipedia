@@ -24,6 +24,25 @@ function memoryStorage(): Storage {
 }
 
 describe("VWiki Race app", () => {
+  it("renders when the browser blocks access to localStorage", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("Storage blocked", "SecurityError");
+      },
+    });
+
+    try {
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} />);
+      expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, "localStorage", descriptor);
+      }
+    }
+  });
+
   beforeEach(() => {
     window.history.pushState({}, "", "/");
   });
@@ -289,6 +308,104 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /belongs to an existing vgames account/i,
     );
+  });
+
+  it("submits password-manager autofill values even when React change events did not fire", async () => {
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(screen.getByRole("button", { name: /log in \/ existing/i }));
+    const username = screen.getByLabelText(/^username$/i) as HTMLInputElement;
+    const password = screen.getByLabelText(/^password$/i) as HTMLInputElement;
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    valueSetter?.call(username, "vijay");
+    valueSetter?.call(password, "secret-pass");
+
+    fireEvent.submit(password.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      const loginCall = fetchImpl.mock.calls.find(
+        ([input]) => String(input) === apiUrl("/api/v2/identity/login"),
+      );
+      expect(readJsonBody(loginCall?.[1])).toMatchObject({
+        username: "vijay",
+        password: "secret-pass",
+      });
+    });
+  });
+
+  it("locks duplicate login submissions and shows visible progress", async () => {
+    const pendingLogin = createDeferredResponse({
+      accountId: "acc-claimed",
+      displayName: "vijay",
+      token: "jwt-claimed",
+      status: "claimed",
+    });
+    const baseFetch = createFetchMock();
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl("/api/v2/identity/login")) {
+        return pendingLogin.promise;
+      }
+      return baseFetch(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(screen.getByRole("button", { name: /log in \/ existing/i }));
+    await user.type(screen.getByLabelText(/^username$/i), "vijay");
+    await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
+    const form = screen.getByLabelText(/^password$/i).closest("form") as HTMLFormElement;
+
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(fetchImpl.mock.calls.filter(
+      ([input]) => String(input) === apiUrl("/api/v2/identity/login"),
+    )).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /logging in/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^guest$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^create new$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /log in \/ existing/i })).toBeDisabled();
+
+    pendingLogin.resolve();
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+  });
+
+  it("keeps a successful login in memory when browser storage rejects the write", async () => {
+    const repository: VGamesIdentityRepository = {
+      clearSession: vi.fn(),
+      getDeviceCredential: () => "device-credential",
+      getSession: () => null,
+      saveSession: () => {
+        throw new DOMException("Storage blocked", "SecurityError");
+      },
+    };
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        identityRepository={repository}
+        storage={memoryStorage()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(screen.getByRole("button", { name: /log in \/ existing/i }));
+    await user.type(screen.getByLabelText(/^username$/i), "vijay");
+    await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
+    await user.click(screen.getByRole("button", { name: /^log in$/i }));
+
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull();
+    expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent("vijay");
   });
 
   it("starts immediately for claimed sessions", async () => {

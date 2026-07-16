@@ -32,6 +32,7 @@ import {
   type VGamesIdentityClient,
   type VGamesIdentityRepository,
   type VGamesIdentitySession,
+  type StorageLike,
 } from "./services/vgamesIdentity";
 import {
   createVWikiRaceApiClient,
@@ -49,7 +50,7 @@ interface AppProps {
   fetchImpl?: typeof fetch;
   now?: () => number;
   todayUtc?: () => string;
-  storage?: Storage;
+  storage?: StorageLike;
   apiClient?: VWikiRaceApiClient;
   identityClient?: VGamesIdentityClient;
   identityRepository?: VGamesIdentityRepository;
@@ -58,6 +59,10 @@ interface AppProps {
 type ModeState = RacePhase;
 type TabKey = "play" | "leaderboard" | "challenges" | "stats";
 type AuthMode = "guest" | "create" | "login";
+interface LoginFormInput {
+  username: string;
+  password: string;
+}
 interface LeaderboardProjection {
   challengeId: string;
   rows: RankedLeaderboardRow[];
@@ -81,13 +86,26 @@ type AuthPromptIntent =
 const defaultFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 const defaultNow = () => performance.now();
 const defaultTodayUtc = () => new Date().toISOString().slice(0, 10);
+const unavailableBrowserStorage: StorageLike = {
+  getItem: () => null,
+  setItem: () => undefined,
+  removeItem: () => undefined,
+};
+
+function readBrowserStorage(): StorageLike {
+  try {
+    return globalThis.localStorage ?? unavailableBrowserStorage;
+  } catch {
+    return unavailableBrowserStorage;
+  }
+}
 
 export default function App({
   apiOrigin,
   fetchImpl = defaultFetch,
   now = defaultNow,
   todayUtc = defaultTodayUtc,
-  storage = globalThis.localStorage,
+  storage,
   apiClient: injectedApiClient,
   identityClient: injectedIdentityClient,
   identityRepository: injectedIdentityRepository,
@@ -122,6 +140,7 @@ export default function App({
   const recoveredToken = useRef<string | null>(null);
   const challengeLockRef = useRef(false);
   const startLockRef = useRef(false);
+  const loginRequestLock = useRef(false);
 
   const apiClient = useMemo(
     () => injectedApiClient ?? createVWikiRaceApiClient(fetchImpl, { apiOrigin }),
@@ -131,9 +150,13 @@ export default function App({
     () => injectedIdentityClient ?? createVGamesIdentityClient(fetchImpl, { apiOrigin }),
     [apiOrigin, fetchImpl, injectedIdentityClient],
   );
+  const identityStorage = useMemo(
+    () => storage ?? readBrowserStorage(),
+    [storage],
+  );
   const identityRepository = useMemo(
-    () => injectedIdentityRepository ?? createVGamesIdentityRepository(storage),
-    [injectedIdentityRepository, storage],
+    () => injectedIdentityRepository ?? createVGamesIdentityRepository(identityStorage),
+    [identityStorage, injectedIdentityRepository],
   );
   const wikipediaGateway = useMemo(
     () => createWikipediaGateway({ fetchImpl }),
@@ -533,19 +556,20 @@ export default function App({
     }
   }
 
-  async function login() {
-    if (!authPrompt) {
+  async function login(input: LoginFormInput) {
+    if (!authPrompt || loginRequestLock.current) {
       return;
     }
 
     const prompt = authPrompt;
-    const username = usernameDraft.trim();
-    const password = passwordDraft;
+    const username = input.username.trim().toLowerCase();
+    const password = input.password;
     if (!username || !password) {
       setError("Enter your username and password.");
       return;
     }
 
+    loginRequestLock.current = true;
     setAuthBusy(true);
     try {
       const loggedInSession = await identityClient.login({
@@ -559,12 +583,18 @@ export default function App({
     } catch (caught) {
       setError(vgamesIdentityErrorMessage(caught, "Could not log in."));
     } finally {
+      loginRequestLock.current = false;
       setAuthBusy(false);
     }
   }
 
   function persistIdentitySession(nextSession: VGamesIdentitySession) {
-    identityRepository.saveSession(nextSession);
+    try {
+      identityRepository.saveSession(nextSession);
+    } catch {
+      // A successful login remains usable for this tab even when browser
+      // privacy settings block durable storage.
+    }
     recoveredToken.current = nextSession.token;
     statsRequest.current += 1;
     setAccountStatsProjection(null);
@@ -865,7 +895,7 @@ export default function App({
           }}
           onContinueAsGuest={() => void continueAsGuest()}
           onDisplayNameChange={setDisplayNameDraft}
-          onLogin={() => void login()}
+          onLogin={(input) => void login(input)}
           onPasswordChange={setPasswordDraft}
           onConfirmPasswordChange={setConfirmPasswordDraft}
           onSetAuthMode={(mode) => {
@@ -931,7 +961,7 @@ function IdentityPrompt({
   onClose: () => void;
   onContinueAsGuest: () => void;
   onDisplayNameChange: (value: string) => void;
-  onLogin: () => void;
+  onLogin: (input: LoginFormInput) => void;
   onPasswordChange: (value: string) => void;
   onConfirmPasswordChange: (value: string) => void;
   onSetAuthMode: (mode: AuthMode) => void;
@@ -983,6 +1013,7 @@ function IdentityPrompt({
         >
           <button
             aria-pressed={authMode === "guest"}
+            disabled={authBusy}
             onClick={() => onSetAuthMode("guest")}
             type="button"
           >
@@ -990,6 +1021,7 @@ function IdentityPrompt({
           </button>
           <button
             aria-pressed={authMode === "create"}
+            disabled={authBusy}
             onClick={() => onSetAuthMode("create")}
             type="button"
           >
@@ -997,6 +1029,7 @@ function IdentityPrompt({
           </button>
           <button
             aria-pressed={authMode === "login"}
+            disabled={authBusy}
             onClick={() => onSetAuthMode("login")}
             type="button"
           >
@@ -1101,20 +1134,28 @@ function IdentityPrompt({
 
         {authMode === "login" ? (
           <form
+            aria-busy={authBusy}
             className="identity-form"
             onSubmit={(event) => {
               event.preventDefault();
-              onLogin();
+              const form = new FormData(event.currentTarget);
+              onLogin({
+                username: String(form.get("username") ?? ""),
+                password: String(form.get("password") ?? ""),
+              });
             }}
           >
             <label className="name-control">
               <span>Username</span>
               <input
                 aria-label="Username"
+                autoCapitalize="none"
                 autoComplete="username"
                 autoFocus
-                maxLength={24}
+                maxLength={20}
+                name="username"
                 onChange={(event) => onUsernameChange(event.target.value)}
+                spellCheck={false}
                 value={usernameDraft}
               />
             </label>
@@ -1123,13 +1164,14 @@ function IdentityPrompt({
               <input
                 aria-label="Password"
                 autoComplete="current-password"
+                name="password"
                 onChange={(event) => onPasswordChange(event.target.value)}
                 type="password"
                 value={passwordDraft}
               />
             </label>
             <button disabled={authBusy} type="submit">
-              Log in
+              {authBusy ? "Logging in..." : "Log in"}
             </button>
           </form>
         ) : null}

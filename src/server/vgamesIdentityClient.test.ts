@@ -222,4 +222,146 @@ describe("server VGames identity client", () => {
       status: 409,
     });
   });
+
+  it("preserves an upstream Retry-After boundary", async () => {
+    const client = createVGamesIdentityClient({
+      baseUrl: "https://vgames.example",
+      fetchImpl: vi.fn(async () => Response.json(
+        { error: "rate_limited" },
+        { status: 429, headers: { "Retry-After": "7" } },
+      )),
+    });
+
+    await expect(client.login({
+      deviceCredential: "cred-123456789012",
+      username: "vijay",
+      password: "secret-pass",
+    })).rejects.toMatchObject({
+      code: "rate_limited",
+      retryAfterSeconds: 7,
+      status: 429,
+    });
+  });
+
+  it("maps a rejected service-binding request to a retryable API error", async () => {
+    const client = createVGamesIdentityClient({
+      baseUrl: "https://vgames.example",
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError("binding unavailable");
+      }),
+    });
+
+    await expect(client.login({
+      deviceCredential: "cred-123456789012",
+      username: "vijay",
+      password: "secret-pass",
+    })).rejects.toMatchObject({
+      code: "vgames_identity_unavailable",
+      status: 503,
+    });
+  });
+
+  it("aborts a hung service-binding request at the upstream deadline", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(
+          Response.json({ accountId: "too-late", token: "too-late" }),
+        ), 30);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      }));
+    const options = {
+      baseUrl: "https://vgames.example",
+      fetchImpl,
+      requestTimeoutMs: 5,
+    };
+    const client = createVGamesIdentityClient(options);
+    const request = client.login({
+      deviceCredential: "cred-123456789012",
+      username: "vijay",
+      password: "secret-pass",
+    });
+    const outcome = request.then(
+      (value) => ({ status: "resolved" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+
+    await vi.advanceTimersByTimeAsync(30);
+    expect(await outcome).toMatchObject({
+      status: "rejected",
+      error: {
+        code: "vgames_identity_timeout",
+        status: 504,
+      },
+    });
+    vi.useRealTimers();
+  });
+
+  it("keeps the upstream deadline active while consuming the response body", async () => {
+    vi.useFakeTimers();
+    const observed: { bindingSignal: AbortSignal | null } = { bindingSignal: null };
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observed.bindingSignal = init?.signal ?? null;
+      const body = new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => {
+            controller.error(new DOMException("Aborted", "AbortError"));
+          });
+        },
+      });
+      return new Response(body, {
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const client = createVGamesIdentityClient({
+      baseUrl: "https://vgames.example",
+      fetchImpl,
+      requestTimeoutMs: 5,
+    });
+    const outcome = client.login({
+      deviceCredential: "cred-123456789012",
+      username: "vijay",
+      password: "secret-pass",
+    }).then(
+      (value) => ({ status: "resolved" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+
+    await vi.advanceTimersByTimeAsync(30);
+    expect(observed.bindingSignal?.aborted).toBe(true);
+    expect(await outcome).toMatchObject({
+      status: "rejected",
+      error: {
+        code: "vgames_identity_timeout",
+        status: 504,
+      },
+    });
+    vi.useRealTimers();
+  });
+
+  it("maps a failed response body stream to a retryable API error", async () => {
+    const fetchImpl = vi.fn(async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.error(new TypeError("binding body failed"));
+      },
+    }), {
+      headers: { "Content-Type": "application/json" },
+    }));
+    const client = createVGamesIdentityClient({
+      baseUrl: "https://vgames.example",
+      fetchImpl,
+    });
+
+    await expect(client.login({
+      deviceCredential: "cred-123456789012",
+      username: "vijay",
+      password: "secret-pass",
+    })).rejects.toMatchObject({
+      code: "vgames_identity_unavailable",
+      status: 503,
+    });
+  });
 });

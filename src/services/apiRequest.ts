@@ -21,6 +21,7 @@ export type ApiRequestOptions<T> = {
 };
 
 const DEFAULT_RETRY_DELAY_MS = 250;
+const MAX_AUTOMATIC_RETRY_DELAY_MS = 2_000;
 export const ABSOLUTE_API_URL_MARKER = "VWIKI_ABSOLUTE_API_URL_REQUIRED";
 
 export const defaultApiFetch: typeof fetch = (input, init) =>
@@ -42,7 +43,11 @@ export async function requestJson<T>(
       if (attempt + 1 >= attempts || !isRetryable(error, options)) {
         throw error;
       }
-      await delay(error.retryAfterMs ?? DEFAULT_RETRY_DELAY_MS);
+      const retryDelayMs = error.retryAfterMs ?? DEFAULT_RETRY_DELAY_MS;
+      if (retryDelayMs > MAX_AUTOMATIC_RETRY_DELAY_MS) {
+        throw error;
+      }
+      await delay(retryDelayMs);
     }
   }
 

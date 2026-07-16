@@ -86,42 +86,81 @@ export function createVGamesIdentityRepository(
   storage: StorageLike,
   cryptoLike: CryptoLike = crypto,
 ): VGamesIdentityRepository {
+  let memoryCredential: string | null = null;
+  let memorySession: VGamesIdentitySession | null | undefined;
+  const safeStorage: StorageLike = {
+    getItem(key) {
+      try {
+        return storage.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    setItem(key, value) {
+      try {
+        storage.setItem(key, value);
+      } catch {
+        // The in-memory values below keep identity usable for this tab.
+      }
+    },
+    removeItem(key) {
+      try {
+        storage.removeItem(key);
+      } catch {
+        // A blocked storage backend cannot retain data written by this session.
+      }
+    },
+  };
+
   return {
     getDeviceCredential() {
-      const existing = storage.getItem(CREDENTIAL_STORAGE_KEY);
-      if (existing) {
-        return existing;
+      if (memoryCredential) {
+        return memoryCredential;
       }
 
-      const legacy = storage.getItem(LEGACY_CREDENTIAL_STORAGE_KEY);
+      const existing = safeStorage.getItem(CREDENTIAL_STORAGE_KEY);
+      if (existing) {
+        memoryCredential = existing;
+        return memoryCredential;
+      }
+
+      const legacy = safeStorage.getItem(LEGACY_CREDENTIAL_STORAGE_KEY);
       if (legacy) {
-        storage.setItem(CREDENTIAL_STORAGE_KEY, legacy);
-        storage.removeItem(LEGACY_CREDENTIAL_STORAGE_KEY);
-        return legacy;
+        memoryCredential = legacy;
+        safeStorage.setItem(CREDENTIAL_STORAGE_KEY, legacy);
+        safeStorage.removeItem(LEGACY_CREDENTIAL_STORAGE_KEY);
+        return memoryCredential;
       }
 
       const bytes = cryptoLike.getRandomValues(new Uint8Array(32));
-      const credential = toHex(bytes);
-      storage.setItem(CREDENTIAL_STORAGE_KEY, credential);
-      return credential;
+      memoryCredential = toHex(bytes);
+      safeStorage.setItem(CREDENTIAL_STORAGE_KEY, memoryCredential);
+      return memoryCredential;
     },
 
     getSession() {
-      const session = readSession(storage, SESSION_STORAGE_KEY);
-      if (session) {
-        return session;
+      if (memorySession !== undefined) {
+        return memorySession;
       }
 
-      const legacySession = readSession(storage, LEGACY_SESSION_STORAGE_KEY);
-      if (legacySession) {
-        storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(legacySession));
-        storage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+      const session = readSession(safeStorage, SESSION_STORAGE_KEY);
+      if (session) {
+        memorySession = session;
+        return memorySession;
       }
-      return legacySession;
+
+      const legacySession = readSession(safeStorage, LEGACY_SESSION_STORAGE_KEY);
+      if (legacySession) {
+        safeStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(legacySession));
+        safeStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+      }
+      memorySession = legacySession;
+      return memorySession;
     },
 
     saveSession(session) {
-      storage.setItem(
+      memorySession = session;
+      safeStorage.setItem(
         SESSION_STORAGE_KEY,
         JSON.stringify({
           accountId: session.accountId,
@@ -130,12 +169,13 @@ export function createVGamesIdentityRepository(
           status: session.status,
         }),
       );
-      storage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+      safeStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
     },
 
     clearSession() {
-      storage.removeItem(SESSION_STORAGE_KEY);
-      storage.removeItem(LEGACY_SESSION_STORAGE_KEY);
+      memorySession = null;
+      safeStorage.removeItem(SESSION_STORAGE_KEY);
+      safeStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
     },
   };
 }
@@ -160,7 +200,15 @@ export function createVGamesIdentityClient(
       return identityRequest(fetchImpl, `${apiOrigin}/api/v2/identity/secure`, input);
     },
     login(input) {
-      return identityRequest(fetchImpl, `${apiOrigin}/api/v2/identity/login`, input);
+      return identityRequest(
+        fetchImpl,
+        `${apiOrigin}/api/v2/identity/login`,
+        input,
+        {
+          idempotencyKey: crypto.randomUUID(),
+          retry: "idempotent-once",
+        },
+      );
     },
   };
 }
@@ -169,12 +217,17 @@ async function identityRequest(
   fetchImpl: typeof fetch,
   path: string,
   body: unknown,
+  options: {
+    idempotencyKey?: string;
+    retry?: "idempotent-once" | "never";
+  } = {},
 ): Promise<VGamesIdentitySession> {
   return requestJson(fetchImpl, path, {
     method: "POST",
     body,
     timeoutMs: 15_000,
-    retry: "never",
+    retry: options.retry ?? "never",
+    idempotencyKey: options.idempotencyKey,
     validate: isSession,
   });
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveApiOrigin } from "./apiOrigin";
-import { requestJson } from "./apiRequest";
+import { requestJson, type ApiRequestError } from "./apiRequest";
 
 interface ChallengesResponse {
   challenges: Array<{ id: string }>;
@@ -107,6 +107,34 @@ describe("requestJson", () => {
       }),
     ).resolves.toEqual({ challenges: [{ id: "challenge-1" }] });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces a long Retry-After immediately instead of locking the UI", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(async () => Response.json(
+        { error: { code: "unavailable", message: "Try later." } },
+        { status: 503, headers: { "Retry-After": "60" } },
+      ));
+      let outcome: ApiRequestError | null = null;
+      void requestJson(fetchImpl, requestUrl, {
+        ...requestOptions,
+        retry: "read-once",
+      }).catch((error: ApiRequestError) => {
+        outcome = error;
+      });
+
+      await vi.advanceTimersByTimeAsync(2_001);
+
+      expect(outcome).toMatchObject({
+        code: "unavailable",
+        retryAfterMs: 60_000,
+        status: 503,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts a request that exceeds its timeout", async () => {
