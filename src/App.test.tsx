@@ -136,6 +136,7 @@ describe("VWiki Race app", () => {
     const identityDialog = await screen.findByRole("dialog", { name: /save your stats/i });
     expect(identityDialog).toBeVisible();
     expect(within(identityDialog).getByRole("group", { name: /identity options/i })).toBeVisible();
+    await user.click(within(identityDialog).getByRole("button", { name: /^guest$/i }));
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
     await user.click(screen.getByRole("button", { name: /continue as guest/i }));
 
@@ -166,6 +167,7 @@ describe("VWiki Race app", () => {
     expect(
       await screen.findByRole("dialog", { name: /save your stats/i }),
     ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^guest$/i }));
     expect(screen.getByLabelText(/display name/i)).toHaveAttribute(
       "placeholder",
       "e.g. a nickname",
@@ -173,6 +175,120 @@ describe("VWiki Race app", () => {
     expect(
       screen.getByText(/appear on the public leaderboard/i),
     ).toBeVisible();
+  });
+
+  it("defaults the start gate to a VGames Create New account flow", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    const options = within(dialog).getByRole("group", { name: /identity options/i });
+    expect(within(options).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Guest",
+      "Create New",
+      "Log In / Existing",
+    ]);
+    expect(within(options).getByRole("button", { name: /create new/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(dialog).getByText(/one account works across all v games/i)).toBeVisible();
+    expect(within(dialog).getByLabelText(/vgames username/i)).toBeVisible();
+    expect(within(dialog).getByLabelText(/confirm password/i)).toBeVisible();
+    expect(within(dialog).queryByLabelText(/^display name$/i)).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: /continue as guest/i })).toBeNull();
+  });
+
+  it("creates a VGames account with the username as its display name", async () => {
+    const storage = memoryStorage();
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.type(screen.getByLabelText(/vgames username/i), "vijay");
+    await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
+    await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
+    await user.click(screen.getByRole("button", { name: /create vgames account/i }));
+
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(JSON.parse(storage.getItem("vwiki-race:vgames-session") ?? "{}")).toEqual({
+      accountId: "acc-claimed",
+      displayName: "vijay",
+      token: "jwt-claimed",
+      status: "claimed",
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      apiUrl("/api/v2/identity/guest"),
+      expect.objectContaining({ body: expect.stringContaining('"displayName":"vijay"') }),
+    );
+  });
+
+  it("blocks mismatched account passwords without making an identity request", async () => {
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.type(screen.getByLabelText(/vgames username/i), "vijay");
+    await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
+    await user.type(screen.getByLabelText(/confirm password/i), "different-pass");
+    await user.click(screen.getByRole("button", { name: /create vgames account/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/passwords do not match/i);
+    expect(fetchImpl).not.toHaveBeenCalledWith(
+      apiUrl("/api/v2/identity/guest"),
+      expect.anything(),
+    );
+    expect(fetchImpl).not.toHaveBeenCalledWith(
+      apiUrl("/api/v2/identity/secure"),
+      expect.anything(),
+    );
+  });
+
+  it("explains when a VGames username is already taken", async () => {
+    const baseFetch = createFetchMock();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl("/api/v2/identity/secure")) {
+        return jsonError("username_taken", "username_taken", 409);
+      }
+      return baseFetch(input, init);
+    }) as typeof fetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.type(screen.getByLabelText(/vgames username/i), "vijay");
+    await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
+    await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
+    await user.click(screen.getByRole("button", { name: /create vgames account/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "That VGames username is already taken.",
+    );
+  });
+
+  it("explains that a claimed VGames name cannot be used by a guest", async () => {
+    const baseFetch = createFetchMock();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl("/api/v2/identity/guest")) {
+        return jsonError("name_reserved", "name_reserved", 409);
+      }
+      return baseFetch(input, init);
+    }) as typeof fetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(screen.getByRole("button", { name: /^guest$/i }));
+    await user.type(screen.getByLabelText(/display name/i), "vijay");
+    await user.click(screen.getByRole("button", { name: /continue as guest/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /belongs to an existing vgames account/i,
+    );
   });
 
   it("starts immediately for claimed sessions", async () => {
@@ -231,7 +347,7 @@ describe("VWiki Race app", () => {
     });
   });
 
-  it("prompts ghost sessions to claim or continue before each challenge start", async () => {
+  it("prompts ghost sessions to create an account or continue before each challenge start", async () => {
     const storage = memoryStorage();
     storage.setItem(
       "vwiki-race:vgames-session",
@@ -250,7 +366,10 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
 
     expect(await screen.findByRole("dialog", { name: /save your stats/i })).toBeVisible();
-    expect(screen.getByText(/claim this name/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /create vgames account/i })).toBeVisible();
+    expect(screen.getByLabelText(/vgames username/i)).toHaveValue("vijay");
+    expect(screen.queryByRole("button", { name: /continue as guest/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /^guest$/i }));
     await user.click(screen.getByRole("button", { name: /continue as guest/i }));
 
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
@@ -287,6 +406,7 @@ describe("VWiki Race app", () => {
     await user.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );
+    await user.click(screen.getByRole("button", { name: /^guest$/i }));
     await user.click(await screen.findByRole("button", { name: /continue as guest/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
 
@@ -571,6 +691,7 @@ describe("VWiki Race app", () => {
     await user.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
     const close = screen.getByRole("button", { name: /close identity prompt/i });
+    await user.click(screen.getByRole("button", { name: /^guest$/i }));
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
     const continueButton = screen.getByRole("button", { name: /continue as guest/i });
     continueButton.focus();

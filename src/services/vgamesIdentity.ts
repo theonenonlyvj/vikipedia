@@ -48,6 +48,32 @@ export interface VGamesIdentityClientOptions {
   apiOrigin?: string;
 }
 
+export function vgamesIdentityErrorMessage(caught: unknown, fallback: string): string {
+  const code = caught !== null && typeof caught === "object" && "code" in caught &&
+      typeof caught.code === "string"
+    ? caught.code
+    : null;
+  const rawMessage = caught instanceof Error ? caught.message : null;
+  const identityCode = code === "vgames_identity_failed" ? rawMessage : code;
+
+  switch (identityCode) {
+    case "username_taken":
+      return "That VGames username is already taken.";
+    case "name_reserved":
+      return "That name belongs to an existing VGames account. Choose another guest name or log in.";
+    case "invalid_credentials":
+      return "That VGames username or password is incorrect.";
+    case "invalid_username":
+      return "Use 3-20 lowercase letters, numbers, or underscores for your VGames username.";
+    case "invalid_password":
+      return "Use a password between 6 and 128 characters.";
+    default:
+      return rawMessage && rawMessage !== "vgames_identity_failed"
+        ? rawMessage
+        : fallback;
+  }
+}
+
 const CREDENTIAL_STORAGE_KEY = "vwiki-race:vgames-device-credential";
 const SESSION_STORAGE_KEY = "vwiki-race:vgames-session";
 const LEGACY_APP_KEY = ["viki", "pedia"].join("");

@@ -3,7 +3,9 @@ import {
   createVGamesIdentityClient,
   createVGamesIdentityRepository,
   type StorageLike,
+  vgamesIdentityErrorMessage,
 } from "./vgamesIdentity";
+import { ApiRequestError } from "./apiRequest";
 
 const apiOrigin = "https://vwikirace-api.example.workers.dev";
 
@@ -244,5 +246,22 @@ describe("VGames identity client", () => {
         displayName: "Casey",
       }),
     ).rejects.toMatchObject({ code: "invalid_response", status: 502 });
+  });
+});
+
+describe("VGames identity error copy", () => {
+  it("maps reserved account and guest names to actionable messages", () => {
+    expect(
+      vgamesIdentityErrorMessage(
+        new ApiRequestError("username_taken", "username_taken", 409),
+        "fallback",
+      ),
+    ).toBe("That VGames username is already taken.");
+    expect(
+      vgamesIdentityErrorMessage(
+        new ApiRequestError("name_reserved", "name_reserved", 409),
+        "fallback",
+      ),
+    ).toMatch(/belongs to an existing VGames account/i);
   });
 });

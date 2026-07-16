@@ -202,7 +202,7 @@ describe("server VGames identity client", () => {
     });
   });
 
-  it("turns VGames failures into API errors", async () => {
+  it("preserves VGames error codes for the consumer", async () => {
     const fetchImpl = vi.fn(async () =>
       Response.json({ error: "username_taken" }, { status: 409 }),
     );
@@ -217,7 +217,8 @@ describe("server VGames identity client", () => {
         displayName: "Casey",
       }),
     ).rejects.toMatchObject({
-      code: "vgames_identity_failed",
+      code: "username_taken",
+      message: "username_taken",
       status: 409,
     });
   });

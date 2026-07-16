@@ -53,9 +53,10 @@ export function createVGamesIdentityClient(options: {
     const payload = await readJson(response);
 
     if (!response.ok) {
+      const failure = readVGamesError(payload, response.status);
       throw new ApiError(
-        "vgames_identity_failed",
-        readVGamesError(payload, response.status),
+        failure.code,
+        failure.message,
         response.status,
       );
     }
@@ -210,7 +211,10 @@ function invalidIdentityResponse(): ApiError {
   );
 }
 
-function readVGamesError(payload: unknown, status: number): string {
+function readVGamesError(
+  payload: unknown,
+  status: number,
+): { code: string; message: string } {
   if (
     payload &&
     typeof payload === "object" &&
@@ -218,7 +222,7 @@ function readVGamesError(payload: unknown, status: number): string {
     typeof payload.error === "string" &&
     payload.error.length > 0
   ) {
-    return payload.error;
+    return { code: payload.error, message: payload.error };
   }
   if (
     payload &&
@@ -229,8 +233,14 @@ function readVGamesError(payload: unknown, status: number): string {
     "message" in payload.error &&
     typeof payload.error.message === "string"
   ) {
-    return payload.error.message;
+    const code = "code" in payload.error && typeof payload.error.code === "string"
+      ? payload.error.code
+      : "vgames_identity_failed";
+    return { code, message: payload.error.message };
   }
 
-  return `VGames identity request failed with status ${status}`;
+  return {
+    code: "vgames_identity_failed",
+    message: `VGames identity request failed with status ${status}`,
+  };
 }

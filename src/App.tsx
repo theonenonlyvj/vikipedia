@@ -28,6 +28,7 @@ import type {
 import {
   createVGamesIdentityClient,
   createVGamesIdentityRepository,
+  vgamesIdentityErrorMessage,
   type VGamesIdentityClient,
   type VGamesIdentityRepository,
   type VGamesIdentitySession,
@@ -56,7 +57,7 @@ interface AppProps {
 
 type ModeState = RacePhase;
 type TabKey = "play" | "leaderboard" | "challenges" | "stats";
-type AuthMode = "guest" | "claim" | "login";
+type AuthMode = "guest" | "create" | "login";
 interface LeaderboardProjection {
   challengeId: string;
   rows: RankedLeaderboardRow[];
@@ -93,13 +94,14 @@ export default function App({
 }: AppProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("play");
   const [authPrompt, setAuthPrompt] = useState<AuthPromptIntent | null>(null);
-  const [authMode, setAuthMode] = useState<AuthMode>("guest");
+  const [authMode, setAuthMode] = useState<AuthMode>("create");
   const [authBusy, setAuthBusy] = useState(false);
   const [identitySession, setIdentitySession] =
     useState<VGamesIdentitySession | null>(null);
   const [displayNameDraft, setDisplayNameDraft] = useState("");
   const [usernameDraft, setUsernameDraft] = useState("");
   const [passwordDraft, setPasswordDraft] = useState("");
+  const [confirmPasswordDraft, setConfirmPasswordDraft] = useState("");
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [selectedChallengeId, setSelectedChallengeId] = useState<string | null>(
     null,
@@ -186,7 +188,7 @@ export default function App({
     if (cachedSession) {
       setIdentitySession(cachedSession);
       setDisplayNameDraft(cachedSession.displayName);
-      setUsernameDraft(cachedSession.displayName);
+      setUsernameDraft(suggestUsername(cachedSession.displayName));
     }
   }, [identityRepository]);
 
@@ -434,13 +436,17 @@ export default function App({
       : null;
     setError(null);
     setAuthPrompt(intent);
+    setPasswordDraft("");
+    setConfirmPasswordDraft("");
     if (preferredMode) {
       setAuthMode(preferredMode);
-    } else if (identitySession?.status === "ghost") {
-      setAuthMode("claim");
-      setUsernameDraft(identitySession.displayName);
-    } else if (!identitySession) {
-      setAuthMode("guest");
+    } else {
+      setAuthMode("create");
+      setUsernameDraft(
+        identitySession?.status === "ghost"
+          ? suggestUsername(identitySession.displayName)
+          : "",
+      );
     }
   }
 
@@ -466,7 +472,7 @@ export default function App({
         });
         persistIdentitySession(nextIdentitySession);
       } catch (caught) {
-        setError(errorMessage(caught, "Could not start a guest session."));
+        setError(vgamesIdentityErrorMessage(caught, "Could not start a guest session."));
         setAuthBusy(false);
         return;
       }
@@ -480,22 +486,24 @@ export default function App({
     }
   }
 
-  async function claimGuestName() {
+  async function createVGamesAccount() {
     if (!authPrompt) {
       return;
     }
 
     const prompt = authPrompt;
-    const username = usernameDraft.trim();
+    const username = usernameDraft.trim().toLowerCase();
     const password = passwordDraft;
-    if (!username || !password) {
-      setError("Enter a username and password to save this name.");
+    if (!/^[a-z0-9_]{3,20}$/.test(username)) {
+      setError("Use 3-20 lowercase letters, numbers, or underscores for your VGames username.");
       return;
     }
-
-    const displayName = (identitySession?.displayName ?? displayNameDraft).trim();
-    if (!identitySession && !displayName) {
-      setError("Choose a display name before creating an account.");
+    if (password.length < 6 || password.length > 128) {
+      setError("Use a password between 6 and 128 characters.");
+      return;
+    }
+    if (password !== confirmPasswordDraft) {
+      setError("Passwords do not match.");
       return;
     }
 
@@ -505,7 +513,7 @@ export default function App({
       if (!guestSession) {
         guestSession = await identityClient.playAsGuest({
           deviceCredential: identityRepository.getDeviceCredential(),
-          displayName,
+          displayName: username,
         });
       }
 
@@ -519,7 +527,7 @@ export default function App({
       setAuthPrompt(null);
       await resumeAfterIdentity(prompt, claimedSession);
     } catch (caught) {
-      setError(errorMessage(caught, "Could not save that display name."));
+      setError(vgamesIdentityErrorMessage(caught, "Could not create that VGames account."));
     } finally {
       setAuthBusy(false);
     }
@@ -549,7 +557,7 @@ export default function App({
       setAuthPrompt(null);
       await resumeAfterIdentity(prompt, loggedInSession);
     } catch (caught) {
-      setError(errorMessage(caught, "Could not log in."));
+      setError(vgamesIdentityErrorMessage(caught, "Could not log in."));
     } finally {
       setAuthBusy(false);
     }
@@ -562,7 +570,7 @@ export default function App({
     setAccountStatsProjection(null);
     setIdentitySession(nextSession);
     setDisplayNameDraft(nextSession.displayName);
-    setUsernameDraft(nextSession.displayName);
+    setUsernameDraft(suggestUsername(nextSession.displayName));
   }
 
   function clearStaleIdentity(intent?: AuthPromptIntent) {
@@ -574,6 +582,7 @@ export default function App({
     setDisplayNameDraft("");
     setUsernameDraft("");
     setPasswordDraft("");
+    setConfirmPasswordDraft("");
     if (intent) {
       openAuthPrompt(intent, "login");
     }
@@ -843,11 +852,12 @@ export default function App({
         <IdentityPrompt
           authBusy={authBusy}
           authMode={authMode}
+          confirmPasswordDraft={confirmPasswordDraft}
           displayNameDraft={displayNameDraft}
           displayNameIsReady={displayNameIsReady}
           identitySession={identitySession}
           error={visibleError}
-          onClaim={() => void claimGuestName()}
+          onCreate={() => void createVGamesAccount()}
           onClose={() => {
             if (!authBusy) {
               setAuthPrompt(null);
@@ -857,7 +867,11 @@ export default function App({
           onDisplayNameChange={setDisplayNameDraft}
           onLogin={() => void login()}
           onPasswordChange={setPasswordDraft}
-          onSetAuthMode={setAuthMode}
+          onConfirmPasswordChange={setConfirmPasswordDraft}
+          onSetAuthMode={(mode) => {
+            setError(null);
+            setAuthMode(mode);
+          }}
           onUsernameChange={setUsernameDraft}
           passwordDraft={passwordDraft}
           returnFocusRef={identityTrigger}
@@ -888,16 +902,18 @@ export default function App({
 function IdentityPrompt({
   authBusy,
   authMode,
+  confirmPasswordDraft,
   displayNameDraft,
   displayNameIsReady,
   error,
   identitySession,
-  onClaim,
+  onCreate,
   onClose,
   onContinueAsGuest,
   onDisplayNameChange,
   onLogin,
   onPasswordChange,
+  onConfirmPasswordChange,
   onSetAuthMode,
   onUsernameChange,
   passwordDraft,
@@ -906,16 +922,18 @@ function IdentityPrompt({
 }: {
   authBusy: boolean;
   authMode: AuthMode;
+  confirmPasswordDraft: string;
   displayNameDraft: string;
   displayNameIsReady: boolean;
   error: string | null;
   identitySession: VGamesIdentitySession | null;
-  onClaim: () => void;
+  onCreate: () => void;
   onClose: () => void;
   onContinueAsGuest: () => void;
   onDisplayNameChange: (value: string) => void;
   onLogin: () => void;
   onPasswordChange: (value: string) => void;
+  onConfirmPasswordChange: (value: string) => void;
   onSetAuthMode: (mode: AuthMode) => void;
   onUsernameChange: (value: string) => void;
   passwordDraft: string;
@@ -948,17 +966,13 @@ function IdentityPrompt({
           </button>
         </div>
 
-        {isGhost ? (
-          <p className="identity-copy">
-            Save this name to keep your runs across devices, or continue as
-            guest for this challenge.
-          </p>
-        ) : (
-          <p className="identity-copy">
-            Pick a display name before the timer starts. You can claim it now or
-            keep playing as a guest.
-          </p>
-        )}
+        <p className="identity-copy">
+          {isGhost
+            ? "Turn this guest into a VGames account without losing any runs. "
+            : "Create a VGames account before the timer starts. "}
+          Free, no email - keeps your name and stats on every device. One
+          account works across all V games.
+        </p>
 
         {error ? <p role="alert">{error}</p> : null}
 
@@ -975,18 +989,18 @@ function IdentityPrompt({
             Guest
           </button>
           <button
-            aria-pressed={authMode === "claim"}
-            onClick={() => onSetAuthMode("claim")}
+            aria-pressed={authMode === "create"}
+            onClick={() => onSetAuthMode("create")}
             type="button"
           >
-            Claim
+            Create New
           </button>
           <button
             aria-pressed={authMode === "login"}
             onClick={() => onSetAuthMode("login")}
             type="button"
           >
-            Log in
+            Log In / Existing
           </button>
         </div>
 
@@ -1030,64 +1044,57 @@ function IdentityPrompt({
           </form>
         ) : null}
 
-        {authMode === "claim" ? (
+        {authMode === "create" ? (
           <form
             className="identity-form"
             onSubmit={(event) => {
               event.preventDefault();
-              onClaim();
+              onCreate();
             }}
           >
-            {!identitySession ? (
-              <label className="name-control">
-                <span>Display name</span>
-                <input
-                  aria-label="Display name"
-                  autoComplete="nickname"
-                  autoFocus
-                  maxLength={24}
-                  onChange={(event) => onDisplayNameChange(event.target.value)}
-                  placeholder="e.g. a nickname"
-                  value={displayNameDraft}
-                />
-                <p className="name-hint">
-                  Your name and winning paths appear on the public leaderboard —
-                  use a nickname if you&apos;d rather stay anonymous.
-                </p>
-              </label>
-            ) : null}
             <label className="name-control">
-              <span>Username</span>
+              <span>VGames username</span>
               <input
-                aria-label="Username"
-                autoFocus={Boolean(identitySession)}
+                aria-label="VGames username"
+                autoCapitalize="none"
+                autoFocus
                 autoComplete="username"
-                maxLength={24}
-                onChange={(event) => onUsernameChange(event.target.value)}
+                maxLength={20}
+                minLength={3}
+                onChange={(event) => onUsernameChange(event.target.value.toLowerCase())}
+                pattern="[a-z0-9_]{3,20}"
+                placeholder="e.g. vijay"
+                spellCheck={false}
                 value={usernameDraft}
               />
+              <p className="name-hint">This is also your public display name.</p>
             </label>
             <label className="name-control">
               <span>Password</span>
               <input
                 aria-label="Password"
                 autoComplete="new-password"
-                minLength={8}
+                maxLength={128}
+                minLength={6}
                 onChange={(event) => onPasswordChange(event.target.value)}
                 type="password"
                 value={passwordDraft}
               />
             </label>
+            <label className="name-control">
+              <span>Confirm password</span>
+              <input
+                aria-label="Confirm password"
+                autoComplete="new-password"
+                maxLength={128}
+                minLength={6}
+                onChange={(event) => onConfirmPasswordChange(event.target.value)}
+                type="password"
+                value={confirmPasswordDraft}
+              />
+            </label>
             <button disabled={authBusy} type="submit">
-              Claim this name
-            </button>
-            <button
-              className="secondary-button"
-              disabled={authBusy}
-              onClick={onContinueAsGuest}
-              type="button"
-            >
-              Continue as guest
+              Create VGames account
             </button>
           </form>
         ) : null}
@@ -1123,14 +1130,6 @@ function IdentityPrompt({
             </label>
             <button disabled={authBusy} type="submit">
               Log in
-            </button>
-            <button
-              className="secondary-button"
-              disabled={authBusy}
-              onClick={onContinueAsGuest}
-              type="button"
-            >
-              Continue as guest
             </button>
           </form>
         ) : null}
@@ -1731,6 +1730,17 @@ function formatElapsed(ms: number): string {
 
 function errorMessage(caught: unknown, fallback: string): string {
   return caught instanceof Error ? caught.message : fallback;
+}
+
+function suggestUsername(displayName: string): string {
+  return displayName
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9_\s-]/g, "")
+    .trim()
+    .replace(/[\s-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 20);
 }
 
 function isUnauthorizedError(caught: unknown): boolean {
