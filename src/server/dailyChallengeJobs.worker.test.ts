@@ -125,6 +125,7 @@ describe("daily challenge D1 jobs", () => {
     const created = await repository.createChallengeV2(account, input);
     await expect(repository.createChallengeV2(account, input)).resolves.toEqual(created);
     expect(created).toMatchObject({
+      mode: "solo",
       origin: "manual",
       dailyDate: null,
       source: "curated",
@@ -250,6 +251,7 @@ describe("daily challenge D1 jobs", () => {
     expect(challenge).toMatchObject({
       id: "challenge-0004",
       label: "Challenge #4",
+      mode: "daily",
       origin: "daily",
       dailyDate: "2026-07-14",
       source: "wikipedia_random",
@@ -257,5 +259,20 @@ describe("daily challenge D1 jobs", () => {
     await expect(env.VWIKI_RACE_DB.prepare(
       "SELECT status, accepted_challenge_id FROM daily_challenge_jobs WHERE daily_date = '2026-07-14'",
     ).first()).resolves.toEqual({ status: "accepted", accepted_challenge_id: "challenge-0004" });
+  });
+
+  it("ignores a trigger dated more than five minutes in the future", async () => {
+    const createTracking = vi.fn();
+    const worker = createWorker({
+      createTracking,
+      now: () => new Date("2026-07-15T22:00:00.000Z"),
+    });
+
+    await worker.scheduled(createScheduledController({
+      scheduledTime: new Date("2026-07-16T10:00:00.000Z"),
+      cron: "0 10 * * *",
+    }), env as unknown as WorkerEnv);
+
+    expect(createTracking).not.toHaveBeenCalled();
   });
 });

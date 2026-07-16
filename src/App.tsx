@@ -12,7 +12,11 @@ import {
   type MouseEvent,
 } from "react";
 import { getSortedChallenges } from "./domain/challenges";
-import { selectDefaultChallenge } from "./domain/challengeSelection";
+import {
+  centralDateKey,
+  dailyBadgeLabel,
+  selectDefaultChallenge,
+} from "./domain/challengeSelection";
 import {
   type GameSession,
 } from "./domain/gameSession";
@@ -85,7 +89,7 @@ type AuthPromptIntent =
 
 const defaultFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 const defaultNow = () => performance.now();
-const defaultTodayUtc = () => new Date().toISOString().slice(0, 10);
+const defaultTodayUtc = () => centralDateKey(new Date());
 const unavailableBrowserStorage: StorageLike = {
   getItem: () => null,
   setItem: () => undefined,
@@ -121,6 +125,7 @@ export default function App({
   const [passwordDraft, setPasswordDraft] = useState("");
   const [confirmPasswordDraft, setConfirmPasswordDraft] = useState("");
   const [challenges, setChallenges] = useState<Challenge[]>([]);
+  const [catalogRefreshVersion, setCatalogRefreshVersion] = useState(0);
   const [selectedChallengeId, setSelectedChallengeId] = useState<string | null>(
     null,
   );
@@ -135,6 +140,7 @@ export default function App({
   const endRunTrigger = useRef<HTMLElement | null>(null);
   const requestedPaths = useRef(new Set<string>());
   const catalogRequest = useRef(0);
+  const catalogRefreshQueued = useRef(false);
   const leaderboardRequest = useRef(0);
   const statsRequest = useRef(0);
   const recoveredToken = useRef<string | null>(null);
@@ -183,6 +189,7 @@ export default function App({
     challenges.find((challenge) => challenge.id === selectedChallengeId) ??
     challenges[0] ??
     null;
+  const currentCentralDate = todayUtc();
   const targetPreview = useTargetPreview({
     challenge: selectedChallenge,
     enabled: modeState === "idle" && !race.recoveryRun,
@@ -216,6 +223,26 @@ export default function App({
   }, [identityRepository]);
 
   useEffect(() => {
+    const queueCatalogRefresh = () => {
+      if (catalogRefreshQueued.current) return;
+      catalogRefreshQueued.current = true;
+      queueMicrotask(() => {
+        catalogRefreshQueued.current = false;
+        setCatalogRefreshVersion((version) => version + 1);
+      });
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") queueCatalogRefresh();
+    };
+    window.addEventListener("focus", queueCatalogRefresh);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", queueCatalogRefresh);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     const request = ++catalogRequest.current;
 
@@ -230,7 +257,7 @@ export default function App({
         const requestedChallengeId = readChallengeIdFromUrl();
         const nextChallenge = selectDefaultChallenge(nextChallenges, {
           requestedChallengeId,
-          todayUtc: todayUtc(),
+          todayUtc: currentCentralDate,
         });
         setSelectedChallengeId(nextChallenge?.id ?? null);
         setLeaderboardProjection(nextChallenge
@@ -269,7 +296,7 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [apiClient]);
+  }, [apiClient, catalogRefreshVersion, currentCentralDate]);
 
   useEffect(() => {
     if (!identitySession || challenges.length === 0 || recoveredToken.current === identitySession.token) {
@@ -747,8 +774,10 @@ export default function App({
         <div className="challenge-route" aria-label="Current challenge">
           <div className="challenge-meta">
             <span>{selectedChallenge?.label ?? "Challenge"}</span>
-            {selectedChallenge?.origin === "daily" ? (
-              <span className="daily-badge">Daily</span>
+            {selectedChallenge && dailyBadgeLabel(selectedChallenge, currentCentralDate) ? (
+              <span className="daily-badge">
+                {dailyBadgeLabel(selectedChallenge, currentCentralDate)}
+              </span>
             ) : null}
           </div>
           {pendingNavigationTitle ? (
@@ -854,6 +883,7 @@ export default function App({
             session={session}
             selectionLocked={challengeIsLocked}
             targetPreview={targetPreview}
+            todayCentral={currentCentralDate}
           />
         ) : null}
 
@@ -872,6 +902,7 @@ export default function App({
             onSelectChallenge={(challengeId) => void selectChallenge(challengeId)}
             selectedChallengeId={selectedChallenge?.id ?? null}
             selectionLocked={challengeIsLocked}
+            todayCentral={currentCentralDate}
           />
         ) : null}
 
@@ -1288,6 +1319,7 @@ function PlayPanel({
   session,
   selectionLocked,
   targetPreview,
+  todayCentral,
 }: {
   article: Article | null;
   challenges: Challenge[];
@@ -1309,6 +1341,7 @@ function PlayPanel({
   session: GameSession | null;
   selectionLocked: boolean;
   targetPreview: TargetPreviewState;
+  todayCentral: string;
 }) {
   const articleClickRef = useRef(handleArticleClick);
   articleClickRef.current = handleArticleClick;
@@ -1394,6 +1427,7 @@ function PlayPanel({
         onSelectChallenge={onSelectChallenge}
         selectedChallengeId={selectedChallenge?.id ?? null}
         selectionLocked={selectionLocked}
+        todayCentral={todayCentral}
       />
     </section>
   );
@@ -1528,6 +1562,7 @@ function ChallengeBrowser({
   onSelectChallenge,
   selectionLocked = false,
   selectedChallengeId,
+  todayCentral,
 }: {
   challenges: Challenge[];
   onCreateChallenge: (input: {
@@ -1537,6 +1572,7 @@ function ChallengeBrowser({
   onSelectChallenge: (challengeId: string) => void;
   selectionLocked?: boolean;
   selectedChallengeId: string | null;
+  todayCentral: string;
 }) {
   const [startTitle, setStartTitle] = useState("");
   const [targetTitle, setTargetTitle] = useState("");
@@ -1605,8 +1641,10 @@ function ChallengeBrowser({
               >
                 <span className="challenge-meta">
                   <span>{challenge.label ?? challenge.id}</span>
-                  {challenge.origin === "daily" ? (
-                    <span className="daily-badge">Daily</span>
+                  {dailyBadgeLabel(challenge, todayCentral) ? (
+                    <span className="daily-badge">
+                      {dailyBadgeLabel(challenge, todayCentral)}
+                    </span>
                   ) : null}
                 </span>
                 <strong>

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Challenge } from "./types";
-import { selectDefaultChallenge } from "./challengeSelection";
+import {
+  centralDateKey,
+  dailyBadgeLabel,
+  selectDefaultChallenge,
+} from "./challengeSelection";
 
 const challenges = [
   challenge("challenge-0001"),
@@ -9,6 +13,17 @@ const challenges = [
 ];
 
 describe("default challenge selection", () => {
+  it("uses the Central calendar date across UTC midnight", () => {
+    expect(centralDateKey(new Date("2026-07-16T00:30:00.000Z"))).toBe("2026-07-15");
+    expect(centralDateKey(new Date("2026-01-16T05:30:00.000Z"))).toBe("2026-01-15");
+  });
+
+  it("distinguishes today's daily from historical daily challenges", () => {
+    expect(dailyBadgeLabel(challenges[2]!, "2026-07-15")).toBe("Today");
+    expect(dailyBadgeLabel(challenges[2]!, "2026-07-16")).toBe("Daily 7/15");
+    expect(dailyBadgeLabel(challenges[0]!, "2026-07-15")).toBeNull();
+  });
+
   it("prioritizes a resumable active run over a direct URL and today's daily", () => {
     expect(selectDefaultChallenge(challenges, {
       activeChallengeId: "challenge-0002",

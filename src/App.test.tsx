@@ -119,7 +119,7 @@ describe("VWiki Race app", () => {
     );
 
     expect(await screen.findByRole("button", { name: /start challenge #16/i })).toBeVisible();
-    expect(screen.getAllByText("Daily").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Today").length).toBeGreaterThan(0);
     expect(screen.getByRole("region", { name: /target preview/i })).toBeVisible();
     expect(window.location.search).toBe("?challenge=challenge-0016");
   });

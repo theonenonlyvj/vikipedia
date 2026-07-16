@@ -393,7 +393,8 @@ export function createD1TrackingRepository(options: {
                response_json = (
                  SELECT json_object(
                    'id', c.id, 'label', c.label, 'sortOrder', c.sort_order,
-                   'isActive', c.is_active, 'mode', 'daily',
+                   'isActive', c.is_active,
+                   'mode', CASE WHEN c.origin = 'daily' THEN 'daily' ELSE 'solo' END,
                    'start', json_object('title', c.start_title, 'pageId', c.start_page_id),
                    'target', json_object('title', c.target_title, 'pageId', c.target_page_id),
                    'ruleset', c.ruleset,
@@ -2712,7 +2713,7 @@ function mapChallengeRow(row: ChallengeRow): Challenge {
     label: row.label,
     sortOrder: Number(row.sort_order),
     isActive: Boolean(row.is_active),
-    mode: "daily",
+    mode: row.origin === "daily" ? "daily" : "solo",
     start: { title: row.start_title, pageId: optionalInteger(row.start_page_id) },
     target: { title: row.target_title, pageId: optionalInteger(row.target_page_id) },
     ruleset: "ranked_classic",

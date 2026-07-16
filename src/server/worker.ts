@@ -41,10 +41,12 @@ export interface WorkerOptions {
   createDailyCandidateSource?: () => {
     findCandidate(): Promise<DailyChallengeCandidate>;
   };
+  now?: () => Date;
 }
 
 export function createWorker(options: WorkerOptions = {}) {
   const buildTracking = options.createTracking ?? createTracking;
+  const now = options.now ?? (() => new Date());
   const buildDailyCandidateSource = options.createDailyCandidateSource ?? (() =>
     createDailyChallengeCandidateSource({
       fetchImpl: fetch,
@@ -87,6 +89,12 @@ export function createWorker(options: WorkerOptions = {}) {
       env: Env,
     ): Promise<void> {
       const scheduledAt = new Date(controller.scheduledTime);
+      if (scheduledAt.getTime() > now().getTime() + 5 * 60 * 1000) {
+        logDailyJob("future_trigger_ignored", {
+          scheduledAt: scheduledAt.toISOString(),
+        });
+        return;
+      }
       const dailyDate = centralDailyDateAtFive(scheduledAt);
       if (!dailyDate) {
         logDailyJob("outside_central_window", {

@@ -6,6 +6,34 @@ export interface ChallengeSelectionOptions {
   todayUtc: string;
 }
 
+const CENTRAL_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/Chicago",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export function centralDateKey(value: Date): string {
+  if (!Number.isFinite(value.getTime())) {
+    throw new Error("A valid date is required.");
+  }
+  const parts = Object.fromEntries(
+    CENTRAL_DATE_FORMATTER.formatToParts(value)
+      .filter((part) => part.type !== "literal")
+      .map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+export function dailyBadgeLabel(challenge: Challenge, todayCentral: string): string | null {
+  if (challenge.origin !== "daily" || !challenge.dailyDate) return null;
+  if (challenge.dailyDate === todayCentral) return "Today";
+  const [, month, day] = challenge.dailyDate.split("-");
+  return month && day
+    ? `Daily ${Number(month)}/${Number(day)}`
+    : "Daily";
+}
+
 export function selectDefaultChallenge(
   challenges: Challenge[],
   options: ChallengeSelectionOptions,
