@@ -20,6 +20,16 @@ const MAX_REPORTS_PER_PAGE_LOAD = 10;
 const FALLBACK_NAME = "Error";
 const FALLBACK_MESSAGE = "Unknown error";
 
+// Mirror the server's own caps (src/server/worker.ts: clientErrorInput) so an
+// oversized payload is truncated here instead of being silently dropped by
+// the server's 8 KiB body-size 413 — the beacon swallows all fetch failures,
+// so exactly the largest crashes (huge non-Error rejection reasons, deep
+// component stacks) would otherwise vanish without a trace.
+const MAX_MESSAGE_LENGTH = 512;
+const MAX_STACK_LENGTH = 4096;
+const MAX_URL_LENGTH = 512;
+const MAX_USER_AGENT_LENGTH = 512;
+
 const defaultFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 
 export function createErrorReporter({
@@ -40,13 +50,17 @@ export function createErrorReporter({
       reportedKeys.add(dedupeKey);
       reportCount += 1;
 
+      // Truncate every composed, wire-bound string to the server's caps here,
+      // after all composition (safeStringify, appendComponentStack) is done,
+      // so this single spot covers every source path (window/unhandledrejection/
+      // error-boundary/manual).
       const payload = {
         source,
         name: described.name,
-        message: described.message,
-        stack: described.stack,
-        url: readUrl(),
-        userAgent: readUserAgent(),
+        message: described.message.slice(0, MAX_MESSAGE_LENGTH),
+        stack: described.stack?.slice(0, MAX_STACK_LENGTH),
+        url: readUrl()?.slice(0, MAX_URL_LENGTH),
+        userAgent: readUserAgent()?.slice(0, MAX_USER_AGENT_LENGTH),
         ts: new Date().toISOString(),
       };
 

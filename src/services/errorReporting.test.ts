@@ -150,6 +150,57 @@ describe("createErrorReporter", () => {
     });
   });
 
+  describe("payload truncation to server caps", () => {
+    it("truncates a huge non-Error rejection reason's serialized message to 512 chars", async () => {
+      const fetchImpl = fetchMock();
+      const reporter = createErrorReporter({ apiOrigin, fetchImpl });
+
+      // safeStringify(JSON.stringify) on a large plain object easily exceeds
+      // the server's 512-char cap on `message`; the server would 413 the
+      // whole request once the body crosses 8 KiB, silently dropping the beacon.
+      const hugeRejectionReason = { data: "x".repeat(2000), nested: { more: "y".repeat(2000) } };
+      reporter.report("unhandledrejection", hugeRejectionReason);
+      await Promise.resolve();
+
+      const body = jsonBody(fetchImpl);
+      expect(body.message.length).toBeLessThanOrEqual(512);
+    });
+
+    it("truncates stack (including an appended component stack) to 4096 chars", async () => {
+      const fetchImpl = fetchMock();
+      const reporter = createErrorReporter({ apiOrigin, fetchImpl });
+
+      const error = new Error("deep crash");
+      error.stack = "at frame\n".repeat(500); // ~4500 chars on its own
+      const componentStack = "\n    in Deeply (at App.tsx:1)".repeat(300); // ~8700 chars
+
+      reporter.report("error-boundary", error, { componentStack });
+      await Promise.resolve();
+
+      const body = jsonBody(fetchImpl);
+      expect(typeof body.stack).toBe("string");
+      expect(body.stack.length).toBeLessThanOrEqual(4096);
+    });
+
+    it("truncates url and userAgent to 512 chars", async () => {
+      const fetchImpl = fetchMock();
+      const reporter = createErrorReporter({ apiOrigin, fetchImpl });
+
+      window.history.pushState({}, "", `/race/${"a".repeat(1000)}`);
+      const userAgentSpy = vi
+        .spyOn(window.navigator, "userAgent", "get")
+        .mockReturnValue("Mozilla/5.0 ".repeat(100));
+
+      reporter.report("manual", new Error("boom"));
+      await Promise.resolve();
+      userAgentSpy.mockRestore();
+
+      const body = jsonBody(fetchImpl);
+      expect(body.url.length).toBeLessThanOrEqual(512);
+      expect(body.userAgent.length).toBeLessThanOrEqual(512);
+    });
+  });
+
   describe("installGlobalHandlers", () => {
     it("attaches exactly one error and one unhandledrejection listener", () => {
       const fetchImpl = fetchMock();
