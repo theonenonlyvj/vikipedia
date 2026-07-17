@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import type { AuthorizedAccount } from "../domain/types";
-import { dailyFlavorForCentralDate } from "../domain/dailyEditorial";
+import type { AuthorizedAccount, Challenge } from "../domain/types";
+import { dailyFlavorForCentralDate, type DailyFlavor } from "../domain/dailyEditorial";
 import { createApiHandlers, type ApiHandlers } from "./apiHandlers";
 import { createD1TrackingRepository } from "./d1TrackingRepository";
 import { ApiError } from "./http";
@@ -18,6 +18,7 @@ import {
 import { createWorkerWikipediaGateway } from "./workerWikipediaGateway";
 import type { RunProtocolRepository } from "./trackingRepository";
 import { legacyCreateOperationKey } from "./runProtocol";
+import { CLASSIFIER_VERSION } from "./dailyCandidateScoring";
 
 interface RateLimiter {
   limit(options: { key: string }): Promise<{ success: boolean }>;
@@ -32,6 +33,8 @@ export interface Env {
   ACCOUNT_READ_RATE_LIMITER: RateLimiter;
   CHALLENGE_CREATE_RATE_LIMITER: RateLimiter;
   CLIENT_ERROR_RATE_LIMITER?: RateLimiter;
+  DAILY_ADMIN_ACCOUNT_IDS?: string;
+  DAILY_ADMIN_RATE_LIMITER?: RateLimiter;
 }
 
 type AuthorizedVGamesAccount = AuthorizedAccount;
@@ -122,17 +125,50 @@ export function createWorker(options: WorkerOptions = {}) {
         return;
       }
 
-      logDailyJob("claimed", { dailyDate: job.dailyDate, attemptCount: job.attemptCount });
+      const flavor = dailyFlavorForCentralDate(job.dailyDate);
+      const selectionStartedAt = Date.now();
+      let queueResult: "hit" | "miss" = "miss";
+      logDailyJob("claimed", {
+        dailyDate: job.dailyDate,
+        flavor,
+        attemptCount: job.attemptCount,
+      });
       try {
+        const queued = await acceptQueuedDailyFeature(repository, job, flavor, selectionStartedAt);
+        if (queued) {
+          queueResult = "hit";
+          logDailyJob("accepted", {
+            dailyDate: job.dailyDate,
+            flavor,
+            queue: queueResult,
+            attemptCount: job.attemptCount,
+            challengeId: queued.id,
+            elapsedMs: Date.now() - selectionStartedAt,
+          });
+          return;
+        }
+        logDailyJob("queue_miss", {
+          dailyDate: job.dailyDate,
+          flavor,
+          queue: queueResult,
+          elapsedMs: Date.now() - selectionStartedAt,
+        });
         const candidate = await buildDailyCandidateSource().findCandidate({
           dailyDate: job.dailyDate,
-          flavor: dailyFlavorForCentralDate(job.dailyDate),
+          flavor,
         });
-        const challenge = await repository.acceptDailyChallenge(job, candidate);
+        const challenge = await repository.acceptDailyFeature(job, {
+          kind: "automatic",
+          candidate,
+          classifierVersion: CLASSIFIER_VERSION,
+        });
         logDailyJob("accepted", {
           dailyDate: job.dailyDate,
+          flavor,
+          queue: queueResult,
           attemptCount: job.attemptCount,
           challengeId: challenge.id,
+          elapsedMs: Date.now() - selectionStartedAt,
         });
       } catch (caught) {
         const failureCode = dailyFailureCode(caught);
@@ -141,7 +177,14 @@ export function createWorker(options: WorkerOptions = {}) {
         } catch {
           logDailyJob("failure_record_failed", { dailyDate: job.dailyDate, failureCode });
         }
-        logDailyJob("failed", { dailyDate: job.dailyDate, attemptCount: job.attemptCount, failureCode });
+        logDailyJob("failed", {
+          dailyDate: job.dailyDate,
+          flavor,
+          queue: queueResult,
+          attemptCount: job.attemptCount,
+          failureCode,
+          elapsedMs: Date.now() - selectionStartedAt,
+        });
         throw caught;
       }
     },
@@ -149,6 +192,42 @@ export function createWorker(options: WorkerOptions = {}) {
 }
 
 export default createWorker();
+
+const MAX_QUEUE_SELECTION_ATTEMPTS = 3;
+
+async function acceptQueuedDailyFeature(
+  repository: RunProtocolRepository,
+  job: Parameters<RunProtocolRepository["acceptDailyFeature"]>[0],
+  flavor: DailyFlavor,
+  selectionStartedAt: number,
+): Promise<Challenge | null> {
+  for (let attempt = 1; attempt <= MAX_QUEUE_SELECTION_ATTEMPTS; attempt += 1) {
+    const queued = await repository.findQueuedDailyCandidate(flavor);
+    if (!queued) return null;
+    try {
+      return await repository.acceptDailyFeature(job, {
+        kind: "queued",
+        queueEntryId: queued.id,
+        classifierVersion: CLASSIFIER_VERSION,
+      });
+    } catch (caught) {
+      if (!isQueueSelectionRace(caught)) throw caught;
+      logDailyJob("queue_candidate_invalid", {
+        dailyDate: job.dailyDate,
+        flavor,
+        queue: "miss",
+        queueEntryId: queued.id,
+        attempt,
+        elapsedMs: Date.now() - selectionStartedAt,
+      });
+    }
+  }
+  return null;
+}
+
+function isQueueSelectionRace(caught: unknown): boolean {
+  return caught instanceof ApiError && caught.code === "daily_feature_accept_failed";
+}
 
 async function dispatchV2(
   request: Request,
@@ -200,6 +279,85 @@ async function dispatchV2(
     const account = await tracking.authorize(request);
     await enforceAccountReadRateLimit(env, account.accountId, "stats");
     return json({ stats: await protocol(tracking).getAccountStats(account) }, undefined, corsHeaders);
+  }
+  if (request.method === "GET" && url.pathname === "/api/v2/accounts/me/capabilities") {
+    const account = await tracking.authorize(request);
+    await enforceAccountReadRateLimit(env, account.accountId, "capabilities");
+    return json(
+      { canManageDailies: canManageDailies(account, env) },
+      undefined,
+      corsHeaders,
+    );
+  }
+  if (request.method === "GET" && url.pathname === "/api/v2/admin/dailies") {
+    await authorizeDailyAdministrator(request, tracking, env, "list");
+    return json(await tracking.handlers.listDailyAdminState(), undefined, corsHeaders);
+  }
+
+  const nominationMatch = url.pathname.match(
+    /^\/api\/v2\/admin\/daily-nominations\/([^/]+)\/(approve|decline)$/,
+  );
+  if (request.method === "POST" && nominationMatch?.[1] && nominationMatch[2]) {
+    const action = nominationMatch[2];
+    const account = await authorizeDailyAdministrator(request, tracking, env, action);
+    const idempotencyKey = requireIdempotencyKey(request);
+    const nominationId = decodeDailyAdminPathId(
+      nominationMatch[1],
+      "invalid_daily_nomination_id",
+    );
+    if (action === "approve") {
+      const input = approveDailyNominationInput(await readJson(request));
+      return json(
+        await tracking.handlers.approveDailyNomination(
+          account.accountId,
+          nominationId,
+          input.flavor,
+          idempotencyKey,
+        ),
+        undefined,
+        corsHeaders,
+      );
+    }
+    requireEmptyObject(await readJson(request));
+    return json(
+      await tracking.handlers.declineDailyNomination(
+        account.accountId,
+        nominationId,
+        idempotencyKey,
+      ),
+      undefined,
+      corsHeaders,
+    );
+  }
+  if (request.method === "POST" && url.pathname === "/api/v2/admin/daily-queue") {
+    const account = await authorizeDailyAdministrator(request, tracking, env, "queue");
+    const idempotencyKey = requireIdempotencyKey(request);
+    const input = queueDailyChallengeInput(await readJson(request));
+    return json(
+      await tracking.handlers.queueDailyChallenge(
+        account.accountId,
+        input.challengeId,
+        input.flavor,
+        idempotencyKey,
+      ),
+      undefined,
+      corsHeaders,
+    );
+  }
+  const queueMatch = url.pathname.match(/^\/api\/v2\/admin\/daily-queue\/([^/]+)$/);
+  if (request.method === "DELETE" && queueMatch?.[1]) {
+    const account = await authorizeDailyAdministrator(request, tracking, env, "remove");
+    const idempotencyKey = requireIdempotencyKey(request);
+    requireEmptyObject(await readJson(request));
+    return json(
+      await tracking.handlers.removeDailyQueueEntry(
+        account.accountId,
+        decodeDailyAdminPathId(queueMatch[1], "invalid_daily_queue_entry_id"),
+        idempotencyKey,
+      ),
+      undefined,
+      corsHeaders,
+    );
   }
   if (request.method === "POST" && url.pathname === "/api/v2/identity/guest") {
     return json(
@@ -512,6 +670,41 @@ function logDailyCandidateDiagnostic(
   console.info("daily_challenge_candidate", JSON.stringify({ event, ...fields }));
 }
 
+function dailyAdminAccountIds(env: Env): ReadonlySet<string> {
+  return new Set(
+    (env.DAILY_ADMIN_ACCOUNT_IDS ?? "")
+      .split(",")
+      .map((accountId) => accountId.trim())
+      .filter(Boolean),
+  );
+}
+
+function canManageDailies(account: AuthorizedVGamesAccount, env: Env): boolean {
+  return account.status === "claimed" && dailyAdminAccountIds(env).has(account.accountId);
+}
+
+async function authorizeDailyAdministrator(
+  request: Request,
+  tracking: WorkerTracking,
+  env: Env,
+  route: string,
+): Promise<AuthorizedVGamesAccount> {
+  let account: AuthorizedVGamesAccount;
+  try {
+    account = await tracking.authorize(request);
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.status === 401) {
+      throw new ApiError("forbidden", "Forbidden.", 403);
+    }
+    throw caught;
+  }
+  if (!canManageDailies(account, env)) {
+    throw new ApiError("forbidden", "Forbidden.", 403);
+  }
+  await enforceDailyAdminRateLimit(env, account.accountId, route);
+  return account;
+}
+
 async function authorizeVGamesRequest(
   request: Request,
   identity: Pick<VGamesIdentityClient, "introspect">,
@@ -606,6 +799,59 @@ function boundedInteger(value: unknown, code: string): number {
     throw new ApiError(code, "Request field is invalid.", 400);
   }
   return Number(value);
+}
+
+function approveDailyNominationInput(value: unknown): { flavor?: DailyFlavor } {
+  const body = requireObject(value);
+  requireOnlyFields(body, ["flavor"]);
+  if (body.flavor === undefined) return {};
+  return { flavor: requireDailyFlavor(body.flavor) };
+}
+
+function queueDailyChallengeInput(value: unknown): {
+  challengeId: string;
+  flavor: DailyFlavor;
+} {
+  const body = requireObject(value);
+  requireOnlyFields(body, ["challengeId", "flavor"]);
+  return {
+    challengeId: boundedString(body.challengeId, "invalid_challenge_id", 200),
+    flavor: requireDailyFlavor(body.flavor),
+  };
+}
+
+function requireEmptyObject(value: unknown): void {
+  const body = requireObject(value);
+  requireOnlyFields(body, []);
+}
+
+function requireOnlyFields(body: Record<string, unknown>, allowed: readonly string[]): void {
+  if (Object.keys(body).some((key) => !allowed.includes(key))) {
+    throw new ApiError("invalid_request", "Request body contains unsupported fields.", 400);
+  }
+}
+
+function requireDailyFlavor(value: unknown): DailyFlavor {
+  if (value === "recognizable" || value === "weird" || value === "hard") return value;
+  throw new ApiError("invalid_daily_flavor", "Daily flavor is invalid.", 400);
+}
+
+function decodeDailyAdminPathId(value: string, code: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    throw new ApiError(code, "Request path is invalid.", 400);
+  }
+  if (
+    !decoded ||
+    decoded.length > 200 ||
+    decoded !== decoded.trim() ||
+    /[\\/\u0000-\u001F\u007F]/.test(decoded)
+  ) {
+    throw new ApiError(code, "Request path is invalid.", 400);
+  }
+  return decoded;
 }
 
 function challengeInput(value: unknown): {
@@ -759,7 +1005,7 @@ async function enforceClickRateLimit(env: Env, accountId: string): Promise<void>
 async function enforceAccountReadRateLimit(
   env: Env,
   accountId: string,
-  route: "active" | "recovery-path" | "stats",
+  route: "active" | "recovery-path" | "stats" | "capabilities",
 ): Promise<void> {
   if (!env.ACCOUNT_READ_RATE_LIMITER) {
     throw new ApiError(
@@ -775,6 +1021,29 @@ async function enforceAccountReadRateLimit(
     throw new ApiError(
       "account_read_rate_limited",
       "Too many account read requests. Try again shortly.",
+      429,
+      60,
+    );
+  }
+}
+
+async function enforceDailyAdminRateLimit(
+  env: Env,
+  accountId: string,
+  route: string,
+): Promise<void> {
+  if (!env.DAILY_ADMIN_RATE_LIMITER) {
+    throw new ApiError(
+      "rate_limiter_unavailable",
+      "Daily moderation rate limiting is temporarily unavailable.",
+      503,
+    );
+  }
+  const result = await env.DAILY_ADMIN_RATE_LIMITER.limit({ key: `${route}:${accountId}` });
+  if (!result.success) {
+    throw new ApiError(
+      "daily_admin_rate_limited",
+      "Too many Daily moderation requests. Try again shortly.",
       429,
       60,
     );
@@ -954,7 +1223,7 @@ function logRequest(
 function corsHeadersFor(request: Request, env: Env): Record<string, string> {
   const headers: Record<string, string> = {
     "Access-Control-Allow-Headers": "Authorization, Content-Type, Idempotency-Key",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     Vary: "Origin",
   };
   const origin = request.headers.get("Origin");

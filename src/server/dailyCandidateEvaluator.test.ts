@@ -366,6 +366,36 @@ describe("daily candidate evaluator", () => {
       detail: "Aborted",
     });
   });
+
+  it("emits bounded selection metrics without widening the persistence candidate", async () => {
+    const onDiagnostic = vi.fn();
+    const evaluator = createDailyCandidateEvaluator({
+      fetchImpl: wikipediaFetch({
+        targets: [target("Target", 1)],
+        starts: ["Start one", "Start two", "Start three"],
+      }) as unknown as typeof fetch,
+      gateway: gatewayForStarts(),
+      now: () => NOW,
+      onDiagnostic,
+    });
+
+    await expect(evaluator.findCandidate({
+      dailyDate: "2026-07-17",
+      flavor: "recognizable",
+    })).resolves.toEqual({
+      startTitle: expect.any(String),
+      startPageId: expect.any(Number),
+      targetTitle: "Target canonical",
+      targetPageId: 1,
+    });
+    expect(onDiagnostic).toHaveBeenCalledWith("selection", expect.objectContaining({
+      dailyDate: "2026-07-17",
+      flavor: "recognizable",
+      candidateCount: 3,
+      requestCount: expect.any(Number),
+      selectedScore: expect.any(Number),
+    }));
+  });
 });
 
 function target(

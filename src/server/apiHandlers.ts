@@ -11,6 +11,7 @@ import type {
   CreateChallengeResponse,
   CompleteRunRequest,
   CompleteRunResponse,
+  DailyAdminStateResponse,
   LeaderboardResponse,
   RunPathResponse,
   StartRunRequest,
@@ -23,7 +24,13 @@ import type {
 } from "./trackingRepository";
 import type { ValidateChallengeArticles } from "./wikipediaChallengeValidator";
 import type { AccountStatus, AuthorizedAccount } from "../domain/types";
-import type { CreateChallengeOutcome, DailyClassification } from "../domain/dailyEditorial";
+import type {
+  CreateChallengeOutcome,
+  DailyClassification,
+  DailyFlavor,
+  DailyNomination,
+  DailyQueueEntry,
+} from "../domain/dailyEditorial";
 import { fingerprintCreateChallengeRequest } from "./runProtocol";
 
 export interface ApiHandlers {
@@ -53,6 +60,29 @@ export interface ApiHandlers {
   ): Promise<AbandonRunResponse>;
   listLeaderboard(challengeId: string): Promise<LeaderboardResponse>;
   getRunPath(runId: string): Promise<RunPathResponse>;
+  listDailyAdminState(): Promise<DailyAdminStateResponse>;
+  approveDailyNomination(
+    actorAccountId: string,
+    nominationId: string,
+    flavor: DailyFlavor | undefined,
+    idempotencyKey: string,
+  ): Promise<DailyQueueEntry>;
+  declineDailyNomination(
+    actorAccountId: string,
+    nominationId: string,
+    idempotencyKey: string,
+  ): Promise<DailyNomination>;
+  queueDailyChallenge(
+    actorAccountId: string,
+    challengeId: string,
+    flavor: DailyFlavor,
+    idempotencyKey: string,
+  ): Promise<DailyQueueEntry>;
+  removeDailyQueueEntry(
+    actorAccountId: string,
+    queueEntryId: string,
+    idempotencyKey: string,
+  ): Promise<DailyQueueEntry>;
 }
 
 export interface ApiHandlerOptions {
@@ -329,6 +359,113 @@ export function createApiHandlers(
         ),
       };
     },
+
+    async listDailyAdminState() {
+      const state = await dailyProtocol(repository).listDailyAdminState();
+      return { nominations: state.nominations, queueEntries: state.queueEntries };
+    },
+
+    async approveDailyNomination(actorAccountId, nominationId, flavor, idempotencyKey) {
+      const protocol = dailyProtocol(repository);
+      const cleanActorAccountId = dailyRequiredString(
+        actorAccountId,
+        "invalid_daily_actor",
+        "A claimed administrator account is required.",
+      );
+      const cleanNominationId = dailyRequiredString(
+        nominationId,
+        "invalid_daily_nomination_id",
+        "Daily nomination ID is invalid.",
+      );
+      const cleanIdempotencyKey = dailyRequiredString(
+        idempotencyKey,
+        "invalid_idempotency_key",
+        "An idempotency key is required.",
+      );
+      let selectedFlavor = flavor === undefined ? undefined : dailyFlavor(flavor);
+      if (selectedFlavor === undefined) {
+        const nomination = (await protocol.listDailyAdminState()).nominations
+          .find((entry) => entry.id === cleanNominationId);
+        if (!nomination) {
+          throw new ApiError("daily_nomination_not_found", "Daily nomination was not found.", 404);
+        }
+        selectedFlavor = nomination.suggestedFlavor ?? undefined;
+      }
+      if (selectedFlavor === undefined) {
+        throw new ApiError(
+          "daily_nomination_flavor_required",
+          "Choose a Daily flavor because this nomination has no suggestion.",
+          400,
+        );
+      }
+      return protocol.approveDailyNomination({
+        actorAccountId: cleanActorAccountId,
+        nominationId: cleanNominationId,
+        flavor: selectedFlavor,
+        idempotencyKey: cleanIdempotencyKey,
+      });
+    },
+
+    async declineDailyNomination(actorAccountId, nominationId, idempotencyKey) {
+      return dailyProtocol(repository).declineDailyNomination({
+        actorAccountId: dailyRequiredString(
+          actorAccountId,
+          "invalid_daily_actor",
+          "A claimed administrator account is required.",
+        ),
+        nominationId: dailyRequiredString(
+          nominationId,
+          "invalid_daily_nomination_id",
+          "Daily nomination ID is invalid.",
+        ),
+        idempotencyKey: dailyRequiredString(
+          idempotencyKey,
+          "invalid_idempotency_key",
+          "An idempotency key is required.",
+        ),
+      });
+    },
+
+    async queueDailyChallenge(actorAccountId, challengeId, flavor, idempotencyKey) {
+      return dailyProtocol(repository).queueDailyChallenge({
+        actorAccountId: dailyRequiredString(
+          actorAccountId,
+          "invalid_daily_actor",
+          "A claimed administrator account is required.",
+        ),
+        challengeId: dailyRequiredString(
+          challengeId,
+          "invalid_challenge_id",
+          "Daily challenge ID is invalid.",
+        ),
+        flavor: dailyFlavor(flavor),
+        idempotencyKey: dailyRequiredString(
+          idempotencyKey,
+          "invalid_idempotency_key",
+          "An idempotency key is required.",
+        ),
+      });
+    },
+
+    async removeDailyQueueEntry(actorAccountId, queueEntryId, idempotencyKey) {
+      return dailyProtocol(repository).removeDailyQueueEntry({
+        actorAccountId: dailyRequiredString(
+          actorAccountId,
+          "invalid_daily_actor",
+          "A claimed administrator account is required.",
+        ),
+        queueEntryId: dailyRequiredString(
+          queueEntryId,
+          "invalid_daily_queue_entry_id",
+          "Daily queue entry ID is invalid.",
+        ),
+        idempotencyKey: dailyRequiredString(
+          idempotencyKey,
+          "invalid_idempotency_key",
+          "An idempotency key is required.",
+        ),
+      });
+    },
   };
 }
 
@@ -403,6 +540,19 @@ function boundedRequiredString(
     throw new ApiError(code, message, 400);
   }
   return result;
+}
+
+function dailyProtocol(repository: TrackingRepository): RunProtocolRepository {
+  return repository as RunProtocolRepository;
+}
+
+function dailyRequiredString(value: unknown, code: string, message: string): string {
+  return boundedRequiredString(value, code, message, 200);
+}
+
+function dailyFlavor(value: unknown): DailyFlavor {
+  if (value === "recognizable" || value === "weird" || value === "hard") return value;
+  throw new ApiError("invalid_daily_flavor", "Daily flavor is invalid.", 400);
 }
 
 function readIdentityStatus(value: unknown): "ghost" | "claimed" | "merged" {

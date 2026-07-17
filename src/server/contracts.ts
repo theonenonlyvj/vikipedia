@@ -9,6 +9,10 @@ import type {
   RunTransition,
   ServerPathStep,
 } from "../domain/types";
+import type {
+  DailyNomination,
+  DailyQueueEntry,
+} from "../domain/dailyEditorial";
 export type { CreateChallengeOutcome } from "../domain/dailyEditorial";
 import type {
   AbandonRunV2Input,
@@ -16,7 +20,7 @@ import type {
   StartRunV2Input,
 } from "./runProtocol";
 import type { RunRecordResponse } from "./trackingRepository";
-import type { CreateChallengeOutcome } from "../domain/dailyEditorial";
+import type { CreateChallengeOutcome as DailyCreateChallengeOutcome } from "../domain/dailyEditorial";
 
 export interface ChallengesResponse {
   challenges: Challenge[];
@@ -34,7 +38,7 @@ export interface CreateChallengeV2Request {
   nominateForDaily?: boolean;
 }
 
-export type CreateChallengeV2Response = CreateChallengeOutcome;
+export type CreateChallengeV2Response = DailyCreateChallengeOutcome;
 
 export interface CreateChallengeResponse {
   challenge: Challenge;
@@ -110,4 +114,13 @@ export interface ActiveRunResponse {
 
 export interface AccountStatsResponse {
   stats: AccountStats;
+}
+
+export interface DailyCapabilitiesResponse {
+  canManageDailies: boolean;
+}
+
+export interface DailyAdminStateResponse {
+  nominations: DailyNomination[];
+  queueEntries: DailyQueueEntry[];
 }

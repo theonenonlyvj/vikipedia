@@ -48,7 +48,8 @@ export type DailyChallengeDiagnosticEvent =
   | "random_request_failed"
   | "random_request_timeout"
   | "render_failed"
-  | "render_mismatch";
+  | "render_mismatch"
+  | "selection";
 
 export interface DailyCandidateEvaluator {
   findCandidate(request: DailyCandidateRequest): Promise<DailyChallengeCandidate>;
@@ -140,10 +141,14 @@ export function createDailyCandidateEvaluator(options: {
 
         const ranked = rankPairs(starts, targets, request);
         if (ranked.length === 0) throw unavailable();
-        if (request.flavor !== "hard") return toCandidate(ranked[0]!);
+        if (request.flavor !== "hard") {
+          emitSelectionDiagnostic(diagnostic, request, budget, ranked, ranked[0]!);
+          return toCandidate(ranked[0]!);
+        }
 
         for (const pair of ranked) {
           if (!(await hasTwoClickShortcut(pair.start, pair.target, budget, endpoint))) {
+            emitSelectionDiagnostic(diagnostic, request, budget, ranked, pair);
             return toCandidate(pair);
           }
         }
@@ -180,6 +185,7 @@ interface WikimediaBudget {
   assertActive(): void;
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   takeGatewayRequest(): void;
+  requestCount(): number;
 }
 
 interface CanonicalTarget {
@@ -257,6 +263,9 @@ function createWikimediaBudget(options: {
     },
     takeGatewayRequest() {
       takeRequest();
+    },
+    requestCount() {
+      return requestCount;
     },
   };
 
@@ -497,6 +506,26 @@ function toCandidate(pair: CandidatePair): DailyChallengeCandidate {
     targetTitle: pair.target.title,
     targetPageId: pair.target.pageId,
   };
+}
+
+function emitSelectionDiagnostic(
+  diagnostic: (
+    event: DailyChallengeDiagnosticEvent,
+    fields: Record<string, string | number | boolean>,
+  ) => void,
+  request: DailyCandidateRequest,
+  budget: WikimediaBudget,
+  ranked: readonly CandidatePair[],
+  selected: CandidatePair,
+): void {
+  const scoreKey = `${request.flavor}Score` as const;
+  diagnostic("selection", {
+    dailyDate: request.dailyDate,
+    flavor: request.flavor,
+    candidateCount: ranked.length,
+    requestCount: budget.requestCount(),
+    selectedScore: selected.score[scoreKey],
+  });
 }
 
 async function apiJson(

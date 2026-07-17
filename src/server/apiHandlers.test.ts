@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApiHandlers } from "./apiHandlers";
+import { ApiError } from "./http";
 import type { TrackingRepository } from "./trackingRepository";
 import { createWorker, type Env as WorkerEnv, type WorkerTracking } from "./worker";
 import {
@@ -64,6 +65,117 @@ function fakeRepository(): TrackingRepository {
 }
 
 describe("api handlers", () => {
+  it("uses a stored nomination suggestion unless an administrator overrides its flavor", async () => {
+    const repository = fakeRepository();
+    const approveDailyNomination = vi.fn(async (input) => ({
+      id: "queue-1",
+      challengeId: "challenge-1",
+      nominationId: input.nominationId,
+      flavor: input.flavor,
+      source: "community" as const,
+      status: "queued" as const,
+      queuedByAccountId: input.actorAccountId,
+      queuedAt: "2026-07-17T00:00:00.000Z",
+      consumedDailyDate: null,
+      consumedAt: null,
+      updatedAt: "2026-07-17T00:00:00.000Z",
+    }));
+    Object.assign(repository, {
+      listDailyAdminState: vi.fn(async () => ({
+        nominations: [{
+          id: "nomination-1",
+          challengeId: "challenge-1",
+          nominatedByAccountId: "nominator",
+          nominatedByDisplayName: "Nominator",
+          status: "pending" as const,
+          recognizableScore: 10,
+          weirdScore: 20,
+          hardScore: 30,
+          suggestedFlavor: "weird" as const,
+          confidence: "high" as const,
+          classifierVersion: "editorial-v1",
+          reviewedByAccountId: null,
+          reviewedAt: null,
+          createdAt: "2026-07-17T00:00:00.000Z",
+          updatedAt: "2026-07-17T00:00:00.000Z",
+        }],
+        queueEntries: [],
+      })),
+      approveDailyNomination,
+    });
+    const handlers = createApiHandlers(repository) as unknown as {
+      approveDailyNomination(
+        actorAccountId: string,
+        nominationId: string,
+        flavor: "recognizable" | "weird" | "hard" | undefined,
+        idempotencyKey: string,
+      ): Promise<unknown>;
+    };
+
+    await expect(handlers.approveDailyNomination(
+      "admin-account", "nomination-1", undefined, "approve-suggested",
+    )).resolves.toMatchObject({ flavor: "weird" });
+    await expect(handlers.approveDailyNomination(
+      "admin-account", "nomination-1", "hard", "approve-override",
+    )).resolves.toMatchObject({ flavor: "hard" });
+    expect(approveDailyNomination).toHaveBeenNthCalledWith(1, {
+      actorAccountId: "admin-account",
+      nominationId: "nomination-1",
+      flavor: "weird",
+      idempotencyKey: "approve-suggested",
+    });
+    expect(approveDailyNomination).toHaveBeenNthCalledWith(2, {
+      actorAccountId: "admin-account",
+      nominationId: "nomination-1",
+      flavor: "hard",
+      idempotencyKey: "approve-override",
+    });
+  });
+
+  it("rejects approval without an override or stored suggestion", async () => {
+    const repository = fakeRepository();
+    const approveDailyNomination = vi.fn();
+    Object.assign(repository, {
+      listDailyAdminState: vi.fn(async () => ({
+        nominations: [{
+          id: "nomination-1",
+          challengeId: "challenge-1",
+          nominatedByAccountId: "nominator",
+          nominatedByDisplayName: "Nominator",
+          status: "pending" as const,
+          recognizableScore: null,
+          weirdScore: null,
+          hardScore: null,
+          suggestedFlavor: null,
+          confidence: "unclassified" as const,
+          classifierVersion: "editorial-v1",
+          reviewedByAccountId: null,
+          reviewedAt: null,
+          createdAt: "2026-07-17T00:00:00.000Z",
+          updatedAt: "2026-07-17T00:00:00.000Z",
+        }],
+        queueEntries: [],
+      })),
+      approveDailyNomination,
+    });
+    const handlers = createApiHandlers(repository) as unknown as {
+      approveDailyNomination(
+        actorAccountId: string,
+        nominationId: string,
+        flavor: undefined,
+        idempotencyKey: string,
+      ): Promise<unknown>;
+    };
+
+    await expect(handlers.approveDailyNomination(
+      "admin-account", "nomination-1", undefined, "approve-unsuggested",
+    )).rejects.toMatchObject({
+      code: "daily_nomination_flavor_required",
+      status: 400,
+    });
+    expect(approveDailyNomination).not.toHaveBeenCalled();
+  });
+
   it("includes daily nomination intent in replay fingerprints", async () => {
     const omitted = await fingerprintCreateChallengeRequest({
       startTitle: "Mars",
@@ -1013,6 +1125,209 @@ describe("Worker API route versions", () => {
     expect((await worker.fetch(request(2), env)).status).toBe(400);
   });
 });
+
+describe("editorial daily administration routes", () => {
+  it("grants daily moderation capabilities only to claimed configured account IDs", async () => {
+    const tracking = fakeWorkerTracking();
+    tracking.authorize = vi.fn(async () => ({
+      accountId: "canonical-admin",
+      displayName: "Administrator",
+      aliases: ["old-admin-handle"],
+      status: "claimed" as const,
+    }));
+    const worker = createWorker({ createTracking: () => tracking });
+
+    const response = await worker.fetch(new Request(
+      "https://worker.example/api/v2/accounts/me/capabilities",
+      { headers: { Authorization: "Bearer test" } },
+    ), editorialWorkerEnv("  canonical-admin, , second-admin  "));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ canManageDailies: true });
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not authorize display-name or alias impersonation", async () => {
+    const tracking = fakeWorkerTracking();
+    tracking.authorize = vi.fn(async () => ({
+      accountId: "ordinary-account",
+      displayName: "canonical-admin",
+      aliases: ["canonical-admin"],
+      status: "claimed" as const,
+    }));
+    const worker = createWorker({ createTracking: () => tracking });
+    const env = editorialWorkerEnv("canonical-admin");
+
+    const capabilities = await worker.fetch(new Request(
+      "https://worker.example/api/v2/accounts/me/capabilities",
+      { headers: { Authorization: "Bearer test" } },
+    ), env);
+    const admin = await worker.fetch(new Request(
+      "https://worker.example/api/v2/admin/dailies",
+      { headers: { Authorization: "Bearer test" } },
+    ), env);
+
+    await expect(capabilities.json()).resolves.toEqual({ canManageDailies: false });
+    expect(admin.status).toBe(403);
+    const adminBody = await admin.text();
+    expect(JSON.parse(adminBody)).toEqual({
+      error: { code: "forbidden", message: "Forbidden." },
+    });
+    expect(adminBody).not.toContain("canonical-admin");
+  });
+
+  it("returns generic forbidden responses for every admin route before mutation validation", async () => {
+    const tracking = fakeWorkerTracking();
+    tracking.authorize = vi.fn(async () => ({
+      accountId: "ordinary-account",
+      displayName: "Administrator",
+      aliases: [],
+      status: "claimed" as const,
+    }));
+    const worker = createWorker({ createTracking: () => tracking });
+    const env = editorialWorkerEnv("canonical-admin");
+    const requests = [
+      ["GET", "/api/v2/admin/dailies"],
+      ["POST", "/api/v2/admin/daily-nominations/nomination-1/approve"],
+      ["POST", "/api/v2/admin/daily-nominations/nomination-1/decline"],
+      ["POST", "/api/v2/admin/daily-queue"],
+      ["DELETE", "/api/v2/admin/daily-queue/queue-1"],
+    ] as const;
+
+    for (const [method, pathname] of requests) {
+      const response = await worker.fetch(new Request(`https://worker.example${pathname}`, {
+        method,
+        headers: { Authorization: "Bearer test" },
+      }), env);
+      expect(response.status, `${method} ${pathname}`).toBe(403);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "forbidden", message: "Forbidden." },
+      });
+    }
+  });
+
+  it("maps failed admin authentication to the same generic forbidden response", async () => {
+    const tracking = fakeWorkerTracking();
+    tracking.authorize = vi.fn(async () => {
+      throw new ApiError("unauthorized", "Sign in before changing VWiki Race.", 401);
+    });
+    const worker = createWorker({ createTracking: () => tracking });
+
+    const response = await worker.fetch(new Request(
+      "https://worker.example/api/v2/admin/dailies",
+    ), editorialWorkerEnv("canonical-admin"));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "forbidden", message: "Forbidden." },
+    });
+  });
+
+  it("returns false daily moderation capabilities for a configured ghost account", async () => {
+    const tracking = fakeWorkerTracking();
+    tracking.authorize = vi.fn(async () => ({
+      accountId: "canonical-admin",
+      displayName: "Guest administrator",
+      aliases: [],
+      status: "ghost" as const,
+    }));
+    const worker = createWorker({ createTracking: () => tracking });
+
+    const response = await worker.fetch(new Request(
+      "https://worker.example/api/v2/accounts/me/capabilities",
+      { headers: { Authorization: "Bearer test" } },
+    ), editorialWorkerEnv("canonical-admin"));
+
+    await expect(response.json()).resolves.toEqual({ canManageDailies: false });
+  });
+
+  it("requires an idempotency key before approving a daily nomination", async () => {
+    const tracking = fakeWorkerTracking();
+    const approveDailyNomination = vi.fn();
+    Object.assign(tracking.handlers, { approveDailyNomination });
+    tracking.authorize = vi.fn(async () => claimedAdmin());
+    const worker = createWorker({ createTracking: () => tracking });
+
+    const response = await worker.fetch(new Request(
+      "https://worker.example/api/v2/admin/daily-nominations/nomination-1/approve",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+        body: JSON.stringify({ flavor: "weird" }),
+      },
+    ), editorialWorkerEnv("canonical-admin"));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "invalid_idempotency_key" },
+    });
+    expect(approveDailyNomination).not.toHaveBeenCalled();
+  });
+
+  it("strictly decodes path IDs and passes the claimed actor to daily moderation", async () => {
+    const tracking = fakeWorkerTracking();
+    const approveDailyNomination = vi.fn(async () => ({ id: "queue-1" }));
+    Object.assign(tracking.handlers, { approveDailyNomination });
+    tracking.authorize = vi.fn(async () => claimedAdmin());
+    const worker = createWorker({ createTracking: () => tracking });
+    const env = editorialWorkerEnv("canonical-admin");
+
+    const malformed = await worker.fetch(new Request(
+      "https://worker.example/api/v2/admin/daily-nominations/%E0%A4%A/approve",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "malformed-path",
+        },
+        body: "{}",
+      },
+    ), env);
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toMatchObject({
+      error: { code: "invalid_daily_nomination_id" },
+    });
+
+    const response = await worker.fetch(new Request(
+      "https://worker.example/api/v2/admin/daily-nominations/nomination%2D1/approve",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test",
+          "Content-Type": "application/json",
+          "Idempotency-Key": "approve-1",
+        },
+        body: JSON.stringify({ flavor: "hard" }),
+      },
+    ), env);
+    expect(response.status).toBe(200);
+    expect(approveDailyNomination).toHaveBeenCalledWith(
+      "canonical-admin", "nomination-1", "hard", "approve-1",
+    );
+  });
+});
+
+function editorialWorkerEnv(dailyAdmins: string): WorkerEnv {
+  return {
+    VWIKI_RACE_DB: {} as D1Database,
+    VGAMES_URL: "https://vgames.example",
+    DAILY_ADMIN_ACCOUNT_IDS: dailyAdmins,
+    CLICK_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) },
+    ACCOUNT_READ_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) },
+    CHALLENGE_CREATE_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) },
+    DAILY_ADMIN_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) },
+  } as unknown as WorkerEnv;
+}
+
+function claimedAdmin() {
+  return {
+    accountId: "canonical-admin",
+    displayName: "Administrator",
+    aliases: [],
+    status: "claimed" as const,
+  };
+}
 
 function fakeWorkerTracking(): WorkerTracking {
   const handlers = {

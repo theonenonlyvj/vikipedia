@@ -424,6 +424,161 @@ describe("daily challenge D1 jobs", () => {
     });
   });
 
+  it("consumes a matching queued candidate before constructing the editorial source", async () => {
+    const timestamp = "2026-07-16T10:00:00.000Z";
+    const repository = createD1TrackingRepository({
+      db: env.VWIKI_RACE_DB,
+      now: () => new Date(timestamp),
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO challenges
+         (id, label, start_title, target_title, start_page_id, target_page_id,
+          validation_status, ruleset, sort_order, is_active, created_at,
+          origin, source)
+       VALUES ('queue-first-challenge', 'Queue first', 'Queued start', 'Queued target',
+               7101, 7102, 'ready', 'ranked_classic', 40, 1, ?, 'manual', 'curated')`,
+    ).bind(timestamp).run();
+    await repository.queueDailyChallenge({
+      challengeId: "queue-first-challenge",
+      flavor: "weird",
+      actorAccountId: "admin-account",
+      idempotencyKey: "queue-first",
+    });
+    const findCandidate = vi.fn();
+    const createDailyCandidateSource = vi.fn(() => ({ findCandidate }));
+    const worker = createWorker({
+      createTracking: () => ({
+        handlers: {},
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => { throw new Error("not used"); },
+      } as unknown as WorkerTracking),
+      createDailyCandidateSource,
+      now: () => new Date(timestamp),
+    });
+
+    await worker.scheduled(createScheduledController({
+      scheduledTime: new Date(timestamp),
+      cron: "0 10 * * *",
+    }), env as unknown as WorkerEnv);
+
+    expect(createDailyCandidateSource).not.toHaveBeenCalled();
+    expect(findCandidate).not.toHaveBeenCalled();
+    await expect(env.VWIKI_RACE_DB.prepare(
+      "SELECT challenge_id, selection_source FROM daily_features WHERE daily_date = '2026-07-16'",
+    ).first()).resolves.toEqual({
+      challenge_id: "queue-first-challenge",
+      selection_source: "admin",
+    });
+  });
+
+  it("invalidates an unusable queued candidate and falls back to automatic selection", async () => {
+    const timestamp = "2026-07-16T10:00:00.000Z";
+    const repository = createD1TrackingRepository({
+      db: env.VWIKI_RACE_DB,
+      now: () => new Date(timestamp),
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO challenges
+         (id, label, start_title, target_title, start_page_id, target_page_id,
+          validation_status, ruleset, sort_order, is_active, created_at,
+          origin, source)
+       VALUES ('invalid-queue-challenge', 'Invalid queue', 'Queued start', 'Queued target',
+               7201, 7202, 'ready', 'ranked_classic', 40, 1, ?, 'manual', 'curated')`,
+    ).bind(timestamp).run();
+    const queued = await repository.queueDailyChallenge({
+      challengeId: "invalid-queue-challenge",
+      flavor: "weird",
+      actorAccountId: "admin-account",
+      idempotencyKey: "invalid-queue",
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      "UPDATE challenges SET is_active = 0 WHERE id = 'invalid-queue-challenge'",
+    ).run();
+    const findCandidate = vi.fn(async () => ({
+      startTitle: "Automatic start",
+      startPageId: 7203,
+      targetTitle: "Automatic target",
+      targetPageId: 7204,
+    }));
+    const worker = createWorker({
+      createTracking: () => ({
+        handlers: {},
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => { throw new Error("not used"); },
+      } as unknown as WorkerTracking),
+      createDailyCandidateSource: () => ({ findCandidate }),
+      now: () => new Date(timestamp),
+    });
+
+    await worker.scheduled(createScheduledController({
+      scheduledTime: new Date(timestamp),
+      cron: "0 10 * * *",
+    }), env as unknown as WorkerEnv);
+
+    expect(findCandidate).toHaveBeenCalledWith({ dailyDate: "2026-07-16", flavor: "weird" });
+    await expect(env.VWIKI_RACE_DB.prepare(
+      "SELECT status FROM daily_queue_entries WHERE id = ?",
+    ).bind(queued.id).first()).resolves.toEqual({ status: "invalid" });
+    await expect(env.VWIKI_RACE_DB.prepare(
+      "SELECT selection_source FROM daily_features WHERE daily_date = '2026-07-16'",
+    ).first()).resolves.toEqual({ selection_source: "automatic" });
+  });
+
+  it("accepts automatic editorial candidates through the daily feature contract", async () => {
+    const job = {
+      dailyDate: "2026-07-15",
+      attemptCount: 1,
+      leaseToken: "automatic-feature-lease",
+      leaseExpiresAt: "2026-07-15T10:10:00.000Z",
+    };
+    const acceptDailyFeature = vi.fn(async () => ({ id: "challenge-automatic" }));
+    const acceptDailyChallenge = vi.fn();
+    const repository = {
+      ensureDailyChallengeJob: vi.fn(async () => undefined),
+      claimDueDailyChallengeJob: vi.fn(async () => job),
+      failDailyChallengeJob: vi.fn(async () => undefined),
+      findQueuedDailyCandidate: vi.fn(async () => null),
+      acceptDailyFeature,
+      acceptDailyChallenge,
+    };
+    const worker = createWorker({
+      createTracking: () => ({
+        handlers: {},
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => { throw new Error("not used"); },
+      } as unknown as WorkerTracking),
+      createDailyCandidateSource: () => ({
+        findCandidate: vi.fn(async () => ({
+          startTitle: "Automatic start",
+          startPageId: 7301,
+          targetTitle: "Automatic target",
+          targetPageId: 7302,
+        })),
+      }),
+      now: () => new Date("2026-07-15T10:00:00.000Z"),
+    });
+
+    await worker.scheduled(createScheduledController({
+      scheduledTime: new Date("2026-07-15T10:00:00.000Z"),
+      cron: "0 10 * * *",
+    }), env as unknown as WorkerEnv);
+
+    expect(acceptDailyFeature).toHaveBeenCalledWith(job, {
+      kind: "automatic",
+      candidate: {
+        startTitle: "Automatic start",
+        startPageId: 7301,
+        targetTitle: "Automatic target",
+        targetPageId: 7302,
+      },
+      classifierVersion: "editorial-v1",
+    });
+    expect(acceptDailyChallenge).not.toHaveBeenCalled();
+  });
+
   it("ignores a trigger dated more than five minutes in the future", async () => {
     const createTracking = vi.fn();
     const worker = createWorker({
