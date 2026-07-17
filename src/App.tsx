@@ -970,6 +970,31 @@ export default function App({
         ) : null}
       </section>
 
+      {activeTab === "play" && (session !== null || modeState !== "idle")
+        ? null
+        : (
+          <footer className="site-footer">
+            <p>
+              Have{" "}
+              <a
+                href="https://theonenonlyvj.github.io/personal-site/contact"
+                rel="noopener noreferrer"
+                target="_blank"
+              >
+                Feedback
+              </a>
+              ? Want to see my other projects?{" "}
+              <a
+                href="https://theonenonlyvj.github.io/personal-site"
+                rel="noopener noreferrer"
+                target="_blank"
+              >
+                Click here
+              </a>.
+            </p>
+          </footer>
+        )}
+
       {authPrompt ? (
         <IdentityPrompt
           authBusy={authBusy}

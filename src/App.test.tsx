@@ -55,6 +55,51 @@ describe("VWiki Race app", () => {
     expect(screen.queryByText(/enter vwiki race/i)).toBeNull();
   });
 
+  it("links back to the portfolio on every view except gameplay", async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({
+        accountId: "acc-1",
+        displayName: "Vijay",
+        token: "jwt-claimed",
+        status: "claimed",
+      }),
+    );
+
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={storage} />);
+
+    const feedback = await screen.findByRole("link", { name: "Feedback" });
+    expect(feedback).toHaveAttribute(
+      "href",
+      "https://theonenonlyvj.github.io/personal-site/contact",
+    );
+    expect(feedback).toHaveAttribute("target", "_blank");
+    expect(feedback.getAttribute("rel")).toContain("noopener");
+    const portfolio = screen.getByRole("link", { name: "Click here" });
+    expect(portfolio).toHaveAttribute(
+      "href",
+      "https://theonenonlyvj.github.io/personal-site",
+    );
+    expect(portfolio).toHaveAttribute("target", "_blank");
+    expect(portfolio.getAttribute("rel")).toContain("noopener");
+
+    const tabbar = screen.getByRole("navigation", { name: /vwiki race views/i });
+    for (const tab of ["leaderboard", "challenges", "stats"]) {
+      await userEvent.click(within(tabbar).getByRole("button", { name: tab }));
+      expect(screen.getByRole("link", { name: "Feedback" })).toBeVisible();
+      expect(screen.getByRole("link", { name: "Click here" })).toBeVisible();
+    }
+
+    await userEvent.click(within(tabbar).getByRole("button", { name: "play" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /start challenge #1/i }),
+    );
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Feedback" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Click here" })).toBeNull();
+  });
+
   it("explains the race in one line on the Play panel before start", async () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 

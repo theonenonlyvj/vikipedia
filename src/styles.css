@@ -678,6 +678,36 @@ h1 {
   padding-bottom: 44px;
 }
 
+.site-footer {
+  width: min(1320px, 100%);
+  margin-inline: auto;
+  padding: 14px 12px 26px;
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+
+.site-footer p {
+  margin: 0;
+  font-family: var(--viota-ui-font);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.site-footer a {
+  color: var(--cyan);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1px solid var(--cyan);
+  padding-bottom: 1px;
+  white-space: nowrap;
+}
+
+.site-footer a:hover,
+.site-footer a:focus-visible {
+  color: #dffbfb;
+  border-bottom-color: #dffbfb;
+}
+
 .game-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
