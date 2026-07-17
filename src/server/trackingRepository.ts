@@ -9,6 +9,10 @@ import type {
   RunTransition,
   ServerPathStep,
 } from "../domain/types";
+export type {
+  DailyNomination,
+  DailyQueueEntry,
+} from "../domain/dailyEditorial";
 import type {
   AbandonRunV2Input,
   RecordClickV2Input,

@@ -1,3 +1,5 @@
+import type { DailyFeature } from "./dailyEditorial";
+
 export type AccountStatus = "ghost" | "claimed" | "merged";
 export type ChallengeMode = "solo" | "daily";
 export type Ruleset = "ranked_classic";
@@ -61,6 +63,7 @@ export interface Challenge {
   ruleset: Ruleset;
   origin?: "manual" | "daily";
   dailyDate?: string | null;
+  dailyFeature?: DailyFeature | null;
   source: "curated" | "wikipedia_random";
   createdBy?: ChallengeCreator;
 }

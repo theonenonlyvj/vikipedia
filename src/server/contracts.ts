@@ -9,6 +9,7 @@ import type {
   RunTransition,
   ServerPathStep,
 } from "../domain/types";
+export type { CreateChallengeOutcome } from "../domain/dailyEditorial";
 import type {
   AbandonRunV2Input,
   RecordClickV2Input,

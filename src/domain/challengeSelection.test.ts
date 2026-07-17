@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { dailyFlavorForCentralDate } from "./dailyEditorial";
 import type { Challenge } from "./types";
 import {
   centralDateKey,
   dailyBadgeLabel,
   selectDefaultChallenge,
 } from "./challengeSelection";
+
+describe("editorial Daily flavors", () => {
+  it("maps Central calendar weekdays to the approved editorial rhythm", () => {
+    expect(dailyFlavorForCentralDate("2026-07-20")).toBe("recognizable");
+    expect(dailyFlavorForCentralDate("2026-07-23")).toBe("weird");
+    expect(dailyFlavorForCentralDate("2026-07-25")).toBe("hard");
+  });
+});
 
 const challenges = [
   challenge("challenge-0001"),

@@ -231,7 +231,75 @@ describe("hardening migration", () => {
       ).run();
     }
 
-    await applyD1Migrations(db, env.TEST_MIGRATIONS, "upgrade_migrations");
+    await applyD1Migrations(db, env.TEST_MIGRATIONS.slice(2, 4), "upgrade_migrations");
+
+    const seededLegacyDailies = [
+      {
+        dailyDate: "2026-07-20",
+        challengeId: "legacy-daily-recognizable",
+        flavor: "recognizable",
+        selectionSource: "automatic",
+      },
+      {
+        dailyDate: "2026-07-23",
+        challengeId: "legacy-daily-weird",
+        flavor: "weird",
+        selectionSource: "automatic",
+      },
+      {
+        dailyDate: "2026-07-25",
+        challengeId: "legacy-daily-hard",
+        flavor: "hard",
+        selectionSource: "automatic",
+      },
+    ];
+    for (const [index, daily] of seededLegacyDailies.entries()) {
+      await db.prepare(
+        `INSERT INTO challenges
+           (id, label, start_title, target_title, ruleset, sort_order, is_active,
+            created_at, created_by_account_id, created_by_display_name,
+            created_by_identity_status, start_page_id, target_page_id,
+            validation_status, origin, daily_date, source)
+         VALUES (?, ?, ?, ?, 'ranked_classic', ?, 1,
+                 '2026-07-17T00:00:00.000Z', 'creator', 'Creator', 'claimed',
+                 ?, ?, 'ready', 'daily', ?, 'wikipedia_random')`,
+      ).bind(
+        daily.challengeId,
+        `Legacy Daily #${index + 1}`,
+        `Legacy start ${index + 1}`,
+        `Legacy target ${index + 1}`,
+        100 + index,
+        9001 + index,
+        9101 + index,
+        daily.dailyDate,
+      ).run();
+    }
+
+    await applyD1Migrations(db, env.TEST_MIGRATIONS.slice(4), "editorial_migrations");
+
+    const { results: dailyFeatureColumns } = await db.prepare(
+      "PRAGMA table_info(daily_features)",
+    ).all<{ name: string }>();
+    expect(dailyFeatureColumns.map((column) => column.name)).toEqual(expect.arrayContaining([
+      "daily_date", "challenge_id", "flavor", "selection_source",
+    ]));
+    await expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM daily_features WHERE daily_date IS NOT NULL",
+    ).first<{ count: number }>()).resolves.toEqual({ count: 3 });
+    await expect(db.prepare(
+      `SELECT daily_date AS dailyDate, challenge_id AS challengeId,
+              flavor, selection_source AS selectionSource
+       FROM daily_features
+       ORDER BY daily_date`,
+    ).all()).resolves.toMatchObject({ results: seededLegacyDailies });
+    await expect(db.prepare(
+      `INSERT INTO challenges
+         (id, label, start_title, target_title, ruleset, sort_order, is_active,
+          created_at, start_page_id, target_page_id, validation_status)
+       VALUES ('duplicate-ordered-pair', 'Duplicate pair', 'Another start',
+               'Another target', 'ranked_classic', 200, 1,
+               '2026-07-17T00:00:00.000Z', 9001, 9101, 'ready')`,
+    ).run()).rejects.toThrow(/constraint/i);
 
     await expect(db.prepare(
       "SELECT start_title, start_page_id, validation_status FROM challenges WHERE id = 'challenge-0002'",
