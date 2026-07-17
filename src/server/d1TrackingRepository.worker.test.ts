@@ -1466,6 +1466,136 @@ describe("Task 4 D1 projections", () => {
     ]);
   });
 
+  it("keeps approval pending when another queue entry owns the challenge and replays the rejection", async () => {
+    const { repository } = fixture(
+      { now: "2026-07-17T01:00:00.000Z" },
+      "approval-conflict-generated",
+    );
+    await insertReadyChallenge({
+      id: "approval-conflict-challenge",
+      startPageId: 6251,
+      targetPageId: 6252,
+    });
+    await insertEditorialNomination(env.VWIKI_RACE_DB, {
+      id: "approval-conflict-nomination",
+      challengeId: "approval-conflict-challenge",
+      status: "pending",
+    });
+    await insertEditorialQueue(env.VWIKI_RACE_DB, {
+      id: "approval-conflict-admin-entry",
+      challengeId: "approval-conflict-challenge",
+      source: "admin",
+      flavor: "hard",
+    });
+    const approve = () => repository.approveDailyNomination({
+      nominationId: "approval-conflict-nomination",
+      flavor: "weird",
+      actorAccountId: "admin-account",
+      idempotencyKey: "approval-conflict",
+    });
+
+    await expect(approve()).rejects.toMatchObject({ code: "daily_queue_conflict", status: 409 });
+    await expect(approve()).rejects.toMatchObject({ code: "daily_queue_conflict", status: 409 });
+    await expect(env.VWIKI_RACE_DB.prepare(
+      "SELECT status, reviewed_by_account_id, reviewed_at FROM daily_nominations WHERE id = ?",
+    ).bind("approval-conflict-nomination").first()).resolves.toEqual({
+      status: "pending",
+      reviewed_by_account_id: null,
+      reviewed_at: null,
+    });
+    await expect(operationRow("approve_daily_nomination", "approval-conflict")).resolves
+      .toMatchObject({
+        outcome_status: "rejected",
+        error_code: "daily_queue_conflict",
+        resource_id: null,
+      });
+    await expect(scalar(
+      "SELECT COUNT(*) FROM daily_queue_entries WHERE challenge_id = 'approval-conflict-challenge'",
+    )).resolves.toBe(1);
+  });
+
+  it.each(["admin", "community"] as const)(
+    "rejects and replays direct queue conflicts with an existing %s entry",
+    async (source) => {
+      const generatedId = `direct-${source}-generated`;
+      const challengeId = `direct-${source}-conflict`;
+      const { repository } = fixture({ now: "2026-07-17T02:00:00.000Z" }, generatedId);
+      await insertReadyChallenge({
+        id: challengeId,
+        startPageId: source === "admin" ? 6261 : 6271,
+        targetPageId: source === "admin" ? 6262 : 6272,
+      });
+      let nominationId: string | undefined;
+      if (source === "community") {
+        nominationId = "direct-community-nomination";
+        await insertEditorialNomination(env.VWIKI_RACE_DB, {
+          id: nominationId,
+          challengeId,
+          status: "approved",
+        });
+      }
+      await insertEditorialQueue(env.VWIKI_RACE_DB, {
+        id: `existing-${source}-entry`,
+        challengeId,
+        nominationId,
+        source,
+        flavor: "hard",
+      });
+      const queue = () => repository.queueDailyChallenge({
+        challengeId,
+        flavor: "weird",
+        actorAccountId: "admin-account",
+        idempotencyKey: `direct-${source}-conflict`,
+      });
+
+      await expect(queue()).rejects.toMatchObject({ code: "daily_queue_conflict", status: 409 });
+      await expect(queue()).rejects.toMatchObject({ code: "daily_queue_conflict", status: 409 });
+      await expect(operationRow("queue_daily_challenge", `direct-${source}-conflict`)).resolves
+        .toMatchObject({
+          outcome_status: "rejected",
+          error_code: "daily_queue_conflict",
+          resource_id: null,
+        });
+      await expect(env.VWIKI_RACE_DB.prepare(
+        "SELECT id, flavor, source, status FROM daily_queue_entries WHERE challenge_id = ?",
+      ).bind(challengeId).first()).resolves.toEqual({
+        id: `existing-${source}-entry`,
+        flavor: "hard",
+        source,
+        status: "queued",
+      });
+      await expect(env.VWIKI_RACE_DB.prepare(
+        "SELECT COUNT(*) AS count FROM daily_queue_entries WHERE id = ?",
+      ).bind(generatedId).first()).resolves.toEqual({ count: 0 });
+    },
+  );
+
+  it("returns and replays daily_nomination_not_found for a missing nomination", async () => {
+    const { repository } = fixture();
+    const decline = () => repository.declineDailyNomination({
+      nominationId: "missing-editorial-nomination",
+      actorAccountId: "admin-account",
+      idempotencyKey: "decline-missing-nomination",
+    });
+
+    await expect(decline()).rejects.toMatchObject({
+      code: "daily_nomination_not_found",
+      status: 404,
+    });
+    await expect(decline()).rejects.toMatchObject({
+      code: "daily_nomination_not_found",
+      status: 404,
+    });
+    await expect(operationRow(
+      "decline_daily_nomination",
+      "decline-missing-nomination",
+    )).resolves.toMatchObject({
+      outcome_status: "rejected",
+      error_code: "daily_nomination_not_found",
+      resource_id: null,
+    });
+  });
+
   it("invalidates unusable queue entries and never consumes featured or removed entries", async () => {
     const { repository } = fixture();
     await insertReadyChallenge({ id: "queue-disabled", startPageId: 6301, targetPageId: 6302 });
@@ -1665,6 +1795,200 @@ describe("Task 4 D1 projections", () => {
     await expect(scalar(
       "SELECT next_sort_order FROM challenge_number_sequence WHERE sequence_name = 'global'",
     )).resolves.toBe(5);
+  });
+
+  it("rejects a stale queued acceptance when another selection won the date", async () => {
+    const clock = { now: "2026-07-17T03:00:00.000Z" };
+    const staleRepository = fixture(clock, "stale-queued-lease").repository;
+    await insertReadyChallenge({
+      id: "stale-queued-challenge",
+      startPageId: 6911,
+      targetPageId: 6912,
+    });
+    await insertEditorialQueue(env.VWIKI_RACE_DB, {
+      id: "stale-queued-entry",
+      challengeId: "stale-queued-challenge",
+      source: "admin",
+      flavor: "recognizable",
+    });
+    await staleRepository.ensureDailyChallengeJob("2026-07-27");
+    const staleJob = await staleRepository.claimDueDailyChallengeJob();
+
+    clock.now = "2026-07-17T03:11:00.000Z";
+    const winnerRepository = fixture(clock, "queued-winner-lease").repository;
+    const winnerJob = await winnerRepository.claimDueDailyChallengeJob();
+    const winner = await winnerRepository.acceptDailyFeature(winnerJob!, {
+      kind: "automatic",
+      candidate: {
+        startTitle: "Queued race winner start",
+        startPageId: 6921,
+        targetTitle: "Queued race winner target",
+        targetPageId: 6922,
+      },
+      classifierVersion: "editorial-v1",
+    });
+
+    await expect(staleRepository.acceptDailyFeature(staleJob!, {
+      kind: "queued",
+      queueEntryId: "stale-queued-entry",
+      classifierVersion: "editorial-v1",
+    })).rejects.toMatchObject({ code: "daily_feature_accept_failed", status: 500 });
+    await expect(env.VWIKI_RACE_DB.prepare(
+      "SELECT challenge_id, selection_source, queue_entry_id FROM daily_features WHERE daily_date = ?",
+    ).bind("2026-07-27").first()).resolves.toEqual({
+      challenge_id: winner.id,
+      selection_source: "automatic",
+      queue_entry_id: null,
+    });
+    await expect(env.VWIKI_RACE_DB.prepare(
+      "SELECT status, consumed_daily_date FROM daily_queue_entries WHERE id = ?",
+    ).bind("stale-queued-entry").first()).resolves.toEqual({
+      status: "queued",
+      consumed_daily_date: null,
+    });
+  });
+
+  it("rejects a stale automatic acceptance when another ordered pair won the date", async () => {
+    const clock = { now: "2026-07-17T04:00:00.000Z" };
+    const staleRepository = fixture(clock, "stale-automatic-lease").repository;
+    await staleRepository.ensureDailyChallengeJob("2026-07-28");
+    const staleJob = await staleRepository.claimDueDailyChallengeJob();
+
+    clock.now = "2026-07-17T04:11:00.000Z";
+    const winnerRepository = fixture(clock, "automatic-winner-lease").repository;
+    const winnerJob = await winnerRepository.claimDueDailyChallengeJob();
+    const winner = await winnerRepository.acceptDailyFeature(winnerJob!, {
+      kind: "automatic",
+      candidate: {
+        startTitle: "Automatic race winner start",
+        startPageId: 6931,
+        targetTitle: "Automatic race winner target",
+        targetPageId: 6932,
+      },
+      classifierVersion: "editorial-v1",
+    });
+
+    await expect(staleRepository.acceptDailyFeature(staleJob!, {
+      kind: "automatic",
+      candidate: {
+        startTitle: "Stale automatic start",
+        startPageId: 6941,
+        targetTitle: "Stale automatic target",
+        targetPageId: 6942,
+      },
+      classifierVersion: "editorial-v1",
+    })).rejects.toMatchObject({ code: "daily_feature_accept_failed", status: 500 });
+    await expect(env.VWIKI_RACE_DB.prepare(
+      `SELECT f.challenge_id, f.selection_source, c.start_page_id, c.target_page_id
+       FROM daily_features f JOIN challenges c ON c.id = f.challenge_id
+       WHERE f.daily_date = ?`,
+    ).bind("2026-07-28").first()).resolves.toEqual({
+      challenge_id: winner.id,
+      selection_source: "automatic",
+      start_page_id: 6931,
+      target_page_id: 6932,
+    });
+    await expect(scalar(
+      "SELECT COUNT(*) FROM challenges WHERE start_page_id = 6941 AND target_page_id = 6942",
+    )).resolves.toBe(0);
+  });
+
+  it("rejects a selected queue entry when an older valid FIFO candidate wins before acceptance", async () => {
+    const { repository } = fixture({ now: "2026-07-17T05:00:00.000Z" }, "fifo-lease");
+    await insertReadyChallenge({ id: "fifo-selected", startPageId: 6951, targetPageId: 6952 });
+    await insertReadyChallenge({ id: "fifo-older", startPageId: 6961, targetPageId: 6962 });
+    await insertEditorialQueue(env.VWIKI_RACE_DB, {
+      id: "z-fifo-selected-entry",
+      challengeId: "fifo-selected",
+      source: "admin",
+      flavor: "recognizable",
+    });
+    await expect(repository.findQueuedDailyCandidate("recognizable")).resolves.toMatchObject({
+      id: "z-fifo-selected-entry",
+    });
+    await insertEditorialQueue(env.VWIKI_RACE_DB, {
+      id: "a-fifo-older-entry",
+      challengeId: "fifo-older",
+      source: "admin",
+      flavor: "recognizable",
+    });
+    await repository.ensureDailyChallengeJob("2026-07-29");
+    const job = await repository.claimDueDailyChallengeJob();
+
+    await expect(repository.acceptDailyFeature(job!, {
+      kind: "queued",
+      queueEntryId: "z-fifo-selected-entry",
+      classifierVersion: "editorial-v1",
+    })).rejects.toMatchObject({ code: "daily_feature_accept_failed", status: 500 });
+    await expect(env.VWIKI_RACE_DB.prepare(
+      "SELECT id, status FROM daily_queue_entries ORDER BY id",
+    ).all()).resolves.toMatchObject({
+      results: [
+        { id: "a-fifo-older-entry", status: "queued" },
+        { id: "z-fifo-selected-entry", status: "queued" },
+      ],
+    });
+
+    await expect(repository.acceptDailyFeature(job!, {
+      kind: "queued",
+      queueEntryId: "a-fifo-older-entry",
+      classifierVersion: "editorial-v1",
+    })).resolves.toMatchObject({ id: "fifo-older" });
+    await expect(env.VWIKI_RACE_DB.prepare(
+      "SELECT id, status FROM daily_queue_entries ORDER BY id",
+    ).all()).resolves.toMatchObject({
+      results: [
+        { id: "a-fifo-older-entry", status: "consumed" },
+        { id: "z-fifo-selected-entry", status: "queued" },
+      ],
+    });
+  });
+
+  it("rolls back automatic allocation when a forced ordered-pair winner appears", async () => {
+    await env.VWIKI_RACE_DB.prepare(`
+      CREATE TRIGGER force_pair_winner
+      BEFORE INSERT ON challenges
+      FOR EACH ROW
+      WHEN NEW.id <> 'daily-pair-race-winner'
+        AND NEW.start_page_id = 6971 AND NEW.target_page_id = 6972
+      BEGIN
+        INSERT INTO challenges
+          (id, label, start_title, target_title, start_page_id, target_page_id,
+           validation_status, ruleset, sort_order, is_active, created_at,
+           created_by_account_id, created_by_display_name,
+           created_by_identity_status, origin, source)
+        VALUES
+          ('daily-pair-race-winner', 'Forced Daily winner', NEW.start_title, NEW.target_title,
+           NEW.start_page_id, NEW.target_page_id, 'ready', 'ranked_classic',
+           NEW.sort_order + 1000, 1, NEW.created_at, 'account-race-winner',
+           'Race winner', 'claimed', 'manual', 'curated');
+      END;
+    `).run();
+    const { repository } = fixture({ now: "2026-07-17T06:00:00.000Z" }, "pair-race-lease");
+    await repository.ensureDailyChallengeJob("2026-07-30");
+    const job = await repository.claimDueDailyChallengeJob();
+
+    const featured = await repository.acceptDailyFeature(job!, {
+      kind: "automatic",
+      candidate: {
+        startTitle: "Forced Daily start",
+        startPageId: 6971,
+        targetTitle: "Forced Daily target",
+        targetPageId: 6972,
+      },
+      classifierVersion: "editorial-v1",
+    });
+
+    expect(featured).toMatchObject({ id: "daily-pair-race-winner" });
+    await expect(scalar(
+      "SELECT COUNT(*) FROM challenges WHERE start_page_id = 6971 AND target_page_id = 6972",
+    )).resolves.toBe(1);
+    await expect(scalar(
+      "SELECT COUNT(*) FROM daily_features WHERE daily_date = '2026-07-30' AND challenge_id = 'daily-pair-race-winner'",
+    )).resolves.toBe(1);
+    await expect(scalar(
+      "SELECT next_sort_order FROM challenge_number_sequence WHERE sequence_name = 'global'",
+    )).resolves.toBe(4);
   });
 
   it("routes legacy creation through canonical validation and deterministic replay", async () => {
