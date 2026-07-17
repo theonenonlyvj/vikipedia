@@ -17,11 +17,13 @@ export interface CreateChallengeV2FingerprintInput {
   startAllowedLinkCount: number;
   targetTitle: string;
   targetPageId: number;
+  nominateForDaily?: boolean;
 }
 
 export interface CreateChallengeRequestFingerprintInput {
   startTitle: string;
   targetTitle: string;
+  nominateForDaily?: boolean;
 }
 
 export interface RecordClickV2Input {
@@ -52,22 +54,26 @@ export function fingerprintStartRun(input: StartRunV2Input): Promise<string> {
 export function fingerprintCreateChallenge(
   input: CreateChallengeV2FingerprintInput,
 ): Promise<string> {
-  return sha256(JSON.stringify({
+  const payload: Record<string, unknown> = {
     startTitle: input.startTitle,
     startPageId: input.startPageId,
     startAllowedLinkCount: input.startAllowedLinkCount,
     targetTitle: input.targetTitle,
     targetPageId: input.targetPageId,
-  }));
+  };
+  if (input.nominateForDaily === true) payload.nominateForDaily = true;
+  return sha256(JSON.stringify(payload));
 }
 
 export function fingerprintCreateChallengeRequest(
   input: CreateChallengeRequestFingerprintInput,
 ): Promise<string> {
-  return sha256(JSON.stringify({
+  const payload: Record<string, unknown> = {
     startTitle: input.startTitle.trim(),
     targetTitle: input.targetTitle.trim(),
-  }));
+  };
+  if (input.nominateForDaily === true) payload.nominateForDaily = true;
+  return sha256(JSON.stringify(payload));
 }
 
 export async function legacyCreateOperationKey(

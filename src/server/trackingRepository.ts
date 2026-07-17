@@ -18,6 +18,12 @@ import type {
   RecordClickV2Input,
   StartRunV2Input,
 } from "./runProtocol";
+import type {
+  CreateChallengeOutcome,
+  DailyClassification,
+} from "../domain/dailyEditorial";
+
+export type CreateChallengeRepositoryResult = Challenge | CreateChallengeOutcome;
 
 export interface AccountProfileRecord {
   accountId: string;
@@ -63,6 +69,8 @@ export interface CreateChallengeV2Input {
   targetPageId: number;
   idempotencyKey: string;
   requestFingerprint?: string;
+  nominateForDaily?: boolean;
+  dailyClassification?: DailyClassification;
 }
 
 export interface DailyChallengeJob {
@@ -150,11 +158,13 @@ export interface RunProtocolRepository extends TrackingRepository {
   findChallengeCreationReplay(
     account: AuthorizedAccount,
     input: { idempotencyKey: string; requestFingerprint: string },
-  ): Promise<Challenge | null>;
+  ): Promise<CreateChallengeRepositoryResult | null>;
   createChallengeV2(
     account: AuthorizedAccount,
     input: CreateChallengeV2Input,
-  ): Promise<Challenge>;
+  // The D1 implementation is upgraded in the repository half of Task 2.
+  // Keep this boundary compatible with its legacy receipt during that split.
+  ): Promise<any>;
   startRunLegacy(
     account: AuthorizedAccount,
     input: { challengeId: string },

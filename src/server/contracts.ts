@@ -16,6 +16,7 @@ import type {
   StartRunV2Input,
 } from "./runProtocol";
 import type { RunRecordResponse } from "./trackingRepository";
+import type { CreateChallengeOutcome } from "../domain/dailyEditorial";
 
 export interface ChallengesResponse {
   challenges: Challenge[];
@@ -30,7 +31,10 @@ export interface CreateChallengeRequest {
 export interface CreateChallengeV2Request {
   startTitle: string;
   targetTitle: string;
+  nominateForDaily?: boolean;
 }
+
+export type CreateChallengeV2Response = CreateChallengeOutcome;
 
 export interface CreateChallengeResponse {
   challenge: Challenge;

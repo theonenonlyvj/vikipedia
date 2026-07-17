@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { createApiHandlers } from "./apiHandlers";
 import type { TrackingRepository } from "./trackingRepository";
 import { createWorker, type Env as WorkerEnv, type WorkerTracking } from "./worker";
+import {
+  fingerprintCreateChallengeRequest,
+  legacyCreateOperationKey,
+} from "./runProtocol";
 
 function fakeRepository(): TrackingRepository {
   return {
@@ -60,6 +64,208 @@ function fakeRepository(): TrackingRepository {
 }
 
 describe("api handlers", () => {
+  it("includes daily nomination intent in replay fingerprints", async () => {
+    const omitted = await fingerprintCreateChallengeRequest({
+      startTitle: "Mars",
+      targetTitle: "Water",
+    });
+    const falseIntent = await fingerprintCreateChallengeRequest({
+      startTitle: "Mars",
+      targetTitle: "Water",
+      nominateForDaily: false,
+    });
+    const withNomination = await fingerprintCreateChallengeRequest({
+      startTitle: "Mars",
+      targetTitle: "Water",
+      nominateForDaily: true,
+    });
+
+    expect(omitted).toBe("fd7a3dec3a835a7f66c7c102a6edc9072be9b275e891426aef8f22a89f6e5973");
+    expect(falseIntent).toBe(omitted);
+    expect(withNomination).not.toBe(omitted);
+  });
+
+  it("keeps legacy creation operation keys byte-for-byte historical", async () => {
+    const omitted = await legacyCreateOperationKey("acc-1", {
+      startTitle: "Mars",
+      targetTitle: "Water",
+    });
+    const falseIntent = await legacyCreateOperationKey("acc-1", {
+      startTitle: "Mars",
+      targetTitle: "Water",
+      nominateForDaily: false,
+    });
+    const trueIntent = await legacyCreateOperationKey("acc-1", {
+      startTitle: "Mars",
+      targetTitle: "Water",
+      nominateForDaily: true,
+    });
+
+    expect(omitted).toBe("legacy-create:a8c575307ebdea6a0193bd900d768437693766523cdbfaa720160ccb60676d07");
+    expect(falseIntent).toBe(omitted);
+    expect(trueIntent).toBe(omitted);
+  });
+
+  it.each([
+    ["claimed", "pending"],
+    ["ghost", "account_required"],
+  ] as const)(
+    "passes nomination intent and expanded outcome for %s accounts",
+    async (status, nomination) => {
+      const repository = fakeRepository();
+      const outcome = {
+        challenge: {
+          id: "challenge-0002",
+          mode: "solo" as const,
+          start: { title: "Mars", pageId: 123 },
+          target: { title: "Water", pageId: 456 },
+          ruleset: "ranked_classic" as const,
+          source: "curated" as const,
+        },
+        disposition: "created" as const,
+        nomination,
+      };
+      const createChallengeV2 = vi.fn(async () => outcome);
+      Object.assign(repository, {
+        findChallengeCreationReplay: vi.fn(async () => null),
+        createChallengeV2,
+      });
+      const handlers = createApiHandlers(repository, {
+        validateChallengeArticles: vi.fn(async () => ({
+          start: { title: "Mars", pageId: 123, allowedLinkCount: 1 },
+          target: { title: "Water", pageId: 456, allowedLinkCount: 1 },
+        })),
+      });
+
+      await expect(handlers.createChallengeV2(
+        {
+          accountId: "acc-1",
+          displayName: "Casey",
+          status,
+          aliases: [],
+        },
+        { startTitle: "Mars", targetTitle: "Water", nominateForDaily: true },
+        "create-key",
+      )).resolves.toEqual(outcome);
+      expect(createChallengeV2).toHaveBeenCalledWith(
+        expect.objectContaining({ status }),
+        expect.objectContaining({
+          idempotencyKey: "create-key",
+          nominateForDaily: true,
+          dailyClassification: expect.objectContaining({
+            confidence: "unclassified",
+            classifierVersion: "editorial-v1",
+          }),
+        }),
+      );
+    },
+  );
+
+  it("normalizes a legacy challenge-only replay into the expanded outcome", async () => {
+    const repository = fakeRepository();
+    const legacyChallenge = {
+      id: "challenge-0002",
+      mode: "solo" as const,
+      start: { title: "Mars", pageId: 123 },
+      target: { title: "Water", pageId: 456 },
+      ruleset: "ranked_classic" as const,
+      source: "curated" as const,
+    };
+    Object.assign(repository, {
+      findChallengeCreationReplay: vi.fn(async () => legacyChallenge),
+      createChallengeV2: vi.fn(),
+    });
+    const handlers = createApiHandlers(repository);
+
+    await expect(handlers.createChallengeV2(
+      {
+        accountId: "acc-1",
+        displayName: "Casey",
+        status: "claimed",
+        aliases: [],
+      },
+      { startTitle: "Mars", targetTitle: "Water" },
+      "legacy-key",
+    )).resolves.toEqual({
+      challenge: legacyChallenge,
+      disposition: "created",
+      nomination: "not_requested",
+    });
+  });
+
+  it("rejects a non-boolean nomination intent before replay lookup", async () => {
+    const repository = fakeRepository();
+    const replay = vi.fn(async () => null);
+    Object.assign(repository, { findChallengeCreationReplay: replay });
+    const handlers = createApiHandlers(repository);
+
+    await expect(handlers.createChallengeV2(
+      {
+        accountId: "acc-1",
+        displayName: "Casey",
+        status: "claimed",
+        aliases: [],
+      },
+      { startTitle: "Mars", targetTitle: "Water", nominateForDaily: "yes" as never },
+      "create-key",
+    )).rejects.toMatchObject({ code: "invalid_nomination_intent", status: 400 });
+    expect(replay).not.toHaveBeenCalled();
+  });
+
+  it("uses an unclassified editorial-v1 input when daily classification fails", async () => {
+    const repository = fakeRepository();
+    const createChallengeV2 = vi.fn(async () => ({
+      challenge: {
+        id: "challenge-0002",
+        mode: "solo" as const,
+        start: { title: "Mars", pageId: 123 },
+        target: { title: "Water", pageId: 456 },
+        ruleset: "ranked_classic" as const,
+        source: "curated" as const,
+      },
+      disposition: "created" as const,
+      nomination: "pending" as const,
+    }));
+    Object.assign(repository, {
+      findChallengeCreationReplay: vi.fn(async () => null),
+      createChallengeV2,
+    });
+    const handlers = createApiHandlers(repository, {
+      validateChallengeArticles: vi.fn(async () => ({
+        start: { title: "Mars", pageId: 123, allowedLinkCount: 1 },
+        target: { title: "Water", pageId: 456, allowedLinkCount: 1 },
+      })),
+      classifyDaily: vi.fn(async () => {
+        throw new Error("classifier unavailable");
+      }),
+    });
+
+    await handlers.createChallengeV2(
+      {
+        accountId: "acc-1",
+        displayName: "Casey",
+        status: "claimed",
+        aliases: [],
+      },
+      { startTitle: "Mars", targetTitle: "Water", nominateForDaily: true },
+      "create-key",
+    );
+
+    expect(createChallengeV2).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        dailyClassification: {
+          recognizableScore: null,
+          weirdScore: null,
+          hardScore: null,
+          suggestedFlavor: null,
+          confidence: "unclassified",
+          classifierVersion: "editorial-v1",
+        },
+      }),
+    );
+  });
+
   it("requires a public account name before starting a run", async () => {
     const handlers = createApiHandlers(fakeRepository());
 
@@ -220,7 +426,11 @@ describe("api handlers", () => {
       },
       { startTitle: "Mars", targetTitle: "Water" },
       "same-key",
-    )).resolves.toEqual({ challenge: committed });
+    )).resolves.toEqual({
+      challenge: committed,
+      disposition: "created",
+      nomination: "not_requested",
+    });
     expect(preflight).toHaveBeenCalled();
     expect(validateChallengeArticles).not.toHaveBeenCalled();
   });

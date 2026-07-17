@@ -16,9 +16,14 @@ import type {
   StartRunRequest,
   StartRunResponse,
 } from "./contracts";
-import type { RunProtocolRepository, TrackingRepository } from "./trackingRepository";
+import type {
+  CreateChallengeRepositoryResult,
+  RunProtocolRepository,
+  TrackingRepository,
+} from "./trackingRepository";
 import type { ValidateChallengeArticles } from "./wikipediaChallengeValidator";
 import type { AccountStatus, AuthorizedAccount } from "../domain/types";
+import type { CreateChallengeOutcome, DailyClassification } from "../domain/dailyEditorial";
 import { fingerprintCreateChallengeRequest } from "./runProtocol";
 
 export interface ApiHandlers {
@@ -30,7 +35,7 @@ export interface ApiHandlers {
     account: AuthorizedAccount,
     input: CreateChallengeV2Request,
     idempotencyKey: string,
-  ): Promise<CreateChallengeResponse>;
+  ): Promise<CreateChallengeOutcome>;
   startRun(input: StartRunRequest): Promise<StartRunResponse>;
   recordClick(
     runId: string,
@@ -52,7 +57,20 @@ export interface ApiHandlers {
 
 export interface ApiHandlerOptions {
   validateChallengeArticles?: ValidateChallengeArticles;
+  classifyDaily?: ClassifyDailyChallenge;
 }
+
+export interface DailyClassificationInput {
+  startTitle: string;
+  startPageId: number;
+  startAllowedLinkCount: number;
+  targetTitle: string;
+  targetPageId: number;
+}
+
+export type ClassifyDailyChallenge = (
+  input: DailyClassificationInput,
+) => Promise<DailyClassification>;
 
 export interface CreateChallengeHandlerRequest extends CreateChallengeRequest {
   creatorAccountId: string;
@@ -127,6 +145,7 @@ export function createApiHandlers(
         "Enter a target article title.",
         2048,
       );
+      const nominateForDaily = readNominationIntent(input.nominateForDaily);
       const cleanIdempotencyKey = boundedRequiredString(
         idempotencyKey,
         "invalid_idempotency_key",
@@ -136,6 +155,7 @@ export function createApiHandlers(
       const requestFingerprint = await fingerprintCreateChallengeRequest({
         startTitle,
         targetTitle,
+        nominateForDaily,
       });
       const protocol = repository as RunProtocolRepository;
       const replay = await protocol.findChallengeCreationReplay(account, {
@@ -143,7 +163,7 @@ export function createApiHandlers(
         requestFingerprint,
       });
       if (replay) {
-        return { challenge: replay };
+        return normalizeCreateChallengeOutcome(replay);
       }
       const validatedArticles = await validateChallengeArticles({ startTitle, targetTitle });
       if (validatedArticles.start.pageId === validatedArticles.target.pageId) {
@@ -152,8 +172,17 @@ export function createApiHandlers(
       if (validatedArticles.start.allowedLinkCount < 1) {
         throw new ApiError("start_has_no_allowed_links", "The start article has no allowed links.", 409);
       }
-      return {
-        challenge: await protocol.createChallengeV2(account, {
+      const dailyClassification = await classifyDailyChallenge(
+        options.classifyDaily,
+        {
+          startTitle: validatedArticles.start.title,
+          startPageId: validatedArticles.start.pageId,
+          startAllowedLinkCount: validatedArticles.start.allowedLinkCount,
+          targetTitle: validatedArticles.target.title,
+          targetPageId: validatedArticles.target.pageId,
+        },
+      );
+      return normalizeCreateChallengeOutcome(await protocol.createChallengeV2(account, {
           startTitle: boundedRequiredString(
             validatedArticles.start.title,
             "invalid_start_title",
@@ -171,8 +200,9 @@ export function createApiHandlers(
           targetPageId: validatedArticles.target.pageId,
           idempotencyKey: cleanIdempotencyKey,
           requestFingerprint,
-        }),
-      };
+          nominateForDaily,
+          dailyClassification,
+        }));
     },
 
     async startRun(input) {
@@ -310,6 +340,58 @@ const defaultChallengeArticleValidation: ValidateChallengeArticles = async ({
   start: { title: startTitle, pageId: 1, allowedLinkCount: 1 },
   target: { title: targetTitle, pageId: 2, allowedLinkCount: 1 },
 });
+
+function normalizeCreateChallengeOutcome(
+  result: CreateChallengeRepositoryResult,
+): CreateChallengeOutcome {
+  if ("disposition" in result && "nomination" in result) {
+    return result;
+  }
+
+  return {
+    challenge: result,
+    disposition: "created",
+    nomination: "not_requested",
+  };
+}
+
+async function classifyDailyChallenge(
+  classifier: ClassifyDailyChallenge | undefined,
+  input: DailyClassificationInput,
+): Promise<DailyClassification> {
+  if (classifier) {
+    try {
+      return await classifier(input);
+    } catch {
+      // Classification is editorial metadata; it must not block a valid challenge.
+    }
+  }
+
+  return unclassifiedDailyClassification();
+}
+
+function unclassifiedDailyClassification(): DailyClassification {
+  return {
+    recognizableScore: null,
+    weirdScore: null,
+    hardScore: null,
+    suggestedFlavor: null,
+    confidence: "unclassified",
+    classifierVersion: "editorial-v1",
+  };
+}
+
+function readNominationIntent(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw new ApiError(
+      "invalid_nomination_intent",
+      "Daily nomination intent must be a boolean.",
+      400,
+    );
+  }
+  return value;
+}
 
 function boundedRequiredString(
   value: unknown,
