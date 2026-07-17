@@ -1,5 +1,15 @@
-import type { AbandonRunV2Response, AccountStatsResponse, ClickV2Response, LeaderboardResponse, RunPathResponse } from "../server/contracts";
+import type {
+  AbandonRunV2Response,
+  AccountStatsResponse,
+  ClickV2Response,
+  CreateChallengeV2Response,
+  DailyAdminStateResponse,
+  DailyCapabilitiesResponse,
+  LeaderboardResponse,
+  RunPathResponse,
+} from "../server/contracts";
 import type { AccountStats, Challenge, RankedLeaderboardRow, ServerPathStep } from "../domain/types";
+import type { DailyFlavor, DailyNomination, DailyQueueEntry } from "../domain/dailyEditorial";
 import type { ActiveRunRecord, RunRecordResponse } from "../server/trackingRepository";
 import type { RecordClickV2Input } from "../server/runProtocol";
 import { resolveApiOrigin } from "./apiOrigin";
@@ -14,6 +24,7 @@ const MUTATION_TIMEOUT_MS = 15_000;
 export interface CreateTrackedChallengeRequest {
   startTitle: string;
   targetTitle: string;
+  nominateForDaily?: boolean;
 }
 
 export interface StartTrackedRunRequest {
@@ -22,9 +33,18 @@ export interface StartTrackedRunRequest {
 
 export type RecordTrackedClickRequest = Omit<RecordClickV2Input, "runId">;
 
+export interface ApproveDailyNominationRequest {
+  flavor?: DailyFlavor;
+}
+
+export interface QueueDailyChallengeRequest {
+  challengeId: string;
+  flavor: DailyFlavor;
+}
+
 export interface VWikiRaceApiClient {
   listChallenges(): Promise<Challenge[]>;
-  createChallenge(input: CreateTrackedChallengeRequest, token: string): Promise<Challenge>;
+  createChallenge(input: CreateTrackedChallengeRequest, token: string): Promise<CreateChallengeV2Response>;
   startRun(input: StartTrackedRunRequest, token: string): Promise<ActiveRunRecord>;
   getActiveRun(token: string): Promise<ActiveRunRecord | null>;
   getActiveRunPath(runId: string, token: string): Promise<ServerPathStep[]>;
@@ -37,7 +57,33 @@ export interface VWikiRaceApiClient {
   listLeaderboard(challengeId: string): Promise<RankedLeaderboardRow[]>;
   getRunPath(runId: string): Promise<ServerPathStep[]>;
   getAccountStats(token: string): Promise<AccountStats>;
+  getCapabilities?(token: string): Promise<DailyCapabilitiesResponse>;
+  getDailyAdminState?(token: string): Promise<DailyAdminStateResponse>;
+  approveDailyNomination?(
+    nominationId: string,
+    input: ApproveDailyNominationRequest,
+    token: string,
+  ): Promise<DailyQueueEntry>;
+  declineDailyNomination?(nominationId: string, token: string): Promise<DailyNomination>;
+  queueDailyChallenge?(input: QueueDailyChallengeRequest, token: string): Promise<DailyQueueEntry>;
+  removeDailyQueueEntry?(queueEntryId: string, token: string): Promise<DailyQueueEntry>;
 }
+
+export interface VWikiRaceDailyAdminApiClient {
+  getCapabilities(token: string): Promise<DailyCapabilitiesResponse>;
+  getDailyAdminState(token: string): Promise<DailyAdminStateResponse>;
+  approveDailyNomination(
+    nominationId: string,
+    input: ApproveDailyNominationRequest,
+    token: string,
+  ): Promise<DailyQueueEntry>;
+  declineDailyNomination(nominationId: string, token: string): Promise<DailyNomination>;
+  queueDailyChallenge(input: QueueDailyChallengeRequest, token: string): Promise<DailyQueueEntry>;
+  removeDailyQueueEntry(queueEntryId: string, token: string): Promise<DailyQueueEntry>;
+}
+
+export type VWikiRaceApiClientWithDailyAdmin =
+  VWikiRaceApiClient & VWikiRaceDailyAdminApiClient;
 
 export interface VWikiRaceApiClientOptions {
   apiOrigin?: string;
@@ -46,7 +92,7 @@ export interface VWikiRaceApiClientOptions {
 export function createVWikiRaceApiClient(
   fetchImpl: typeof fetch = defaultApiFetch,
   options: VWikiRaceApiClientOptions = {},
-): VWikiRaceApiClient {
+): VWikiRaceApiClientWithDailyAdmin {
   const apiOrigin = options.apiOrigin ?? DEFAULT_API_ORIGIN;
   const inFlight = new Map<string, Promise<unknown>>();
   const pathCache = new Map<string, ServerPathStep[]>();
@@ -60,11 +106,16 @@ export function createVWikiRaceApiClient(
     if (existing) {
       return existing;
     }
-    const request = requestJson(fetchImpl, requestUrl, {
+    let request!: Promise<T>;
+    request = requestJson(fetchImpl, requestUrl, {
       timeoutMs: READ_TIMEOUT_MS,
       retry: "read-once",
       validate,
-    }).finally(() => inFlight.delete(requestUrl));
+    }).finally(() => {
+      if (inFlight.get(requestUrl) === request) {
+        inFlight.delete(requestUrl);
+      }
+    });
     inFlight.set(requestUrl, request);
     return request;
   };
@@ -74,9 +125,10 @@ export function createVWikiRaceApiClient(
       return (await read(urlPath.challenges, isChallengesResponse)).challenges;
     },
     async createChallenge(input, token) {
-      const response = await write(urlPath.challenges, input, token, isChallengeResponse, true);
+      const response = await write(urlPath.challenges, input, token, isCreateChallengeResponse, true);
       invalidateStats();
-      return response.challenge;
+      invalidateChallengeCatalog();
+      return response;
     },
     async startRun(input, token) {
       const response = await write(urlPath.startRun, input, token, isStartRunResponse, true);
@@ -144,6 +196,58 @@ export function createVWikiRaceApiClient(
       statsInFlight.set(token, pending);
       return pending;
     },
+    async getCapabilities(token) {
+      return authenticatedRead(urlPath.capabilities, token, isDailyCapabilitiesResponse);
+    },
+    async getDailyAdminState(token) {
+      return authenticatedRead(urlPath.adminDailies, token, isDailyAdminStateResponse);
+    },
+    async approveDailyNomination(nominationId, input, token) {
+      const response = await write(
+        urlPath.dailyNomination(nominationId, "approve"),
+        input,
+        token,
+        isDailyQueueEntry,
+        true,
+      );
+      invalidateChallengeCatalog();
+      return response;
+    },
+    async declineDailyNomination(nominationId, token) {
+      const response = await write(
+        urlPath.dailyNomination(nominationId, "decline"),
+        {},
+        token,
+        isDailyNomination,
+        true,
+      );
+      invalidateChallengeCatalog();
+      return response;
+    },
+    async queueDailyChallenge(input, token) {
+      const response = await write(
+        urlPath.dailyQueue,
+        input,
+        token,
+        isDailyQueueEntry,
+        true,
+      );
+      invalidateChallengeCatalog();
+      return response;
+    },
+    async removeDailyQueueEntry(queueEntryId, token) {
+      const response = await write(
+        urlPath.dailyQueueEntry(queueEntryId),
+        {},
+        token,
+        isDailyQueueEntry,
+        true,
+        undefined,
+        "DELETE",
+      );
+      invalidateChallengeCatalog();
+      return response;
+    },
   };
 
   function write<T>(
@@ -153,9 +257,10 @@ export function createVWikiRaceApiClient(
     validate: (value: unknown) => value is T,
     retryable = false,
     stableIdempotencyKey?: string,
+    method: "POST" | "DELETE" = "POST",
   ): Promise<T> {
     return requestJson(fetchImpl, url(path), {
-      method: "POST",
+      method: method as "POST",
       body,
       token,
       timeoutMs: MUTATION_TIMEOUT_MS,
@@ -185,6 +290,10 @@ export function createVWikiRaceApiClient(
     statsCache.clear();
     statsInFlight.clear();
   }
+
+  function invalidateChallengeCatalog(): void {
+    inFlight.delete(url(urlPath.challenges));
+  }
 }
 
 const urlPath = {
@@ -192,6 +301,13 @@ const urlPath = {
   startRun: "/api/v2/runs/start",
   activeRun: "/api/v2/runs/active",
   accountStats: "/api/v2/accounts/me/stats",
+  capabilities: "/api/v2/accounts/me/capabilities",
+  adminDailies: "/api/v2/admin/dailies",
+  dailyNomination: (nominationId: string, action: "approve" | "decline") =>
+    `/api/v2/admin/daily-nominations/${encodeURIComponent(nominationId)}/${action}`,
+  dailyQueue: "/api/v2/admin/daily-queue",
+  dailyQueueEntry: (queueEntryId: string) =>
+    `/api/v2/admin/daily-queue/${encodeURIComponent(queueEntryId)}`,
   run: (runId: string, action: string) =>
     `/api/v2/runs/${encodeURIComponent(runId)}/${action}`,
   leaderboard: (challengeId: string) =>
@@ -206,8 +322,15 @@ function isChallengesResponse(value: unknown): value is { challenges: Challenge[
   return isRecord(value) && Array.isArray(value.challenges) && value.challenges.every(isChallenge);
 }
 
-function isChallengeResponse(value: unknown): value is { challenge: Challenge } {
-  return isRecord(value) && isChallenge(value.challenge);
+function isCreateChallengeResponse(value: unknown): value is CreateChallengeV2Response {
+  return isRecord(value) &&
+    isChallenge(value.challenge) &&
+    (value.disposition === "created" || value.disposition === "existing") &&
+    (value.nomination === "not_requested" ||
+      value.nomination === "pending" ||
+      value.nomination === "already_exists" ||
+      value.nomination === "previously_featured" ||
+      value.nomination === "account_required");
 }
 
 function isStartRunResponse(value: unknown): value is { run: ActiveRunRecord } {
@@ -245,6 +368,16 @@ function isAccountStatsResponse(value: unknown): value is AccountStatsResponse {
   return isRecord(value) && isAccountStats(value.stats);
 }
 
+function isDailyCapabilitiesResponse(value: unknown): value is DailyCapabilitiesResponse {
+  return isRecord(value) && typeof value.canManageDailies === "boolean";
+}
+
+function isDailyAdminStateResponse(value: unknown): value is DailyAdminStateResponse {
+  return isRecord(value) &&
+    Array.isArray(value.nominations) && value.nominations.every(isDailyNomination) &&
+    Array.isArray(value.queueEntries) && value.queueEntries.every(isDailyQueueEntry);
+}
+
 function isChallenge(value: unknown): value is Challenge {
   return isRecord(value) &&
     hasString(value, "id") &&
@@ -261,6 +394,14 @@ function isChallenge(value: unknown): value is Challenge {
 }
 
 function hasCoherentChallengeProvenance(value: Record<string, unknown>): boolean {
+  if (value.dailyFeature !== undefined && value.dailyFeature !== null) {
+    if (!isDailyFeature(value.dailyFeature)) return false;
+    return value.origin === "daily" &&
+      value.dailyDate === value.dailyFeature.dailyDate &&
+      value.source === (value.dailyFeature.selectionSource === "automatic"
+        ? "wikipedia_random"
+        : "curated");
+  }
   const hasNoDailyDate = value.dailyDate === undefined || value.dailyDate === null;
   if (value.origin === undefined) {
     return value.source === "curated" && hasNoDailyDate;
@@ -272,6 +413,21 @@ function hasCoherentChallengeProvenance(value: Record<string, unknown>): boolean
     return value.source === "wikipedia_random" && isStrictCalendarDate(value.dailyDate);
   }
   return false;
+}
+
+function isDailyFeature(value: unknown): value is NonNullable<Challenge["dailyFeature"]> {
+  return isRecord(value) &&
+    isStrictCalendarDate(value.dailyDate) &&
+    isDailyFlavor(value.flavor) &&
+    isDailySelectionSource(value.selectionSource);
+}
+
+function isDailyFlavor(value: unknown): value is DailyFlavor {
+  return value === "recognizable" || value === "weird" || value === "hard";
+}
+
+function isDailySelectionSource(value: unknown): boolean {
+  return value === "automatic" || value === "community" || value === "admin";
 }
 
 function isStrictCalendarDate(value: unknown): value is string {
@@ -292,6 +448,10 @@ function hasNumber(value: Record<string, unknown>, key: string): boolean {
 
 function hasOptionalNumber(value: Record<string, unknown>, key: string): boolean {
   return value[key] === undefined || hasNumber(value, key);
+}
+
+function hasNullableNumber(value: Record<string, unknown>, key: string): boolean {
+  return value[key] === null || hasNumber(value, key);
 }
 
 function hasOptionalString(value: Record<string, unknown>, key: string): boolean {
@@ -319,6 +479,52 @@ function isChallengeCreator(value: unknown): value is NonNullable<Challenge["cre
     (value.identityStatus === "ghost" ||
       value.identityStatus === "claimed" ||
       value.identityStatus === "merged");
+}
+
+function isDailyNomination(value: unknown): value is DailyNomination {
+  if (!isRecord(value) ||
+    !hasString(value, "id") ||
+    !hasString(value, "challengeId") ||
+    !hasString(value, "nominatedByAccountId") ||
+    !hasString(value, "nominatedByDisplayName") ||
+    !(value.status === "pending" || value.status === "approved" || value.status === "declined") ||
+    !hasNullableNumber(value, "recognizableScore") ||
+    !hasNullableNumber(value, "weirdScore") ||
+    !hasNullableNumber(value, "hardScore") ||
+    !(value.suggestedFlavor === null || isDailyFlavor(value.suggestedFlavor)) ||
+    !(value.confidence === "high" || value.confidence === "medium" ||
+      value.confidence === "low" || value.confidence === "unclassified") ||
+    !hasString(value, "classifierVersion") ||
+    !hasString(value, "createdAt") ||
+    !hasString(value, "updatedAt")) {
+    return false;
+  }
+
+  if (value.status === "pending") {
+    return value.reviewedByAccountId === null && value.reviewedAt === null;
+  }
+  return hasString(value, "reviewedByAccountId") && hasString(value, "reviewedAt");
+}
+
+function isDailyQueueEntry(value: unknown): value is DailyQueueEntry {
+  if (!isRecord(value) ||
+    !hasString(value, "id") ||
+    !hasString(value, "challengeId") ||
+    !(value.nominationId === null || hasString(value, "nominationId")) ||
+    !isDailyFlavor(value.flavor) ||
+    !(value.source === "community" || value.source === "admin") ||
+    !(value.status === "queued" || value.status === "consumed" ||
+      value.status === "removed" || value.status === "invalid") ||
+    !hasString(value, "queuedByAccountId") ||
+    !hasString(value, "queuedAt") ||
+    !hasString(value, "updatedAt")) {
+    return false;
+  }
+
+  if (value.status === "consumed") {
+    return isStrictCalendarDate(value.consumedDailyDate) && hasString(value, "consumedAt");
+  }
+  return value.consumedDailyDate === null && value.consumedAt === null;
 }
 
 function isRunRecord(value: unknown): value is RunRecordResponse {

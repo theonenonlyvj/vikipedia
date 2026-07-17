@@ -1140,7 +1140,7 @@ h1 {
 
 .create-challenge-form {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) auto;
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) minmax(168px, auto) auto;
   gap: 8px;
   align-items: end;
   margin-top: 12px;
@@ -1152,6 +1152,31 @@ h1 {
 
 .create-challenge-form .name-control input {
   width: 100%;
+}
+
+.daily-nomination-control {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  color: #d9f0f2;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.15;
+  padding: 0 4px;
+}
+
+.daily-nomination-control input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--cyan);
+}
+
+.daily-nomination-control input:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 3px;
 }
 
 .challenge-list button {

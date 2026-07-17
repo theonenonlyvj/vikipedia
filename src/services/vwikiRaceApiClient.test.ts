@@ -135,6 +135,8 @@ describe("VWiki Race API client", () => {
             ruleset: "ranked_classic",
             source: "curated",
           },
+          disposition: "created",
+          nomination: "not_requested",
         }),
         {
           status: 200,
@@ -153,10 +155,14 @@ describe("VWiki Race API client", () => {
         "jwt-claimed",
       ),
     ).resolves.toMatchObject({
-      id: "challenge-0002",
-      label: "Challenge #2",
-      start: { title: "Mars" },
-      target: { title: "Water" },
+      challenge: {
+        id: "challenge-0002",
+        label: "Challenge #2",
+        start: { title: "Mars" },
+        target: { title: "Water" },
+      },
+      disposition: "created",
+      nomination: "not_requested",
     });
     expect(fetchImpl).toHaveBeenCalledWith(
       `${apiOrigin}/api/v2/challenges`,
@@ -171,6 +177,172 @@ describe("VWiki Race API client", () => {
         }),
       }),
     );
+  });
+
+  it("sends nomination intent and returns only the expanded creation outcome", async () => {
+    const outcome = validCreateOutcome({
+      challenge: validChallenge({
+        origin: "daily",
+        mode: "daily",
+        dailyDate: "2026-07-18",
+        dailyFeature: {
+          dailyDate: "2026-07-18",
+          flavor: "weird",
+          selectionSource: "community",
+        },
+      }),
+      nomination: "pending",
+    });
+    const fetchImpl = vi.fn(async () => Response.json(outcome));
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await expect(client.createChallenge({
+      startTitle: "Mars",
+      targetTitle: "Water",
+      nominateForDaily: true,
+    }, "jwt-claimed")).resolves.toEqual(outcome);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `${apiOrigin}/api/v2/challenges`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          startTitle: "Mars",
+          targetTitle: "Water",
+          nominateForDaily: true,
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["legacy create payload", { challenge: validChallenge() }],
+    ["unknown creation disposition", validCreateOutcome({ disposition: "accepted" as never })],
+    ["unknown nomination disposition", validCreateOutcome({ nomination: "queued" as never })],
+    ["malformed Daily feature", validCreateOutcome({
+      challenge: validChallenge({ dailyFeature: { dailyDate: "2026-07-18", flavor: "easy", selectionSource: "community" } }),
+    })],
+  ])("rejects a %s creation response", async (_case, response) => {
+    const client = createVWikiRaceApiClient(
+      vi.fn(async () => Response.json(response)),
+      { apiOrigin },
+    );
+
+    await expect(client.createChallenge(
+      { startTitle: "Mars", targetTitle: "Water" },
+      "jwt-claimed",
+    )).rejects.toMatchObject({ code: "invalid_response", status: 502 });
+  });
+
+  it("validates capabilities and every Daily moderation response", async () => {
+    const nomination = validDailyNomination();
+    const queueEntry = validDailyQueueEntry();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      const method = init?.method ?? "GET";
+      if (requestUrl.endsWith("/capabilities")) return Response.json({ canManageDailies: true });
+      if (requestUrl.endsWith("/admin/dailies")) {
+        return Response.json({ nominations: [nomination], queueEntries: [queueEntry] });
+      }
+      if (requestUrl.endsWith("/approve")) return Response.json(queueEntry);
+      if (requestUrl.endsWith("/decline")) return Response.json(nomination);
+      if (requestUrl.endsWith("/admin/daily-queue") && method === "POST") return Response.json(queueEntry);
+      if (requestUrl.endsWith("/admin/daily-queue/queue-1") && method === "DELETE") return Response.json(queueEntry);
+      throw new Error(`Unexpected request ${method} ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await expect(client.getCapabilities("jwt-admin")).resolves.toEqual({ canManageDailies: true });
+    await expect(client.getDailyAdminState("jwt-admin")).resolves.toEqual({
+      nominations: [nomination],
+      queueEntries: [queueEntry],
+    });
+    await expect(client.approveDailyNomination("nomination-1", { flavor: "weird" }, "jwt-admin"))
+      .resolves.toEqual(queueEntry);
+    await expect(client.declineDailyNomination("nomination-1", "jwt-admin"))
+      .resolves.toEqual(nomination);
+    await expect(client.queueDailyChallenge({ challengeId: "challenge-0002", flavor: "hard" }, "jwt-admin"))
+      .resolves.toEqual(queueEntry);
+    await expect(client.removeDailyQueueEntry("queue-1", "jwt-admin"))
+      .resolves.toEqual(queueEntry);
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `${apiOrigin}/api/v2/admin/daily-queue/queue-1`,
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({}),
+        headers: expect.objectContaining({ Authorization: "Bearer jwt-admin", "Idempotency-Key": expect.any(String) }),
+      }),
+    );
+  });
+
+  it.each([
+    ["capabilities", "/api/v2/accounts/me/capabilities", { canManageDailies: "yes" }],
+    ["admin state", "/api/v2/admin/dailies", { nominations: [{ id: "nomination-1" }], queueEntries: [] }],
+    ["approved queue entry", "/api/v2/admin/daily-nominations/nomination-1/approve", { id: "queue-1" }],
+    ["declined nomination", "/api/v2/admin/daily-nominations/nomination-1/decline", { id: "nomination-1" }],
+    ["direct queue entry", "/api/v2/admin/daily-queue", { id: "queue-1" }],
+    ["removed queue entry", "/api/v2/admin/daily-queue/queue-1", { id: "queue-1" }],
+  ] as const)("rejects malformed %s responses", async (_case, path, response) => {
+    const client = createVWikiRaceApiClient(
+      vi.fn(async () => Response.json(response)),
+      { apiOrigin },
+    );
+
+    const request = path.endsWith("capabilities")
+      ? client.getCapabilities("jwt-admin")
+      : path.endsWith("/dailies")
+        ? client.getDailyAdminState("jwt-admin")
+        : path.endsWith("/approve")
+          ? client.approveDailyNomination("nomination-1", { flavor: "weird" }, "jwt-admin")
+          : path.endsWith("/decline")
+            ? client.declineDailyNomination("nomination-1", "jwt-admin")
+            : path.endsWith("queue-1")
+              ? client.removeDailyQueueEntry("queue-1", "jwt-admin")
+              : client.queueDailyChallenge({ challengeId: "challenge-0002", flavor: "hard" }, "jwt-admin");
+
+    await expect(request).rejects.toMatchObject({ code: "invalid_response", status: 502 });
+  });
+
+  it("invalidates an in-flight catalog request after create and Daily administration mutations", async () => {
+    const pendingCatalogs: Array<ReturnType<typeof deferred<Response>>> = [];
+    let catalogReads = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      const method = init?.method ?? "GET";
+      if (requestUrl === `${apiOrigin}/api/v2/challenges` && method === "GET") {
+        catalogReads += 1;
+        if (catalogReads % 2 === 1) {
+          const pending = deferred<Response>();
+          pendingCatalogs.push(pending);
+          return pending.promise;
+        }
+        return Response.json({ challenges: [] });
+      }
+      if (requestUrl.includes("/approve") || requestUrl.includes("/daily-queue")) {
+        return Response.json(validDailyQueueEntry());
+      }
+      if (requestUrl.includes("/decline")) return Response.json(validDailyNomination());
+      return Response.json(validCreateOutcome());
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+    const mutations = [
+      () => client.createChallenge({ startTitle: "Mars", targetTitle: "Water" }, "jwt-admin"),
+      () => client.approveDailyNomination("nomination-1", { flavor: "weird" }, "jwt-admin"),
+      () => client.declineDailyNomination("nomination-1", "jwt-admin"),
+      () => client.queueDailyChallenge({ challengeId: "challenge-0002", flavor: "hard" }, "jwt-admin"),
+      () => client.removeDailyQueueEntry("queue-1", "jwt-admin"),
+    ];
+
+    for (const mutate of mutations) {
+      const staleCatalog = client.listChallenges();
+      await vi.waitFor(() => expect(catalogReads % 2).toBe(1));
+      await mutate();
+      await expect(client.listChallenges()).resolves.toEqual([]);
+      pendingCatalogs.shift()?.resolve(Response.json({ challenges: [] }));
+      await staleCatalog;
+    }
+
+    expect(catalogReads).toBe(10);
   });
 
   it("deduplicates concurrent catalog and leaderboard reads by resolved URL", async () => {
@@ -298,6 +470,8 @@ describe("VWiki Race API client", () => {
           ruleset: "ranked_classic",
           source: "curated",
         },
+        disposition: "created",
+        nomination: "not_requested",
       }),
     );
     const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
@@ -654,7 +828,7 @@ async function expectFirstAttemptTimeout(
       return Promise.resolve(
         kind === "read"
           ? Response.json({ challenges: [] })
-          : Response.json({ challenge: validChallenge() }),
+          : Response.json(validCreateOutcome()),
       );
     }
     return new Promise<Response>((_resolve, reject) => {
@@ -683,7 +857,7 @@ async function expectFirstAttemptTimeout(
   }
 }
 
-function validChallenge() {
+function validChallenge(overrides: Record<string, unknown> = {}) {
   return {
     id: "challenge-0002",
     label: "Challenge #2",
@@ -692,6 +866,54 @@ function validChallenge() {
     target: { title: "Water" },
     ruleset: "ranked_classic",
     source: "curated",
+    ...overrides,
+  };
+}
+
+function validCreateOutcome(overrides: Record<string, unknown> = {}) {
+  return {
+    challenge: validChallenge(),
+    disposition: "created",
+    nomination: "not_requested",
+    ...overrides,
+  };
+}
+
+function validDailyNomination(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "nomination-1",
+    challengeId: "challenge-0002",
+    nominatedByAccountId: "account-1",
+    nominatedByDisplayName: "Vijay",
+    status: "pending",
+    recognizableScore: 80,
+    weirdScore: 74,
+    hardScore: 48,
+    suggestedFlavor: "weird",
+    confidence: "high",
+    classifierVersion: "editorial-v1",
+    reviewedByAccountId: null,
+    reviewedAt: null,
+    createdAt: "2026-07-17T00:00:00.000Z",
+    updatedAt: "2026-07-17T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function validDailyQueueEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "queue-1",
+    challengeId: "challenge-0002",
+    nominationId: "nomination-1",
+    flavor: "weird",
+    source: "community",
+    status: "queued",
+    queuedByAccountId: "admin-1",
+    queuedAt: "2026-07-17T00:00:00.000Z",
+    consumedDailyDate: null,
+    consumedAt: null,
+    updatedAt: "2026-07-17T00:00:00.000Z",
+    ...overrides,
   };
 }
 

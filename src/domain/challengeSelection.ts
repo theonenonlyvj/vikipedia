@@ -26,9 +26,10 @@ export function centralDateKey(value: Date): string {
 }
 
 export function dailyBadgeLabel(challenge: Challenge, todayCentral: string): string | null {
-  if (challenge.origin !== "daily" || !challenge.dailyDate) return null;
-  if (challenge.dailyDate === todayCentral) return "Today";
-  const [, month, day] = challenge.dailyDate.split("-");
+  const dailyDate = dailyDateForChallenge(challenge);
+  if (!dailyDate) return null;
+  if (dailyDate === todayCentral) return "Today";
+  const [, month, day] = dailyDate.split("-");
   return month && day
     ? `Daily ${Number(month)}/${Number(day)}`
     : "Daily";
@@ -45,8 +46,13 @@ export function selectDefaultChallenge(
   return findById(options.activeChallengeId) ??
     findById(options.requestedChallengeId) ??
     activeChallenges.find((challenge) =>
-      challenge.origin === "daily" && challenge.dailyDate === options.todayUtc
+      dailyDateForChallenge(challenge) === options.todayUtc
     ) ??
     activeChallenges[0] ??
     null;
+}
+
+function dailyDateForChallenge(challenge: Challenge): string | null {
+  if (challenge.dailyFeature) return challenge.dailyFeature.dailyDate;
+  return challenge.origin === "daily" ? challenge.dailyDate ?? null : null;
 }

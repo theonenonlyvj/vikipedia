@@ -19,6 +19,7 @@ import {
   dailyBadgeLabel,
   selectDefaultChallenge,
 } from "./domain/challengeSelection";
+import type { CreateChallengeOutcome } from "./domain/dailyEditorial";
 import {
   type GameSession,
 } from "./domain/gameSession";
@@ -78,16 +79,18 @@ interface AccountStatsProjection {
   token: string;
   stats: AccountStats | null;
 }
+interface CreateChallengeInput {
+  startTitle: string;
+  targetTitle: string;
+  nominateForDaily: boolean;
+}
 type AuthPromptIntent =
   | { type: "start"; challengeId: string }
   | { type: "retry-click" }
   | { type: "end-run" }
   | {
       type: "create";
-      input: {
-        startTitle: string;
-        targetTitle: string;
-      };
+      input: CreateChallengeInput;
     };
 
 const defaultFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
@@ -409,13 +412,10 @@ export default function App({
     }
   }
 
-  async function createChallenge(input: {
-    startTitle: string;
-    targetTitle: string;
-  }) {
+  async function createChallenge(input: CreateChallengeInput) {
     if (challengeLockRef.current) return;
-    if (!identitySession) {
-      openAuthPrompt({ type: "create", input });
+    if (!identitySession || (input.nominateForDaily && identitySession.status !== "claimed")) {
+      openAuthPrompt({ type: "create", input }, input.nominateForDaily ? "create" : undefined);
       return;
     }
 
@@ -423,19 +423,22 @@ export default function App({
   }
 
   async function createChallengeWithSession(
-    input: {
-      startTitle: string;
-      targetTitle: string;
-    },
+    input: CreateChallengeInput,
     sessionForRequest: VGamesIdentitySession,
   ) {
     if (challengeLockRef.current) return;
+    if (input.nominateForDaily && sessionForRequest.status !== "claimed") {
+      setError("Claim or log in to nominate for a future Daily.");
+      openAuthPrompt({ type: "create", input }, "create");
+      return;
+    }
     setError(null);
     try {
-      const challenge = await apiClient.createChallenge(
+      const outcome = await apiClient.createChallenge(
         input,
         sessionForRequest.token,
       );
+      const { challenge } = outcome;
       setChallenges((current) =>
         getSortedChallenges([
           ...current.filter((item) => item.id !== challenge.id),
@@ -449,6 +452,7 @@ export default function App({
         setLeaderboardProjection({ challengeId: challenge.id, rows: [] });
         setActiveTab("play");
       }
+      setRunNotice(createChallengeNotice(outcome));
     } catch (caught) {
       if (isUnauthorizedError(caught)) {
         clearStaleIdentity({ type: "create", input });
@@ -543,6 +547,13 @@ export default function App({
         setAuthBusy(false);
         return;
       }
+    }
+
+    if (prompt.type === "create" && prompt.input.nominateForDaily && nextIdentitySession.status !== "claimed") {
+      setAuthMode("create");
+      setError("Claim or log in to nominate for a future Daily.");
+      setAuthBusy(false);
+      return;
     }
 
     setAuthPrompt(null);
@@ -942,6 +953,7 @@ export default function App({
             selectionLocked={challengeIsLocked}
             targetPreview={targetPreview}
             todayCentral={currentCentralDate}
+            canNominateForDaily={identitySession?.status === "claimed"}
           />
         ) : null}
 
@@ -956,6 +968,7 @@ export default function App({
         {activeTab === "challenges" ? (
           <ChallengeBrowser
             challenges={challenges}
+            canNominateForDaily={identitySession?.status === "claimed"}
             onCreateChallenge={createChallenge}
             onSelectChallenge={(challengeId) => void selectChallenge(challengeId)}
             selectedChallengeId={selectedChallenge?.id ?? null}
@@ -1397,6 +1410,7 @@ function focusableElements(container: HTMLElement | null): HTMLElement[] {
 
 function PlayPanel({
   article,
+  canNominateForDaily,
   challenges,
   elapsedMs,
   handleArticleClick,
@@ -1417,15 +1431,13 @@ function PlayPanel({
   todayCentral,
 }: {
   article: Article | null;
+  canNominateForDaily: boolean;
   challenges: Challenge[];
   elapsedMs: number;
   handleArticleClick: (event: MouseEvent<HTMLElement>) => void;
   handleArticlePrewarm: (target: EventTarget | null) => void;
   modeState: ModeState;
-  onCreateChallenge: (input: {
-    startTitle: string;
-    targetTitle: string;
-  }) => Promise<void>;
+  onCreateChallenge: (input: CreateChallengeInput) => Promise<void>;
   onRetryPending: () => void;
   onSelectChallenge: (challengeId: string) => void;
   onShowChallenges: () => void;
@@ -1539,6 +1551,7 @@ function PlayPanel({
       )}
 
       <ChallengeBrowser
+        canNominateForDaily={canNominateForDaily}
         challenges={challenges}
         onCreateChallenge={onCreateChallenge}
         onSelectChallenge={onSelectChallenge}
@@ -1779,6 +1792,7 @@ function PathStrip({
 }
 
 function ChallengeBrowser({
+  canNominateForDaily,
   challenges,
   onCreateChallenge,
   onSelectChallenge,
@@ -1786,11 +1800,9 @@ function ChallengeBrowser({
   selectedChallengeId,
   todayCentral,
 }: {
+  canNominateForDaily: boolean;
   challenges: Challenge[];
-  onCreateChallenge: (input: {
-    startTitle: string;
-    targetTitle: string;
-  }) => Promise<void>;
+  onCreateChallenge: (input: CreateChallengeInput) => Promise<void>;
   onSelectChallenge: (challengeId: string) => void;
   selectionLocked?: boolean;
   selectedChallengeId: string | null;
@@ -1798,9 +1810,14 @@ function ChallengeBrowser({
 }) {
   const [startTitle, setStartTitle] = useState("");
   const [targetTitle, setTargetTitle] = useState("");
+  const [nominateForDaily, setNominateForDaily] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const canCreate =
     startTitle.trim().length > 0 && targetTitle.trim().length > 0;
+
+  useEffect(() => {
+    if (!canNominateForDaily) setNominateForDaily(false);
+  }, [canNominateForDaily]);
 
   async function submitChallenge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1813,9 +1830,11 @@ function ChallengeBrowser({
       await onCreateChallenge({
         startTitle: startTitle.trim(),
         targetTitle: targetTitle.trim(),
+        nominateForDaily,
       });
       setStartTitle("");
       setTargetTitle("");
+      setNominateForDaily(false);
     } finally {
       setIsCreating(false);
     }
@@ -1847,6 +1866,17 @@ function ChallengeBrowser({
             value={targetTitle}
           />
         </label>
+        {canNominateForDaily ? (
+          <label className="daily-nomination-control">
+            <input
+              checked={nominateForDaily}
+              disabled={selectionLocked}
+              onChange={(event) => setNominateForDaily(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Nominate for a future Daily</span>
+          </label>
+        ) : null}
         <button type="submit" disabled={selectionLocked || !canCreate || isCreating}>
           Create Challenge
         </button>
@@ -1884,6 +1914,26 @@ function ChallengeBrowser({
       )}
     </section>
   );
+}
+
+function createChallengeNotice(outcome: CreateChallengeOutcome): string {
+  const challengeLabel = outcome.challenge.label ?? outcome.challenge.id;
+  const creation = outcome.disposition === "existing"
+    ? `It already exists as ${challengeLabel}.`
+    : "Challenge created.";
+
+  switch (outcome.nomination) {
+    case "pending":
+      return `${creation} Daily nomination pending review.`;
+    case "already_exists":
+      return `${creation} It already has a Daily nomination.`;
+    case "previously_featured":
+      return `${creation} It has already been featured as a Daily.`;
+    case "account_required":
+      return `${creation} Claim or log in to nominate for a future Daily.`;
+    case "not_requested":
+      return creation;
+  }
 }
 
 function LeaderboardPanel({

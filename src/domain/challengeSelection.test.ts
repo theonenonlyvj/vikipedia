@@ -37,6 +37,38 @@ describe("default challenge selection", () => {
     expect(dailyBadgeLabel(challenges[0]!, "2026-07-15")).toBeNull();
   });
 
+  it("uses authoritative Daily feature metadata before legacy provenance", () => {
+    const featured = challenge("challenge-featured", {
+      origin: "manual",
+      dailyDate: null,
+      dailyFeature: {
+        dailyDate: "2026-07-15",
+        flavor: "weird",
+        selectionSource: "community",
+      },
+    });
+
+    expect(dailyBadgeLabel(featured, "2026-07-15")).toBe("Today");
+    expect(dailyBadgeLabel(featured, "2026-07-16")).toBe("Daily 7/15");
+    expect(selectDefaultChallenge([
+      challenge("challenge-manual"),
+      featured,
+    ], { todayUtc: "2026-07-15" })?.id).toBe("challenge-featured");
+  });
+
+  it("keeps legacy Daily provenance as a fallback when feature metadata is absent", () => {
+    const legacyDaily = challenge("challenge-legacy", {
+      origin: "daily",
+      dailyDate: "2026-07-15",
+    });
+
+    expect(dailyBadgeLabel(legacyDaily, "2026-07-15")).toBe("Today");
+    expect(selectDefaultChallenge([
+      challenge("challenge-manual"),
+      legacyDaily,
+    ], { todayUtc: "2026-07-15" })?.id).toBe("challenge-legacy");
+  });
+
   it("prioritizes a resumable active run over a direct URL and today's daily", () => {
     expect(selectDefaultChallenge(challenges, {
       activeChallengeId: "challenge-0002",

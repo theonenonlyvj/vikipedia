@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import type { CreateChallengeOutcome } from "./domain/dailyEditorial";
 import type { Challenge, ServerPathStep } from "./domain/types";
 import type { VGamesIdentityRepository, VGamesIdentitySession } from "./services/vgamesIdentity";
 import { appleParseResponse, fruitParseResponse } from "./test/fixtures";
@@ -1354,6 +1355,7 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("button", { name: /challenges/i }));
     await user.type(screen.getByLabelText(/start article/i), "Mars");
     await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("checkbox", { name: /nominate for a future daily/i }));
     await user.click(screen.getByRole("button", { name: /create challenge/i }));
 
     const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
@@ -1366,6 +1368,10 @@ describe("VWiki Race app", () => {
 
     expect(await screen.findByRole("button", { name: /start challenge #2/i })).toBeVisible();
     expect(createChallengeCalls(fetchImpl)).toBe(2);
+    expect(createChallengeBodies(fetchImpl)).toEqual([
+      { startTitle: "Mars", targetTitle: "Water", nominateForDaily: true },
+      { startTitle: "Mars", targetTitle: "Water", nominateForDaily: true },
+    ]);
   });
 
   it("traps End Run focus, closes on Escape, and restores its trigger", async () => {
@@ -1551,10 +1557,136 @@ describe("VWiki Race app", () => {
           body: JSON.stringify({
             startTitle: "Mars",
             targetTitle: "Water",
+            nominateForDaily: false,
           }),
         }),
       );
     });
+  });
+
+  it("shows Daily nomination only in a claimed session's creation form", async () => {
+    const claimedView = render(
+      <App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />,
+    );
+
+    expect(await screen.findByRole("checkbox", { name: /nominate for a future daily/i })).toBeVisible();
+    await userEvent.setup().click(screen.getByRole("button", { name: /^challenges$/i }));
+    expect(screen.getByRole("checkbox", { name: /nominate for a future daily/i })).toBeVisible();
+    claimedView.unmount();
+
+    const ghostStorage = memoryStorage();
+    ghostStorage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({ accountId: "acc-guest", displayName: "Guest", token: "jwt-guest", status: "ghost" }),
+    );
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={ghostStorage} />);
+
+    await screen.findByRole("button", { name: /start challenge #1/i });
+    expect(screen.queryByRole("checkbox", { name: /nominate for a future daily/i })).toBeNull();
+  });
+
+  it("keeps ordinary guest challenge creation available without a Daily nomination", async () => {
+    const ghostStorage = memoryStorage();
+    ghostStorage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({ accountId: "acc-guest", displayName: "Guest", token: "jwt-guest", status: "ghost" }),
+    );
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage} />);
+
+    await user.type(await screen.findByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+
+    expect(await screen.findByText(/challenge created/i)).toBeVisible();
+    expect(createChallengeBodies(fetchImpl)).toEqual([
+      { startTitle: "Mars", targetTitle: "Water", nominateForDaily: false },
+    ]);
+    expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull();
+  });
+
+  it("clears nomination intent when a claimed session becomes a ghost", async () => {
+    const fetchImpl = createFetchMock();
+    const claimedRepository = identityRepository({
+      accountId: "account-claimed",
+      displayName: "Vijay",
+      token: "jwt-claimed",
+      status: "claimed",
+    });
+    const ghostRepository = identityRepository({
+      accountId: "account-ghost",
+      displayName: "Guest",
+      token: "jwt-guest",
+      status: "ghost",
+    });
+    const user = userEvent.setup();
+    const view = render(
+      <App apiOrigin={apiOrigin} fetchImpl={fetchImpl} identityRepository={claimedRepository} />,
+    );
+
+    await user.click(await screen.findByRole("checkbox", { name: /nominate for a future daily/i }));
+    view.rerender(
+      <App apiOrigin={apiOrigin} fetchImpl={fetchImpl} identityRepository={ghostRepository} />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole("checkbox", { name: /nominate for a future daily/i })).toBeNull();
+    });
+    await user.type(screen.getByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+
+    await waitFor(() => expect(createChallengeCalls(fetchImpl)).toBe(1));
+    expect(createChallengeBodies(fetchImpl)).toEqual([
+      { startTitle: "Mars", targetTitle: "Water", nominateForDaily: false },
+    ]);
+  });
+
+  it.each([
+    ["pending", "created", "pending", /daily nomination pending review/i],
+    ["duplicate", "existing", "already_exists", /already exists as challenge #12/i],
+    ["previously featured", "existing", "previously_featured", /already been featured as a daily/i],
+    ["account required", "created", "account_required", /claim or log in to nominate/i],
+    ["not requested", "created", "not_requested", /challenge created/i],
+  ] as const)("selects the returned challenge and reports %s nomination outcome", async (
+    _case,
+    disposition,
+    nomination,
+    notice,
+  ) => {
+    const fetchImpl = createFetchMock({
+      creationOutcome: {
+        challenge: {
+          id: "challenge-0012",
+          label: "Challenge #12",
+          sortOrder: 12,
+          isActive: true,
+          mode: "solo",
+          start: { title: "Mars" },
+          target: { title: "Water" },
+          ruleset: "ranked_classic",
+          origin: "manual",
+          dailyDate: null,
+          dailyFeature: null,
+          source: "curated",
+          createdBy: { accountId: "acc-1", displayName: "Vijay", identityStatus: "claimed" },
+        },
+        disposition,
+        nomination,
+      },
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.type(await screen.findByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    if (nomination !== "not_requested") {
+      await user.click(screen.getByRole("checkbox", { name: /nominate for a future daily/i }));
+    }
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+
+    expect(await screen.findByText(notice)).toBeVisible();
+    expect(screen.getByRole("button", { name: /start challenge #12/i })).toBeVisible();
   });
 
   it("keeps the selected challenge in the URL and honors challenge deep links", async () => {
@@ -1859,6 +1991,7 @@ function createFetchMock(options?: {
   accountAttempts?: number;
   leaderboardContext?: { isPersonalBest: boolean; rank: number | null };
   statsUnauthorizedAfterFirst?: boolean;
+  creationOutcome?: CreateChallengeOutcome;
 }) {
   let completed = false;
   let unauthorizedStartRemaining = options?.startUnauthorizedOnce ? 1 : 0;
@@ -1891,7 +2024,7 @@ function createFetchMock(options?: {
     const method = init?.method ?? "GET";
 
     if (url === "/api/v2/challenges" && method === "POST") {
-      expect(readJsonBody(init)).toEqual({
+      expect(readJsonBody(init)).toMatchObject({
         startTitle: "Mars",
         targetTitle: "Water",
       });
@@ -1899,7 +2032,7 @@ function createFetchMock(options?: {
         unauthorizedCreateRemaining -= 1;
         return jsonError("unauthorized", "Session expired.", 401);
       }
-      const challenge: Challenge = {
+      const challenge: Challenge = options?.creationOutcome?.challenge ?? {
         id: "challenge-0002",
         label: "Challenge #2",
         sortOrder: 2,
@@ -1916,7 +2049,11 @@ function createFetchMock(options?: {
         },
       };
       challenges = [...challenges, challenge];
-      return jsonResponse({ challenge });
+      return jsonResponse({
+        challenge,
+        disposition: options?.creationOutcome?.disposition ?? "created",
+        nomination: options?.creationOutcome?.nomination ?? "not_requested",
+      });
     }
 
     if (url === "/api/v2/challenges" && options?.delayedChallenges) {
@@ -2183,6 +2320,14 @@ function createChallengeCalls(fetchImpl: ReturnType<typeof createFetchMock>): nu
   return fetchImpl.mock.calls.filter(([input, init]) =>
     String(input) === apiUrl("/api/v2/challenges") && init?.method === "POST"
   ).length;
+}
+
+function createChallengeBodies(fetchImpl: ReturnType<typeof createFetchMock>): Array<Record<string, unknown>> {
+  return fetchImpl.mock.calls
+    .filter(([input, init]) =>
+      String(input) === apiUrl("/api/v2/challenges") && init?.method === "POST"
+    )
+    .map(([, init]) => readJsonBody(init) as Record<string, unknown>);
 }
 
 function accountStatsCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
