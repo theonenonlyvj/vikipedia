@@ -2541,16 +2541,29 @@ describe("Task 4 D1 projections", () => {
       idempotencyKey: "featured-original",
       nominateForDaily: false,
     });
+    await insertEditorialQueue(env.VWIKI_RACE_DB, {
+      id: "featured-admin-entry",
+      challengeId: created.challenge.id,
+      source: "admin",
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      `UPDATE daily_queue_entries
+       SET status = 'consumed', consumed_daily_date = '2026-07-20',
+           consumed_at = '2026-07-20T10:00:00.000Z'
+       WHERE id = 'featured-admin-entry'`,
+    ).run();
     await insertEditorialFeature(env.VWIKI_RACE_DB, {
       dailyDate: "2026-07-20",
       challengeId: created.challenge.id,
-      selectionSource: "automatic",
+      selectionSource: "admin",
+      queueEntryId: "featured-admin-entry",
     });
 
-    const duplicate = await repository.createChallengeV2({
+    const duplicateAccount = {
       ...account,
       accountId: "account-late-nominator",
-    }, {
+    };
+    const duplicateInput = {
       startTitle: "Mercury",
       startPageId: 901,
       startAllowedLinkCount: 20,
@@ -2558,13 +2571,32 @@ describe("Task 4 D1 projections", () => {
       targetPageId: 902,
       idempotencyKey: "featured-duplicate",
       nominateForDaily: true,
-    });
+    };
+    const duplicate = await repository.createChallengeV2(
+      duplicateAccount,
+      duplicateInput,
+    );
 
     expect(duplicate).toMatchObject({
       disposition: "existing",
       nomination: "previously_featured",
-      challenge: { id: created.challenge.id },
+      challenge: {
+        id: created.challenge.id,
+        mode: "daily",
+        origin: "daily",
+        dailyDate: "2026-07-20",
+        dailyFeature: {
+          dailyDate: "2026-07-20",
+          flavor: "recognizable",
+          selectionSource: "admin",
+        },
+        source: "curated",
+      },
     });
+    await expect(repository.createChallengeV2(
+      duplicateAccount,
+      duplicateInput,
+    )).resolves.toEqual(duplicate);
     await expect(scalar(
       `SELECT COUNT(*) FROM daily_nominations WHERE challenge_id = '${created.challenge.id}'`,
     )).resolves.toBe(0);

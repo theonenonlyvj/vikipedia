@@ -42,7 +42,20 @@ export interface QueueDailyChallengeRequest {
   flavor: DailyFlavor;
 }
 
-export interface VWikiRaceApiClient {
+export interface VWikiRaceDailyAdminApiClient {
+  getCapabilities(token: string): Promise<DailyCapabilitiesResponse>;
+  getDailyAdminState(token: string): Promise<DailyAdminStateResponse>;
+  approveDailyNomination(
+    nominationId: string,
+    input: ApproveDailyNominationRequest,
+    token: string,
+  ): Promise<DailyQueueEntry>;
+  declineDailyNomination(nominationId: string, token: string): Promise<DailyNomination>;
+  queueDailyChallenge(input: QueueDailyChallengeRequest, token: string): Promise<DailyQueueEntry>;
+  removeDailyQueueEntry(queueEntryId: string, token: string): Promise<DailyQueueEntry>;
+}
+
+export interface VWikiRaceApiClient extends VWikiRaceDailyAdminApiClient {
   listChallenges(): Promise<Challenge[]>;
   createChallenge(input: CreateTrackedChallengeRequest, token: string): Promise<CreateChallengeV2Response>;
   startRun(input: StartTrackedRunRequest, token: string): Promise<ActiveRunRecord>;
@@ -57,33 +70,7 @@ export interface VWikiRaceApiClient {
   listLeaderboard(challengeId: string): Promise<RankedLeaderboardRow[]>;
   getRunPath(runId: string): Promise<ServerPathStep[]>;
   getAccountStats(token: string): Promise<AccountStats>;
-  getCapabilities?(token: string): Promise<DailyCapabilitiesResponse>;
-  getDailyAdminState?(token: string): Promise<DailyAdminStateResponse>;
-  approveDailyNomination?(
-    nominationId: string,
-    input: ApproveDailyNominationRequest,
-    token: string,
-  ): Promise<DailyQueueEntry>;
-  declineDailyNomination?(nominationId: string, token: string): Promise<DailyNomination>;
-  queueDailyChallenge?(input: QueueDailyChallengeRequest, token: string): Promise<DailyQueueEntry>;
-  removeDailyQueueEntry?(queueEntryId: string, token: string): Promise<DailyQueueEntry>;
 }
-
-export interface VWikiRaceDailyAdminApiClient {
-  getCapabilities(token: string): Promise<DailyCapabilitiesResponse>;
-  getDailyAdminState(token: string): Promise<DailyAdminStateResponse>;
-  approveDailyNomination(
-    nominationId: string,
-    input: ApproveDailyNominationRequest,
-    token: string,
-  ): Promise<DailyQueueEntry>;
-  declineDailyNomination(nominationId: string, token: string): Promise<DailyNomination>;
-  queueDailyChallenge(input: QueueDailyChallengeRequest, token: string): Promise<DailyQueueEntry>;
-  removeDailyQueueEntry(queueEntryId: string, token: string): Promise<DailyQueueEntry>;
-}
-
-export type VWikiRaceApiClientWithDailyAdmin =
-  VWikiRaceApiClient & VWikiRaceDailyAdminApiClient;
 
 export interface VWikiRaceApiClientOptions {
   apiOrigin?: string;
@@ -92,7 +79,7 @@ export interface VWikiRaceApiClientOptions {
 export function createVWikiRaceApiClient(
   fetchImpl: typeof fetch = defaultApiFetch,
   options: VWikiRaceApiClientOptions = {},
-): VWikiRaceApiClientWithDailyAdmin {
+): VWikiRaceApiClient {
   const apiOrigin = options.apiOrigin ?? DEFAULT_API_ORIGIN;
   const inFlight = new Map<string, Promise<unknown>>();
   const pathCache = new Map<string, ServerPathStep[]>();
@@ -396,7 +383,8 @@ function isChallenge(value: unknown): value is Challenge {
 function hasCoherentChallengeProvenance(value: Record<string, unknown>): boolean {
   if (value.dailyFeature !== undefined && value.dailyFeature !== null) {
     if (!isDailyFeature(value.dailyFeature)) return false;
-    return value.origin === "daily" &&
+    return value.mode === "daily" &&
+      value.origin === "daily" &&
       value.dailyDate === value.dailyFeature.dailyDate &&
       value.source === (value.dailyFeature.selectionSource === "automatic"
         ? "wikipedia_random"

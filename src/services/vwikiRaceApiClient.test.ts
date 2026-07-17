@@ -1,9 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVWikiRaceApiClient } from "./vwikiRaceApiClient";
+import {
+  createVWikiRaceApiClient,
+  type VWikiRaceApiClient,
+  type VWikiRaceDailyAdminApiClient,
+} from "./vwikiRaceApiClient";
 
 const apiOrigin = "https://vwikirace-api.example.workers.dev";
 
 describe("VWiki Race API client", () => {
+  it("requires the production client contract to include Daily administration", () => {
+    const requireDailyAdmin = (client: VWikiRaceDailyAdminApiClient) => client;
+    const declaredClient: VWikiRaceApiClient = createVWikiRaceApiClient(
+      vi.fn(),
+      { apiOrigin },
+    );
+
+    expect(requireDailyAdmin(declaredClient)).toBe(declaredClient);
+  });
+
   it("calls server tracking endpoints with VGames bearer auth for writes", async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -404,6 +418,17 @@ describe("VWiki Race API client", () => {
   });
 
   it.each([
+    ["Daily feature mode", {
+      mode: "solo",
+      origin: "daily",
+      source: "curated",
+      dailyDate: "2026-07-18",
+      dailyFeature: {
+        dailyDate: "2026-07-18",
+        flavor: "weird",
+        selectionSource: "community",
+      },
+    }],
     ["daily source", { origin: "daily", source: "curated", dailyDate: "2026-07-15" }],
     ["daily date omission", { origin: "daily", source: "wikipedia_random" }],
     ["daily date format", { origin: "daily", source: "wikipedia_random", dailyDate: "2026-7-15" }],

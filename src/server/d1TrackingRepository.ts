@@ -1172,13 +1172,34 @@ export function createD1TrackingRepository(options: {
                    'challenge', json_object(
                      'id', c.id, 'label', c.label, 'sortOrder', c.sort_order,
                      'isActive', c.is_active,
-                     'mode', CASE WHEN c.origin = 'daily' THEN 'daily' ELSE 'solo' END,
+                     'mode', CASE
+                       WHEN f.challenge_id IS NOT NULL OR c.origin = 'daily'
+                         THEN 'daily'
+                       ELSE 'solo'
+                     END,
                      'start', json_object('title', c.start_title, 'pageId', c.start_page_id),
                      'target', json_object('title', c.target_title, 'pageId', c.target_page_id),
                      'ruleset', c.ruleset,
-                     'origin', c.origin,
-                     'dailyDate', c.daily_date,
-                     'source', c.source,
+                     'origin', CASE
+                       WHEN f.challenge_id IS NOT NULL OR c.origin = 'daily'
+                         THEN 'daily'
+                       ELSE 'manual'
+                     END,
+                     'dailyDate', coalesce(f.daily_date, c.daily_date),
+                     'dailyFeature', CASE
+                       WHEN f.challenge_id IS NOT NULL THEN json_object(
+                         'dailyDate', f.daily_date,
+                         'flavor', f.flavor,
+                         'selectionSource', f.selection_source
+                       )
+                       ELSE NULL
+                     END,
+                     'source', CASE
+                       WHEN f.selection_source = 'automatic' THEN 'wikipedia_random'
+                       WHEN f.challenge_id IS NOT NULL THEN 'curated'
+                       WHEN c.source = 'wikipedia_random' THEN 'wikipedia_random'
+                       ELSE 'curated'
+                     END,
                      'createdBy', json_object('accountId', c.created_by_account_id,
                        'displayName', c.created_by_display_name,
                        'identityStatus', c.created_by_identity_status)
@@ -1199,7 +1220,10 @@ export function createD1TrackingRepository(options: {
                      ) THEN 'pending'
                      ELSE 'already_exists'
                    END
-                 ) FROM challenges c WHERE c.id = operation_idempotency.resource_id
+                 )
+                 FROM challenges c
+                 LEFT JOIN daily_features f ON f.challenge_id = c.id
+                 WHERE c.id = operation_idempotency.resource_id
                )
            WHERE operation = 'create_challenge' AND idempotency_key = ?
              AND canonical_account_id = ? AND request_fingerprint = ?

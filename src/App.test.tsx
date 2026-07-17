@@ -1487,6 +1487,88 @@ describe("VWiki Race app", () => {
     view.unmount();
   });
 
+  it("invalidates a pre-create catalog load before selecting the created challenge", async () => {
+    const staleCatalog = deferredValue<Response>();
+    const createdChallenge: Challenge = {
+      id: "challenge-0002",
+      label: "Challenge #2",
+      sortOrder: 2,
+      isActive: true,
+      mode: "solo",
+      start: { title: "Mars" },
+      target: { title: "Water" },
+      ruleset: "ranked_classic",
+      origin: "manual",
+      dailyDate: null,
+      dailyFeature: null,
+      source: "curated",
+    };
+    const baseFetch = createFetchMock({
+      creationOutcome: {
+        challenge: createdChallenge,
+        disposition: "created",
+        nomination: "not_requested",
+      },
+    });
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      const method = init?.method ?? "GET";
+      if (requestUrl === apiUrl("/api/v2/challenges") && method === "GET") {
+        return staleCatalog.promise;
+      }
+      if (requestUrl === apiUrl("/api/v2/challenges/challenge-0002/leaderboard")) {
+        return Promise.resolve(jsonResponse({
+          leaderboard: [leaderboardRow({
+            challengeId: "challenge-0002",
+            displayName: "Mars Runner",
+            runId: "run-mars",
+          })],
+        }));
+      }
+      if (requestUrl === apiUrl("/api/v2/challenges/challenge-0001/leaderboard")) {
+        return Promise.resolve(jsonResponse({
+          leaderboard: [leaderboardRow({ displayName: "Apple Runner", runId: "run-apple" })],
+        }));
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.type(await screen.findByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+
+    expect(await screen.findByRole("button", { name: /start challenge #2/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^play$/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(window.location.search).toBe("?challenge=challenge-0002");
+
+    staleCatalog.resolve(jsonResponse({
+      challenges: [{
+        ...twoChallenges()[0],
+        origin: "daily",
+        dailyDate: "2026-07-17",
+        source: "wikipedia_random",
+      }],
+    }));
+    await act(async () => { await staleCatalog.promise; });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start challenge #2/i })).toBeVisible();
+      expect(window.location.search).toBe("?challenge=challenge-0002");
+    });
+    expect(screen.getByRole("button", { name: /^play$/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.click(screen.getByRole("button", { name: /leaderboard/i }));
+    expect(await screen.findByText("Mars Runner")).toBeVisible();
+    expect(screen.queryByText("Apple Runner")).toBeNull();
+  });
+
   it("never renders a prior challenge leaderboard while the current one loads or fails", async () => {
     const challengeTwoLeaderboard = deferredValue<Response>();
     const baseFetch = createFetchMock({ challenges: twoChallenges() });
@@ -1687,6 +1769,152 @@ describe("VWiki Race app", () => {
 
     expect(await screen.findByText(notice)).toBeVisible();
     expect(screen.getByRole("button", { name: /start challenge #12/i })).toBeVisible();
+  });
+
+  it("preserves authoritative catalog Daily metadata from a legacy duplicate outcome", async () => {
+    const featuredChallenge: Challenge = {
+      id: "challenge-0012",
+      label: "Challenge #12",
+      sortOrder: 12,
+      isActive: true,
+      mode: "daily",
+      start: { title: "Mars" },
+      target: { title: "Water" },
+      ruleset: "ranked_classic",
+      origin: "daily",
+      dailyDate: "2026-07-20",
+      dailyFeature: {
+        dailyDate: "2026-07-20",
+        flavor: "recognizable",
+        selectionSource: "admin",
+      },
+      source: "curated",
+    };
+    const fetchImpl = createFetchMock({
+      challenges: [featuredChallenge],
+      creationOutcome: {
+        challenge: {
+          ...featuredChallenge,
+          mode: "solo",
+          origin: "manual",
+          dailyDate: null,
+          dailyFeature: null,
+        },
+        disposition: "existing",
+        nomination: "previously_featured",
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-20"}
+      />,
+    );
+
+    await user.type(await screen.findByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("checkbox", { name: /nominate for a future daily/i }));
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+
+    expect(await screen.findByText(/already been featured as a daily/i)).toBeVisible();
+    expect(screen.getAllByText("Today").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /start challenge #12/i })).toBeVisible();
+  });
+
+  it("refreshes the existing challenge leaderboard after duplicate creation", async () => {
+    const existingChallenge: Challenge = {
+      id: "challenge-0012",
+      label: "Challenge #12",
+      sortOrder: 12,
+      isActive: true,
+      mode: "solo",
+      start: { title: "Mars" },
+      target: { title: "Water" },
+      ruleset: "ranked_classic",
+      origin: "manual",
+      dailyDate: null,
+      dailyFeature: null,
+      source: "curated",
+    };
+    const fetchImpl = createFetchMock({
+      challenges: [existingChallenge],
+      creationOutcome: {
+        challenge: existingChallenge,
+        disposition: "existing",
+        nomination: "already_exists",
+      },
+      leaderboardRows: [leaderboardRow({
+        challengeId: existingChallenge.id,
+        displayName: "Existing Runner",
+      })],
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await waitFor(() => expect(leaderboardCalls(fetchImpl, existingChallenge.id)).toBe(1));
+    await user.type(screen.getByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("checkbox", { name: /nominate for a future daily/i }));
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+    await waitFor(() => expect(leaderboardCalls(fetchImpl, existingChallenge.id)).toBe(2));
+
+    await user.click(screen.getByRole("button", { name: /leaderboard/i }));
+    expect(await screen.findByText("Existing Runner")).toBeVisible();
+  });
+
+  it("keeps a duplicate selected when its leaderboard refresh fails", async () => {
+    const existingChallenge: Challenge = {
+      id: "challenge-0012",
+      label: "Challenge #12",
+      sortOrder: 12,
+      isActive: true,
+      mode: "solo",
+      start: { title: "Mars" },
+      target: { title: "Water" },
+      ruleset: "ranked_classic",
+      origin: "manual",
+      dailyDate: null,
+      dailyFeature: null,
+      source: "curated",
+    };
+    const baseFetch = createFetchMock({
+      challenges: [existingChallenge],
+      creationOutcome: {
+        challenge: existingChallenge,
+        disposition: "existing",
+        nomination: "already_exists",
+      },
+    });
+    let leaderboardReads = 0;
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl(`/api/v2/challenges/${existingChallenge.id}/leaderboard`)) {
+        leaderboardReads += 1;
+        if (leaderboardReads > 1) {
+          return Promise.resolve(jsonError(
+            "leaderboard_unavailable",
+            "Leaderboard unavailable.",
+            503,
+          ));
+        }
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await waitFor(() => expect(leaderboardReads).toBe(1));
+    await user.type(screen.getByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("checkbox", { name: /nominate for a future daily/i }));
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/leaderboard unavailable/i);
+    expect(screen.getByText(/already exists as challenge #12/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /start challenge #12/i })).toBeVisible();
+    expect(window.location.search).toBe("?challenge=challenge-0012");
   });
 
   it("keeps the selected challenge in the URL and honors challenge deep links", async () => {

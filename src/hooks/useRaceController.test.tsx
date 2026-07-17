@@ -496,7 +496,25 @@ function activeClick() {
 }
 function deferred<T>() { let resolve!: (value: T) => void; return { promise: new Promise<T>((done) => { resolve = done; }), resolve }; }
 function apiClient(overrides: Partial<VWikiRaceApiClient> = {}): VWikiRaceApiClient {
-  return { listChallenges: vi.fn(async () => []), createChallenge: vi.fn(), startRun: vi.fn(async () => activeRun()), getActiveRun: vi.fn(async () => null), getActiveRunPath: vi.fn(async () => []), recordClick: vi.fn(async () => activeClick()), abandonRun: vi.fn(), listLeaderboard: vi.fn(async () => []), getRunPath: vi.fn(async () => []), getAccountStats: vi.fn(), ...overrides };
+  return {
+    listChallenges: vi.fn(async () => []),
+    createChallenge: vi.fn(),
+    startRun: vi.fn(async () => activeRun()),
+    getActiveRun: vi.fn(async () => null),
+    getActiveRunPath: vi.fn(async () => []),
+    recordClick: vi.fn(async () => activeClick()),
+    abandonRun: vi.fn(),
+    listLeaderboard: vi.fn(async () => []),
+    getRunPath: vi.fn(async () => []),
+    getAccountStats: vi.fn(),
+    getCapabilities: vi.fn(async () => ({ canManageDailies: false })),
+    getDailyAdminState: vi.fn(async () => ({ nominations: [], queueEntries: [] })),
+    approveDailyNomination: vi.fn(),
+    declineDailyNomination: vi.fn(),
+    queueDailyChallenge: vi.fn(),
+    removeDailyQueueEntry: vi.fn(),
+    ...overrides,
+  };
 }
 function wikiGateway(articles: Record<string, Article>): WikipediaGateway {
   return { getArticle: vi.fn(async (title: string) => articles[title]!), clear: vi.fn() };

@@ -303,7 +303,7 @@ export default function App({
           }
         }
       } catch (caught) {
-        if (!cancelled) {
+        if (!cancelled && request === catalogRequest.current) {
           setError(errorMessage(caught, "Could not load challenges."));
         }
       }
@@ -439,12 +439,14 @@ export default function App({
         sessionForRequest.token,
       );
       const { challenge } = outcome;
-      setChallenges((current) =>
-        getSortedChallenges([
+      catalogRequest.current += 1;
+      setChallenges((current) => {
+        const mergedChallenge = mergeCreatedChallenge(current, challenge);
+        return getSortedChallenges([
           ...current.filter((item) => item.id !== challenge.id),
-          challenge,
-        ]),
-      );
+          mergedChallenge,
+        ]);
+      });
       if (!challengeLockRef.current) {
         race.resetCompleted();
         setSelectedChallengeId(challenge.id);
@@ -453,6 +455,13 @@ export default function App({
         setActiveTab("play");
       }
       setRunNotice(createChallengeNotice(outcome));
+      if (!challengeLockRef.current) {
+        try {
+          await refreshLeaderboard(challenge.id);
+        } catch (caught) {
+          setError(errorMessage(caught, "Could not load the leaderboard."));
+        }
+      }
     } catch (caught) {
       if (isUnauthorizedError(caught)) {
         clearStaleIdentity({ type: "create", input });
@@ -1934,6 +1943,27 @@ function createChallengeNotice(outcome: CreateChallengeOutcome): string {
     case "not_requested":
       return creation;
   }
+}
+
+function mergeCreatedChallenge(
+  current: Challenge[],
+  incoming: Challenge,
+): Challenge {
+  const existingFeature = current.find((challenge) => challenge.id === incoming.id)
+    ?.dailyFeature;
+  if (incoming.dailyFeature || !existingFeature) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    mode: "daily",
+    origin: "daily",
+    dailyDate: existingFeature.dailyDate,
+    dailyFeature: existingFeature,
+    source: existingFeature.selectionSource === "automatic"
+      ? "wikipedia_random"
+      : "curated",
+  };
 }
 
 function LeaderboardPanel({
