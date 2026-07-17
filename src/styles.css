@@ -1378,6 +1378,216 @@ h1 {
   line-height: 0.95;
 }
 
+.daily-admin-layout {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.daily-admin-heading {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+}
+
+.daily-admin-heading h2 {
+  color: #f7feff;
+  font-family: var(--viota-display-font);
+  font-size: 2.15rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.daily-admin-heading .viota-mark {
+  color: var(--coral);
+  font-size: 0.68rem;
+}
+
+.daily-admin-status {
+  width: 100%;
+  margin: 0;
+}
+
+.daily-admin-error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  border-left: 3px solid var(--coral);
+  background: rgba(255, 118, 95, 0.1);
+  color: #ffd7cf;
+  padding: 10px 12px;
+}
+
+.daily-admin-error button {
+  margin-left: auto;
+}
+
+.daily-admin-columns {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.15fr) minmax(300px, 1.3fr) minmax(220px, 0.8fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.daily-admin-view {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  border-top: 3px solid var(--line-strong);
+  padding-top: 10px;
+}
+
+.daily-admin-view-heading {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.daily-admin-view h3,
+.daily-queue-group h4 {
+  margin: 0;
+  color: #ffad9f;
+  font-size: 0.86rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.daily-admin-view-heading > span {
+  color: var(--cyan);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.daily-admin-empty {
+  color: #9fb8bd;
+  font-size: 0.9rem;
+}
+
+.daily-admin-list {
+  display: grid;
+  gap: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.daily-nomination-row,
+.daily-queue-row {
+  display: grid;
+  gap: 9px;
+  border-bottom: 1px solid rgba(130, 246, 239, 0.18);
+  padding: 10px 0;
+}
+
+.daily-row-title {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+}
+
+.daily-row-title strong {
+  color: #ffffff;
+  overflow-wrap: anywhere;
+}
+
+.daily-row-title span,
+.daily-classifier-note {
+  color: #9fb8bd;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.daily-score-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 0;
+}
+
+.daily-score-grid div {
+  border-left: 2px solid rgba(24, 227, 207, 0.38);
+  padding-left: 6px;
+}
+
+.daily-score-grid dt {
+  color: #9fb8bd;
+  font-size: 0.62rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.daily-score-grid dd {
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 900;
+  margin: 2px 0 0;
+}
+
+.daily-flavor-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.daily-flavor-control button {
+  min-width: 0;
+  min-height: 34px;
+  background: var(--ink-soft);
+  color: #dffbfb;
+  font-size: 0.72rem;
+  padding: 6px 5px;
+}
+
+.daily-flavor-control button.active {
+  border-color: #ffb4a6;
+  background: var(--coral);
+  color: #170908;
+}
+
+.daily-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.daily-row-actions button {
+  min-height: 34px;
+}
+
+.daily-queue-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.daily-queue-group {
+  display: grid;
+  gap: 6px;
+}
+
+.daily-queue-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.daily-queue-row button {
+  min-height: 34px;
+  padding-inline: 9px;
+}
+
+.daily-direct-promotion .name-control input {
+  width: 100%;
+}
+
+.daily-direct-promotion > button {
+  width: 100%;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     padding: 10px;
@@ -1455,7 +1665,8 @@ h1 {
   }
 
   .game-layout,
-  .home-layout {
+  .home-layout,
+  .daily-admin-columns {
     grid-template-columns: 1fr;
   }
 
@@ -1655,6 +1866,10 @@ h1 {
     overflow: visible;
   }
 
+  .tabbar.has-admin {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
   .tabbar button {
     min-width: 0;
     padding-inline: 5px;
@@ -1790,6 +2005,25 @@ h1 {
 
   .empty-state h2 {
     font-size: 2.2rem;
+  }
+
+  .daily-admin-heading h2 {
+    font-size: 1.8rem;
+  }
+
+  .daily-admin-error button {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .daily-admin-columns {
+    gap: 16px;
+  }
+
+  .daily-flavor-control button,
+  .daily-row-actions button,
+  .daily-queue-row button {
+    min-height: 44px;
   }
 
   .auth-mode-switch {

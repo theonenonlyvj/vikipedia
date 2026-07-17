@@ -2,7 +2,11 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import type { CreateChallengeOutcome } from "./domain/dailyEditorial";
+import type {
+  CreateChallengeOutcome,
+  DailyNomination,
+  DailyQueueEntry,
+} from "./domain/dailyEditorial";
 import type { Challenge, ServerPathStep } from "./domain/types";
 import type { VGamesIdentityRepository, VGamesIdentitySession } from "./services/vgamesIdentity";
 import { appleParseResponse, fruitParseResponse } from "./test/fixtures";
@@ -54,6 +58,59 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("heading", { name: "VWiki Race" })).toBeVisible();
     expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
     expect(screen.queryByText(/enter vwiki race/i)).toBeNull();
+  });
+
+  it("keeps an unauthenticated direct admin visit in the ordinary game without loading moderation data", async () => {
+    window.history.pushState({}, "", "/admin/dailies");
+    const fetchImpl = createFetchMock();
+
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    expect(screen.getByRole("status", { name: "Authorization notice" })).toHaveTextContent(
+      "This page is not available.",
+    );
+    expect(screen.queryByRole("button", { name: "Admin" })).toBeNull();
+    expect(
+      fetchImpl.mock.calls.some(([input]) => String(input).includes("/api/v2/admin/dailies")),
+    ).toBe(false);
+    expect(
+      fetchImpl.mock.calls.some(([input]) => String(input).includes("/api/v2/accounts/me/capabilities")),
+    ).toBe(false);
+  });
+
+  it("exposes the Admin command and protected route only to daily managers", async () => {
+    window.history.pushState({}, "", "/admin/dailies");
+    const fetchImpl = createFetchMock({ canManageDailies: true });
+
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    expect(await screen.findByRole("heading", { name: "Daily moderation" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Admin" })).toHaveAttribute("aria-pressed", "true");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      apiUrl("/api/v2/accounts/me/capabilities"),
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer jwt-claimed" }) }),
+    );
+    expect(fetchImpl).toHaveBeenCalledWith(
+      apiUrl("/api/v2/admin/dailies"),
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer jwt-claimed" }) }),
+    );
+  });
+
+  it("keeps a non-admin claimed direct visit out of moderation data", async () => {
+    window.history.pushState({}, "", "/admin/dailies");
+    const fetchImpl = createFetchMock({ canManageDailies: false });
+
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    expect(await screen.findByRole("status", { name: "Authorization notice" })).toHaveTextContent(
+      "This page is not available.",
+    );
+    expect(screen.getByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Daily moderation" })).toBeNull();
+    expect(
+      fetchImpl.mock.calls.some(([input]) => String(input).includes("/api/v2/admin/dailies")),
+    ).toBe(false);
   });
 
   it("links back to the portfolio on every view except gameplay", async () => {
@@ -2220,6 +2277,8 @@ function createFetchMock(options?: {
   leaderboardContext?: { isPersonalBest: boolean; rank: number | null };
   statsUnauthorizedAfterFirst?: boolean;
   creationOutcome?: CreateChallengeOutcome;
+  canManageDailies?: boolean;
+  dailyAdminState?: { nominations: DailyNomination[]; queueEntries: DailyQueueEntry[] };
 }) {
   let completed = false;
   let unauthorizedStartRemaining = options?.startUnauthorizedOnce ? 1 : 0;
@@ -2381,6 +2440,14 @@ function createFetchMock(options?: {
           topStarts: [], topTargets: [], mostVisited: [],
         },
       });
+    }
+
+    if (url === "/api/v2/accounts/me/capabilities") {
+      return jsonResponse({ canManageDailies: options?.canManageDailies ?? false });
+    }
+
+    if (url === "/api/v2/admin/dailies") {
+      return jsonResponse(options?.dailyAdminState ?? { nominations: [], queueEntries: [] });
     }
 
     if (url === "/api/v2/runs/run-1/click") {

@@ -48,6 +48,7 @@ import {
 import { createWikipediaGateway } from "./services/wikipediaGateway";
 import { writeTextWithTimeout } from "./services/challengeShare";
 import { type RacePhase, useRaceController } from "./hooks/useRaceController";
+import AdminDailies from "./components/AdminDailies";
 import {
   type TargetPreviewState,
   useTargetPreview,
@@ -65,7 +66,7 @@ interface AppProps {
 }
 
 type ModeState = RacePhase;
-type TabKey = "play" | "leaderboard" | "challenges" | "stats";
+type TabKey = "play" | "leaderboard" | "challenges" | "stats" | "admin";
 type AuthMode = "guest" | "create" | "login";
 interface LoginFormInput {
   username: string;
@@ -120,7 +121,10 @@ export default function App({
   identityClient: injectedIdentityClient,
   identityRepository: injectedIdentityRepository,
 }: AppProps) {
-  const [activeTab, setActiveTab] = useState<TabKey>("play");
+  const [activeTab, setActiveTab] = useState<TabKey>(() =>
+    isAdminDailiesRoute() ? "admin" : "play",
+  );
+  const [canManageDailies, setCanManageDailies] = useState<boolean | null>(null);
   const [authPrompt, setAuthPrompt] = useState<AuthPromptIntent | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("create");
   const [authBusy, setAuthBusy] = useState(false);
@@ -228,6 +232,27 @@ export default function App({
       setUsernameDraft(suggestUsername(cachedSession.displayName));
     }
   }, [identityRepository]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!identitySession) {
+      setCanManageDailies(false);
+      return;
+    }
+
+    setCanManageDailies(null);
+    void apiClient.getCapabilities(identitySession.token)
+      .then((capabilities) => {
+        if (!cancelled) setCanManageDailies(capabilities.canManageDailies);
+      })
+      .catch(() => {
+        if (!cancelled) setCanManageDailies(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, identitySession]);
 
   useEffect(() => {
     if (modeState !== "active" && modeState !== "syncing") return;
@@ -342,6 +367,11 @@ export default function App({
         if (lockedChallengeId) syncChallengeUrl(lockedChallengeId, "replace");
         return;
       }
+      if (isAdminDailiesRoute()) {
+        setActiveTab("admin");
+        setError(null);
+        return;
+      }
       const requestedId = readChallengeIdFromUrl();
       const requested = challenges.find((challenge) => challenge.id === requestedId);
       if (!requested) return;
@@ -410,6 +440,22 @@ export default function App({
     } catch (caught) {
       setError(errorMessage(caught, "Could not load the leaderboard."));
     }
+  }
+
+  function selectView(tab: TabKey) {
+    if (tab === "admin") {
+      if (!canManageDailies) return;
+      syncAdminDailiesUrl();
+      setActiveTab("admin");
+      return;
+    }
+
+    if (isAdminDailiesRoute()) {
+      const url = new URL(window.location.href);
+      url.pathname = "/";
+      window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+    setActiveTab(tab);
   }
 
   async function createChallenge(input: CreateChallengeInput) {
@@ -817,6 +863,13 @@ export default function App({
   const elapsedMs = race.elapsedMs;
   const visibleError = error ?? race.error;
   const endRunIsBlocked = modeState === "syncing" || Boolean(race.pendingRetry);
+  const visibleTab: TabKey = activeTab === "admin" && canManageDailies !== true
+    ? "play"
+    : activeTab;
+  const showAdminAccessNotice = activeTab === "admin" && canManageDailies === false;
+  const availableTabs: TabKey[] = canManageDailies
+    ? ["play", "leaderboard", "challenges", "stats", "admin"]
+    : ["play", "leaderboard", "challenges", "stats"];
 
   return (
     <main
@@ -913,18 +966,18 @@ export default function App({
         <PathStrip targetPreview={targetPreview} titles={visiblePath} />
       ) : null}
 
-      <nav className="tabbar" aria-label="VWiki Race views">
-        {(["play", "leaderboard", "challenges", "stats"] as const).map(
+      <nav className={`tabbar${canManageDailies ? " has-admin" : ""}`} aria-label="VWiki Race views">
+        {availableTabs.map(
           (tab) => (
             <button
-              aria-pressed={activeTab === tab}
-              className={activeTab === tab ? "active" : undefined}
+              aria-pressed={visibleTab === tab}
+              className={visibleTab === tab ? "active" : undefined}
               disabled={tab !== "play" && challengeIsLocked}
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => selectView(tab)}
               type="button"
             >
-              {tab}
+              {tab === "admin" ? "Admin" : tab}
             </button>
           ),
         )}
@@ -936,12 +989,17 @@ export default function App({
       {runNotice && !authPrompt && !endConfirmationOpen ? (
         <p className="run-notice" role="status">{runNotice}</p>
       ) : null}
+      {showAdminAccessNotice ? (
+        <p aria-label="Authorization notice" className="run-notice" role="status">
+          This page is not available.
+        </p>
+      ) : null}
       {modeState === "preparing" && !pendingNavigationTitle ? (
         <p className="loading-text">Loading article...</p>
       ) : null}
 
       <section className="content-shell">
-        {activeTab === "play" ? (
+        {visibleTab === "play" ? (
           <PlayPanel
             article={article}
             challenges={challenges}
@@ -966,7 +1024,7 @@ export default function App({
           />
         ) : null}
 
-        {activeTab === "leaderboard" ? (
+        {visibleTab === "leaderboard" ? (
           <LeaderboardPanel
             leaderboard={leaderboard}
             onDisclosePath={(runId) => void loadRunPath(runId)}
@@ -974,7 +1032,7 @@ export default function App({
           />
         ) : null}
 
-        {activeTab === "challenges" ? (
+        {visibleTab === "challenges" ? (
           <ChallengeBrowser
             challenges={challenges}
             canNominateForDaily={identitySession?.status === "claimed"}
@@ -986,14 +1044,18 @@ export default function App({
           />
         ) : null}
 
-        {activeTab === "stats" ? (
+        {visibleTab === "stats" ? (
           <StatsPanel
             stats={accountStats}
           />
         ) : null}
+
+        {visibleTab === "admin" && identitySession ? (
+          <AdminDailies apiClient={apiClient} token={identitySession.token} />
+        ) : null}
       </section>
 
-      {activeTab === "play" && (session !== null || modeState !== "idle")
+      {visibleTab === "play" && (session !== null || modeState !== "idle")
         ? null
         : (
           <footer className="site-footer">
@@ -2101,11 +2163,26 @@ function readChallengeIdFromUrl(): string | null {
   return new URLSearchParams(window.location.search).get("challenge");
 }
 
+function isAdminDailiesRoute(): boolean {
+  return typeof window !== "undefined" && window.location.pathname === "/admin/dailies";
+}
+
+function syncAdminDailiesUrl() {
+  if (typeof window === "undefined" || isAdminDailiesRoute()) {
+    return;
+  }
+  window.history.pushState({}, "", "/admin/dailies");
+}
+
 function syncChallengeUrl(
   challengeId: string,
   historyMode: "push" | "replace" = "push",
 ) {
   if (typeof window === "undefined" || !challengeId) {
+    return;
+  }
+
+  if (isAdminDailiesRoute()) {
     return;
   }
 
