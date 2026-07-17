@@ -3,6 +3,7 @@ dist/
 .superpowers/
 .worktrees/
 .wrangler/
+.private/
 .env
 .env.local
 .env.*.local
