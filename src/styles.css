@@ -860,6 +860,11 @@ h1 {
   line-height: 1.6;
   overflow-wrap: break-word;
   scrollbar-gutter: stable;
+  /* Timed race: a slightly-long tap must navigate, not trigger the browser's
+     double-tap-to-zoom delay. Prose stays selectable (user-select: text) -
+     only links (below) suppress selection/long-press so taps register fast. */
+  touch-action: manipulation;
+  user-select: text;
 }
 
 .article-content > .mw-parser-output {
@@ -886,6 +891,13 @@ h1 {
 .article-content a {
   color: #36c;
   text-decoration: none;
+  /* A slightly-long tap during a timed race must fire the click, not the
+     native long-press context menu (Open in new tab/Copy/Share) or a text
+     selection - both stall the run and cost the race. */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .article-content a:hover,
