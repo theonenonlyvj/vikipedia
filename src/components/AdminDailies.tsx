@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { extractArticlePreview } from "../domain/articlePreview";
 import type {
   DailyFlavor,
   DailyNomination,
@@ -6,10 +7,12 @@ import type {
 } from "../domain/dailyEditorial";
 import type { VWikiRaceDailyAdminApiClient } from "../services/vwikiRaceApiClient";
 import type { Challenge } from "../domain/types";
+import type { WikipediaGateway } from "../services/wikipediaGateway";
 
 interface AdminDailiesProps {
   apiClient: VWikiRaceDailyAdminApiClient;
   challenges: Challenge[];
+  previewGateway: WikipediaGateway;
   token: string;
 }
 
@@ -20,7 +23,7 @@ interface DailyAdminState {
 
 const DAILY_FLAVORS: DailyFlavor[] = ["recognizable", "weird", "hard"];
 
-export default function AdminDailies({ apiClient, challenges, token }: AdminDailiesProps) {
+export default function AdminDailies({ apiClient, challenges, previewGateway, token }: AdminDailiesProps) {
   const [state, setState] = useState<DailyAdminState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +57,11 @@ export default function AdminDailies({ apiClient, challenges, token }: AdminDail
   }, [apiClient, loadVersion, token]);
 
   async function approveNomination(nomination: DailyNomination) {
-    const flavor = flavorOverrides[nomination.id] ?? nomination.suggestedFlavor ?? "recognizable";
+    const flavor = flavorOverrides[nomination.id] ?? nomination.suggestedFlavor;
+    if (!flavor) {
+      setError("Choose a Daily flavor before approving this nomination.");
+      return;
+    }
     const action = `approve:${nomination.id}`;
     setBusyAction(action);
     setError(null);
@@ -145,6 +152,7 @@ export default function AdminDailies({ apiClient, challenges, token }: AdminDail
   const challengeById = new Map(challenges.map((challenge) => [challenge.id, challenge]));
   const queuedChallengeIds = new Set(queuedEntries.map((entry) => entry.challengeId));
   const nominatedChallengeIds = new Set(pendingNominations.map((nomination) => nomination.challengeId));
+  const nominationCounts = nominationCategoryCounts(pendingNominations);
   const directPromotionChallenges = challenges.filter((challenge) =>
     challenge.isActive !== false &&
     challenge.origin !== "daily" &&
@@ -177,22 +185,34 @@ export default function AdminDailies({ apiClient, challenges, token }: AdminDail
               <h3 id="pending-nominations-title">Pending nominations</h3>
               <span>{pendingNominations.length}</span>
             </div>
+            <div aria-label="Submission categories" className="daily-nomination-totals">
+              {(["recognizable", "weird", "hard", "unclassified"] as const).map((category) => (
+                <span key={category}>{nominationCounts[category]} {category}</span>
+              ))}
+            </div>
             {pendingNominations.length === 0 ? (
               <p className="daily-admin-empty">No pending nominations.</p>
             ) : (
               <ol className="daily-admin-list">
                 {pendingNominations.map((nomination) => {
                   const selectedFlavor = flavorOverrides[nomination.id] ??
-                    nomination.suggestedFlavor ?? "recognizable";
+                    nomination.suggestedFlavor ?? null;
                   const challenge = challengeById.get(nomination.challengeId);
+                  const accessibleChallenge = challengeAccessibleName(challenge, nomination.challengeId);
                   return (
                     <li key={nomination.id}>
-                      <article aria-label={`Nomination ${nomination.id}`} className="daily-nomination-row">
+                      <article aria-label={`Nomination ${accessibleChallenge}`} className="daily-nomination-row">
                         <div className="daily-row-title">
                           <strong>{challenge?.label ?? nomination.challengeId}</strong>
                           <span>{challengeRoute(challenge, nomination.challengeId)}</span>
                         </div>
+                        <p className="daily-classifier-note">
+                          Created by {challenge?.createdBy?.displayName ?? "Unknown"}
+                        </p>
                         <p className="daily-classifier-note">Nominated by {nomination.nominatedByDisplayName}</p>
+                        {challenge ? (
+                          <NominationTargetPreview challenge={challenge} gateway={previewGateway} />
+                        ) : null}
                         <dl className="daily-score-grid" aria-label={`Classifier scores for ${nomination.challengeId}`}>
                           <div>
                             <dt>Recognizable</dt>
@@ -212,7 +232,7 @@ export default function AdminDailies({ apiClient, challenges, token }: AdminDail
                         </p>
                         <p className="daily-classifier-note">Confidence: {nomination.confidence}</p>
                         <FlavorSegmentedControl
-                          label={`Flavor for ${nomination.id}`}
+                          label={`Flavor for ${accessibleChallenge}`}
                           onChange={(flavor) => setFlavorOverrides((current) => ({
                             ...current,
                             [nomination.id]: flavor,
@@ -221,13 +241,15 @@ export default function AdminDailies({ apiClient, challenges, token }: AdminDail
                         />
                         <div className="daily-row-actions">
                           <button
-                            disabled={busyAction !== null}
+                            aria-label={`Approve ${accessibleChallenge}`}
+                            disabled={busyAction !== null || selectedFlavor === null}
                             onClick={() => void approveNomination(nomination)}
                             type="button"
                           >
                             Approve
                           </button>
                           <button
+                            aria-label={`Decline ${accessibleChallenge}`}
                             className="secondary-button"
                             disabled={busyAction !== null}
                             onClick={() => void declineNomination(nomination.id)}
@@ -261,13 +283,23 @@ export default function AdminDailies({ apiClient, challenges, token }: AdminDail
                       <ol className="daily-admin-list">
                         {entries.map((entry) => (
                           <li key={entry.id}>
-                            <article aria-label={`Queued challenge ${entry.id}`} className="daily-queue-row">
+                            <article
+                              aria-label={`Queued ${challengeAccessibleName(
+                                challengeById.get(entry.challengeId),
+                                entry.challengeId,
+                              )}`}
+                              className="daily-queue-row"
+                            >
                               <div className="daily-row-title">
                                 <strong>{challengeById.get(entry.challengeId)?.label ?? entry.challengeId}</strong>
                                 <span>{challengeRoute(challengeById.get(entry.challengeId), entry.challengeId)}</span>
                                 <span>{entry.source}</span>
                               </div>
                               <button
+                                aria-label={`Remove ${challengeAccessibleName(
+                                  challengeById.get(entry.challengeId),
+                                  entry.challengeId,
+                                )}`}
                                 className="secondary-button"
                                 disabled={busyAction !== null}
                                 onClick={() => void removeQueueEntry(entry.id)}
@@ -332,7 +364,7 @@ function FlavorSegmentedControl({
 }: {
   label: string;
   onChange: (flavor: DailyFlavor) => void;
-  value: DailyFlavor;
+  value: DailyFlavor | null;
 }) {
   return (
     <div aria-label={label} className="daily-flavor-control" role="group">
@@ -369,4 +401,89 @@ function errorMessage(caught: unknown, fallback: string): string {
 
 function challengeRoute(challenge: Challenge | undefined, fallback: string): string {
   return challenge ? `${challenge.start.title} -> ${challenge.target.title}` : fallback;
+}
+
+function challengeAccessibleName(challenge: Challenge | undefined, fallback: string): string {
+  return challenge
+    ? `${challenge.label ?? challenge.id} ${challenge.start.title} to ${challenge.target.title}`
+    : fallback;
+}
+
+function nominationCategoryCounts(nominations: DailyNomination[]) {
+  const counts = { recognizable: 0, weird: 0, hard: 0, unclassified: 0 };
+  for (const nomination of nominations) {
+    counts[nomination.suggestedFlavor ?? "unclassified"] += 1;
+  }
+  return counts;
+}
+
+function NominationTargetPreview({
+  challenge,
+  gateway,
+}: {
+  challenge: Challenge;
+  gateway: WikipediaGateway;
+}) {
+  const [state, setState] = useState<
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "ready"; blurb: string; attributionUrl: string }
+    | { status: "unavailable" }
+  >({ status: "idle" });
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(() => () => controller.current?.abort(), []);
+
+  async function loadPreview() {
+    controller.current?.abort();
+    const nextController = new AbortController();
+    controller.current = nextController;
+    setState({ status: "loading" });
+    try {
+      const article = await gateway.getArticle(challenge.target.title, {
+        ruleset: challenge.ruleset,
+        signal: nextController.signal,
+      });
+      if (nextController.signal.aborted) return;
+      if (challenge.target.pageId !== undefined && article.pageId !== challenge.target.pageId) {
+        setState({ status: "unavailable" });
+        return;
+      }
+      const preview = extractArticlePreview(article);
+      setState({
+        status: "ready",
+        blurb: preview.blurb ?? "Wikipedia does not provide a short lead for this target.",
+        attributionUrl: article.attributionUrl,
+      });
+    } catch {
+      if (!nextController.signal.aborted) setState({ status: "unavailable" });
+    }
+  }
+
+  return (
+    <div className="daily-target-preview">
+      <button
+        aria-expanded={state.status === "ready"}
+        className="secondary-button"
+        disabled={state.status === "loading"}
+        onClick={() => void loadPreview()}
+        type="button"
+      >
+        {state.status === "loading" ? "Loading target..." : `Preview target ${challenge.target.title}`}
+      </button>
+      {state.status === "ready" ? (
+        <div>
+          <p>{state.blurb}</p>
+          <a href={state.attributionUrl} rel="noopener noreferrer" target="_blank">Source revision</a>
+          <span aria-hidden="true"> · </span>
+          <a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="noopener noreferrer" target="_blank">
+            CC BY-SA 4.0
+          </a>
+        </div>
+      ) : null}
+      {state.status === "unavailable" ? (
+        <p className="daily-classifier-note" role="alert">Target preview unavailable.</p>
+      ) : null}
+    </div>
+  );
 }

@@ -164,20 +164,32 @@ Do not reverse these steps.
 1. Confirm the VGames identity Worker is healthy.
 2. Run all local release gates listed below and commit the reviewed tree locally.
 3. Inspect the remote D1 migration ledger and record it before mutation.
-4. If `0005` is pending, create a private D1 backup/export, apply only the
-   reviewed additive migration, and verify the remote ledger again.
-5. Deploy the canonical API Worker from `wrangler.api.toml`.
-6. Smoke-test the canonical Worker directly, including the v2 challenge catalog
+4. If `0005` is pending, run the read-only ordered-pair audit below. It must
+   return zero rows; any result blocks the migration and requires a separate,
+   reviewed data-preservation plan.
+5. Create a private D1 backup/export, apply only the reviewed additive
+   migration, and verify the remote ledger again.
+6. Deploy the canonical API Worker from `wrangler.api.toml`.
+7. Smoke-test the canonical Worker directly, including the v2 challenge catalog
    and Daily/admin routes.
-7. Set both Pages API-origin environment values to that Worker origin.
-8. Only now push `main`, then manually deploy Pages with the recorded CLI
+8. Set both Pages API-origin environment values to that Worker origin.
+9. Only now push `main`, then manually deploy Pages with the recorded CLI
    command. Re-verify the project still reports no Git provider before relying
    on this order in a future release.
-9. Smoke-test a guest/claimed start, one click, completion, path disclosure,
+10. Smoke-test a guest/claimed start, one click, completion, path disclosure,
    stats, direct challenge link, and challenge creation.
-10. Confirm all three cron triggers are present. Do not manually fan out
+11. Confirm all three cron triggers are present. Do not manually fan out
    scheduled invocations; the Central-time gate creates dates and minute-17 may
    only retry due jobs.
+
+Before migration `0005`, run and record this remote read-only audit:
+
+```bash
+npx wrangler d1 execute vwiki-race --remote --config wrangler.api.toml --command \
+  "SELECT start_page_id, target_page_id, ruleset, COUNT(*) AS duplicate_count FROM challenges WHERE start_page_id IS NOT NULL AND target_page_id IS NOT NULL GROUP BY start_page_id, target_page_id, ruleset HAVING COUNT(*) > 1;"
+```
+
+The result must contain no rows. Do not apply `0005` if it reports a duplicate.
 
 This ordering prevents a new Worker from querying columns that are not yet in
 D1 and prevents Pages from pointing at an unverified API deployment.

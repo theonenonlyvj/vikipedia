@@ -1469,6 +1469,16 @@ h1 {
   font-size: 0.9rem;
 }
 
+.daily-nomination-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  color: #9fb8bd;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .daily-admin-list {
   display: grid;
   gap: 0;
@@ -1560,6 +1570,36 @@ h1 {
 
 .daily-row-actions button {
   min-height: 34px;
+}
+
+.daily-target-preview {
+  display: grid;
+  gap: 7px;
+}
+
+.daily-target-preview > button {
+  justify-self: start;
+  max-width: 100%;
+  min-height: 34px;
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: normal;
+}
+
+.daily-target-preview div {
+  border-left: 2px solid rgba(24, 227, 207, 0.38);
+  padding-left: 8px;
+}
+
+.daily-target-preview p {
+  color: #d8e6e8;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.daily-target-preview a {
+  font-size: 0.7rem;
 }
 
 .daily-queue-groups {
@@ -1707,6 +1747,10 @@ h1 {
 }
 
 @media (max-width: 640px) {
+  .daily-target-preview > button {
+    min-height: 44px;
+  }
+
   .header-compact {
     --compact-header-height: 112px;
   }

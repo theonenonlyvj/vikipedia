@@ -63,6 +63,11 @@ export function createWorker(options: WorkerOptions = {}) {
       gateway: createWorkerWikipediaGateway(fetch),
       onDiagnostic: logDailyCandidateDiagnostic,
     }));
+  let dailyCandidateSource: ReturnType<typeof buildDailyCandidateSource> | null = null;
+  const getDailyCandidateSource = () => {
+    dailyCandidateSource ??= buildDailyCandidateSource();
+    return dailyCandidateSource;
+  };
 
   return {
     async fetch(request: Request, env: Env): Promise<Response> {
@@ -153,7 +158,7 @@ export function createWorker(options: WorkerOptions = {}) {
           queue: queueResult,
           elapsedMs: Date.now() - selectionStartedAt,
         });
-        const { selectedScore, ...candidate } = await buildDailyCandidateSource().findCandidate({
+        const { selectedScore, ...candidate } = await getDailyCandidateSource().findCandidate({
           dailyDate: job.dailyDate,
           flavor,
         });

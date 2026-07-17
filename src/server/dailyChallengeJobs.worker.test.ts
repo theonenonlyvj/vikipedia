@@ -587,6 +587,62 @@ describe("daily challenge D1 jobs", () => {
     expect(acceptDailyChallenge).not.toHaveBeenCalled();
   });
 
+  it("reuses one editorial candidate source across scheduled attempts in the same Worker isolate", async () => {
+    const jobs = [
+      {
+        dailyDate: "2026-07-15",
+        attemptCount: 1,
+        leaseToken: "shared-source-lease-1",
+        leaseExpiresAt: "2026-07-15T10:10:00.000Z",
+      },
+      {
+        dailyDate: "2026-07-16",
+        attemptCount: 1,
+        leaseToken: "shared-source-lease-2",
+        leaseExpiresAt: "2026-07-16T10:10:00.000Z",
+      },
+    ];
+    const findCandidate = vi.fn(async () => ({
+      startTitle: "Automatic start",
+      startPageId: 7301,
+      targetTitle: "Automatic target",
+      targetPageId: 7302,
+      selectedScore: 79,
+    }));
+    const createDailyCandidateSource = vi.fn(() => ({ findCandidate }));
+    const repository = {
+      ensureDailyChallengeJob: vi.fn(async () => undefined),
+      claimDueDailyChallengeJob: vi.fn()
+        .mockResolvedValueOnce(jobs[0])
+        .mockResolvedValueOnce(jobs[1]),
+      failDailyChallengeJob: vi.fn(async () => undefined),
+      findQueuedDailyCandidate: vi.fn(async () => null),
+      acceptDailyFeature: vi.fn(async () => ({ id: "challenge-automatic" })),
+    };
+    const worker = createWorker({
+      createTracking: () => ({
+        handlers: {},
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => { throw new Error("not used"); },
+      } as unknown as WorkerTracking),
+      createDailyCandidateSource,
+      now: () => new Date("2026-07-16T10:00:00.000Z"),
+    });
+
+    await worker.scheduled(createScheduledController({
+      scheduledTime: new Date("2026-07-15T10:00:00.000Z"),
+      cron: "0 10 * * *",
+    }), env as unknown as WorkerEnv);
+    await worker.scheduled(createScheduledController({
+      scheduledTime: new Date("2026-07-16T10:00:00.000Z"),
+      cron: "0 10 * * *",
+    }), env as unknown as WorkerEnv);
+
+    expect(createDailyCandidateSource).toHaveBeenCalledTimes(1);
+    expect(findCandidate).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ["a lost lease", "daily_feature_lease_lost"],
     ["another accepted date selection", "daily_feature_date_conflict"],

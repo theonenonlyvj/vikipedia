@@ -113,6 +113,26 @@ describe("VWiki Race app", () => {
     ).toBe(false);
   });
 
+  it("preserves the selected challenge while entering and leaving Daily moderation", async () => {
+    window.history.pushState({}, "", "/?challenge=challenge-0001");
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ canManageDailies: true })}
+        storage={claimedStorage()}
+      />,
+    );
+
+    const admin = await screen.findByRole("button", { name: "Admin" });
+    await userEvent.click(admin);
+    expect(window.location.pathname).toBe("/admin/dailies");
+    expect(window.location.search).toBe("?challenge=challenge-0001");
+
+    await userEvent.click(screen.getByRole("button", { name: "play" }));
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("?challenge=challenge-0001");
+  });
+
   it("links back to the portfolio on every view except gameplay", async () => {
     const storage = memoryStorage();
     storage.setItem(

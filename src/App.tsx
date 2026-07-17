@@ -1051,7 +1051,12 @@ export default function App({
         ) : null}
 
         {visibleTab === "admin" && identitySession ? (
-          <AdminDailies apiClient={apiClient} challenges={challenges} token={identitySession.token} />
+          <AdminDailies
+            apiClient={apiClient}
+            challenges={challenges}
+            previewGateway={previewWikipediaGateway}
+            token={identitySession.token}
+          />
         ) : null}
       </section>
 
@@ -2171,7 +2176,9 @@ function syncAdminDailiesUrl() {
   if (typeof window === "undefined" || isAdminDailiesRoute()) {
     return;
   }
-  window.history.pushState({}, "", "/admin/dailies");
+  const url = new URL(window.location.href);
+  url.pathname = "/admin/dailies";
+  window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function syncChallengeUrl(

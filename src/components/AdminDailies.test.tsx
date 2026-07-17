@@ -8,7 +8,8 @@ import type {
   DailyQueueEntry,
 } from "../domain/dailyEditorial";
 import type { VWikiRaceDailyAdminApiClient } from "../services/vwikiRaceApiClient";
-import type { Challenge } from "../domain/types";
+import type { Article, Challenge, SanitizedWikipediaHtml } from "../domain/types";
+import type { WikipediaGateway } from "../services/wikipediaGateway";
 
 describe("AdminDailies", () => {
   it("shows a loading state before the moderation state arrives", () => {
@@ -18,6 +19,7 @@ describe("AdminDailies", () => {
           getDailyAdminState: () => new Promise(() => undefined),
         })}
         challenges={challengeCatalog()}
+        previewGateway={previewGateway()}
         token="admin-token"
       />,
     );
@@ -32,6 +34,7 @@ describe("AdminDailies", () => {
           getDailyAdminState: vi.fn().mockRejectedValue(new Error("Moderation service is unavailable.")),
         })}
         challenges={challengeCatalog()}
+        previewGateway={previewGateway()}
         token="admin-token"
       />,
     );
@@ -47,6 +50,7 @@ describe("AdminDailies", () => {
           getDailyAdminState: vi.fn().mockResolvedValue({ nominations: [], queueEntries: [] }),
         })}
         challenges={challengeCatalog()}
+        previewGateway={previewGateway()}
         token="admin-token"
       />,
     );
@@ -64,11 +68,14 @@ describe("AdminDailies", () => {
       <AdminDailies
         apiClient={adminClient({ approveDailyNomination })}
         challenges={challengeCatalog()}
+        previewGateway={previewGateway()}
         token="admin-token"
       />,
     );
 
-    const nomination = await screen.findByRole("article", { name: "Nomination nomination-1" });
+    const nomination = await screen.findByRole("article", {
+      name: "Nomination Challenge #101 Mercury to Solar System",
+    });
     expect(within(nomination).getByText("80")).toBeVisible();
     expect(within(nomination).getByText("12")).toBeVisible();
     expect(within(nomination).getByText("53")).toBeVisible();
@@ -76,22 +83,92 @@ describe("AdminDailies", () => {
     expect(within(nomination).getByText("Confidence: high")).toBeVisible();
     expect(within(nomination).getByText("Challenge #101")).toBeVisible();
     expect(within(nomination).getByText("Mercury -> Solar System")).toBeVisible();
+    expect(within(nomination).getByText("Created by theonenonlyvj")).toBeVisible();
+    expect(screen.getByText("1 recognizable")).toBeVisible();
 
-    const flavorOverride = within(nomination).getByRole("group", { name: "Flavor for nomination-1" });
+    const flavorOverride = within(nomination).getByRole("group", {
+      name: "Flavor for Challenge #101 Mercury to Solar System",
+    });
     await userEvent.click(within(flavorOverride).getByRole("button", { name: "Hard" }));
     expect(within(flavorOverride).getByRole("button", { name: "Hard" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
 
-    await userEvent.click(within(nomination).getByRole("button", { name: "Approve" }));
+    await userEvent.click(within(nomination).getByRole("button", {
+      name: "Approve Challenge #101 Mercury to Solar System",
+    }));
     expect(approveDailyNomination).toHaveBeenCalledWith(
       "nomination-1",
       { flavor: "hard" },
       "admin-token",
     );
-    await waitFor(() => expect(screen.queryByRole("article", { name: "Nomination nomination-1" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("article", {
+      name: "Nomination Challenge #101 Mercury to Solar System",
+    })).toBeNull());
     expect(screen.getByText("Challenge #101")).toBeVisible();
+  });
+
+  it("requires an explicit flavor for an unclassified nomination", async () => {
+    render(
+      <AdminDailies
+        apiClient={adminClient({
+          getDailyAdminState: vi.fn().mockResolvedValue({
+            nominations: [nomination({ suggestedFlavor: null, confidence: "unclassified" })],
+            queueEntries: [],
+          }),
+        })}
+        challenges={challengeCatalog()}
+        previewGateway={previewGateway()}
+        token="admin-token"
+      />,
+    );
+
+    const row = await screen.findByRole("article", { name: "Nomination Challenge #101 Mercury to Solar System" });
+    expect(within(row).getByRole("button", { name: "Approve Challenge #101 Mercury to Solar System" })).toBeDisabled();
+    await userEvent.click(within(row).getByRole("button", { name: "Weird" }));
+    expect(within(row).getByRole("button", { name: "Approve Challenge #101 Mercury to Solar System" })).toBeEnabled();
+  });
+
+  it("loads target context only when the moderator requests it", async () => {
+    const gateway = previewGateway();
+    render(
+      <AdminDailies
+        apiClient={adminClient()}
+        challenges={challengeCatalog()}
+        previewGateway={gateway}
+        token="admin-token"
+      />,
+    );
+
+    const row = await screen.findByRole("article", { name: "Nomination Challenge #101 Mercury to Solar System" });
+    expect(gateway.getArticle).not.toHaveBeenCalled();
+    await userEvent.click(within(row).getByRole("button", { name: "Preview target Solar System" }));
+    expect(await within(row).findByText("Solar System is useful context.")).toBeVisible();
+    expect(gateway.getArticle).toHaveBeenCalledWith(
+      "Solar System",
+      expect.objectContaining({ ruleset: "ranked_classic", signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("announces an unavailable target preview", async () => {
+    const gateway = previewGateway();
+    vi.mocked(gateway.getArticle).mockRejectedValue(new Error("Wikipedia unavailable"));
+    render(
+      <AdminDailies
+        apiClient={adminClient()}
+        challenges={challengeCatalog()}
+        previewGateway={gateway}
+        token="admin-token"
+      />,
+    );
+
+    const row = await screen.findByRole("article", {
+      name: "Nomination Challenge #101 Mercury to Solar System",
+    });
+    await userEvent.click(within(row).getByRole("button", { name: "Preview target Solar System" }));
+
+    expect(await within(row).findByRole("alert")).toHaveTextContent("Target preview unavailable.");
   });
 
   it("declines nominations, removes queued entries, and directly promotes a challenge", async () => {
@@ -115,16 +192,25 @@ describe("AdminDailies", () => {
           removeDailyQueueEntry,
         })}
         challenges={challengeCatalog()}
+        previewGateway={previewGateway()}
         token="admin-token"
       />,
     );
 
-    const pending = await screen.findByRole("article", { name: "Nomination nomination-1" });
-    await userEvent.click(within(pending).getByRole("button", { name: "Decline" }));
+    const pending = await screen.findByRole("article", {
+      name: "Nomination Challenge #101 Mercury to Solar System",
+    });
+    await userEvent.click(within(pending).getByRole("button", {
+      name: "Decline Challenge #101 Mercury to Solar System",
+    }));
     expect(declineDailyNomination).toHaveBeenCalledWith("nomination-1", "admin-token");
 
-    const queued = await screen.findByRole("article", { name: "Queued challenge queue-1" });
-    await userEvent.click(within(queued).getByRole("button", { name: "Remove" }));
+    const queued = await screen.findByRole("article", {
+      name: "Queued Challenge #101 Mercury to Solar System",
+    });
+    await userEvent.click(within(queued).getByRole("button", {
+      name: "Remove Challenge #101 Mercury to Solar System",
+    }));
     expect(removeDailyQueueEntry).toHaveBeenCalledWith("queue-1", "admin-token");
 
     await userEvent.selectOptions(screen.getByLabelText("Challenge"), "challenge-direct");
@@ -148,6 +234,7 @@ describe("AdminDailies", () => {
           getDailyAdminState: vi.fn().mockResolvedValue({ nominations: [], queueEntries: [] }),
         })}
         challenges={challengeCatalog()}
+        previewGateway={previewGateway()}
         token="admin-token"
       />,
     );
@@ -231,5 +318,30 @@ function challenge(id: string, label: string, start: string, target: string): Ch
     origin: "manual",
     dailyDate: null,
     source: "curated",
+    createdBy: {
+      accountId: "creator-account",
+      displayName: "theonenonlyvj",
+      identityStatus: "claimed",
+    },
+  };
+}
+
+function previewGateway(): WikipediaGateway {
+  return {
+    clear: vi.fn(),
+    getArticle: vi.fn(async (title: string) => article(title)),
+  };
+}
+
+function article(title: string): Article {
+  return {
+    canonicalTitle: title,
+    pageId: 1,
+    revisionId: 3,
+    sourceUrl: `https://en.wikipedia.org/wiki/${title}`,
+    attributionUrl: `https://en.wikipedia.org/w/index.php?title=${title}&oldid=3`,
+    attribution: "Wikipedia revision 3",
+    links: [],
+    sanitizedHtml: `<p>${title} is useful context.</p>` as SanitizedWikipediaHtml,
   };
 }

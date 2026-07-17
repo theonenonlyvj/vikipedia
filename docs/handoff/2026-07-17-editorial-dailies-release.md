@@ -62,10 +62,13 @@ Use the generic procedure in
 1. Run the local release gates and commit the reviewed tree.
 2. List the remote D1 ledger. Treat `0005` as pending until the ledger says it
    is applied.
-3. If pending, make a private D1 backup/export. Never print, commit, or publish
-   the backup. Apply the reviewed migration and verify the ledger again.
-4. Deploy and smoke-test the API Worker from `wrangler.api.toml`.
-5. Only after the Worker is healthy, push/allow Pages deployment and smoke-test
+3. If pending, run the read-only ordered-pair audit documented in the Cloudflare
+   handoff and record a zero-row result. Any duplicate blocks the migration;
+   never delete or merge challenge history during deployment.
+4. Make a private D1 backup/export. Never print, commit, or publish the backup.
+   Apply the reviewed migration and verify the ledger again.
+5. Deploy and smoke-test the API Worker from `wrangler.api.toml`.
+6. Only after the Worker is healthy, push/allow Pages deployment and smoke-test
    the frontend. Preserve Worker-before-Pages order.
 
 The Worker schedule remains `0 10 * * *`, `0 11 * * *`, and `17 * * * *` UTC.
