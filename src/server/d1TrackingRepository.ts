@@ -19,6 +19,7 @@ import {
   fingerprintRunClick,
   fingerprintStartRun,
   MAX_RUN_CLICKS,
+  MIN_RESUMABLE_CLICKS,
   RUN_EXPIRY_MS,
   type AbandonRunV2Input,
   type RecordClickV2Input,
@@ -500,6 +501,30 @@ export function createD1TrackingRepository(options: {
               request_fingerprint, resource_id, outcome_status, created_at)
            VALUES ('start', ?, ?, ?, ?, 'pending', ?)`,
         ).bind(idempotencyKey, account.accountId, fingerprint, runId, createdAt),
+        db.prepare(
+          `UPDATE runs
+           SET status = 'abandoned', abandoned_at = ?, updated_at = ?,
+               ranked_eligible = 0
+           WHERE coalesce(canonical_account_id, account_id) = ?
+             AND status = 'active'
+             AND protocol_version = 2
+             AND click_count < ?
+             AND EXISTS (
+               SELECT 1 FROM operation_idempotency o
+               WHERE o.operation = 'start' AND o.idempotency_key = ?
+                 AND o.canonical_account_id = ? AND o.request_fingerprint = ?
+                 AND o.resource_id = ? AND o.outcome_status = 'pending'
+             )`,
+        ).bind(
+          createdAt,
+          createdAt,
+          account.accountId,
+          MIN_RESUMABLE_CLICKS,
+          idempotencyKey,
+          account.accountId,
+          fingerprint,
+          runId,
+        ),
         db.prepare(
           `INSERT INTO runs
              (id, challenge_id, account_id, canonical_account_id, status,
@@ -1129,8 +1154,9 @@ export function createD1TrackingRepository(options: {
          )
            AND r.status = 'active'
            AND (r.expires_at IS NULL OR r.expires_at >= ?)
+           AND (r.protocol_version <> 2 OR r.click_count >= ?)
          ORDER BY r.started_at DESC LIMIT 1`,
-      ).bind(...receipt.bindings, at).first<RunRow>();
+      ).bind(...receipt.bindings, at, MIN_RESUMABLE_CLICKS).first<RunRow>();
       return row ? mapActiveRunRow(row) : null;
     },
 

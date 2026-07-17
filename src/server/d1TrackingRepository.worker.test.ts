@@ -307,7 +307,8 @@ describe("atomic D1 protocol-2 runs", () => {
   });
 
   it("starts once, replays the same key, and stores active-run rejection outcomes", async () => {
-    const { repository } = fixture();
+    const clock = { now: "2026-07-14T01:00:00.000Z" };
+    const { repository } = fixture(clock);
     const created = await repository.startRunV2(account, start);
     expect(created).toMatchObject({
       id: "run-1",
@@ -318,6 +319,10 @@ describe("atomic D1 protocol-2 runs", () => {
       targetPageId: 38579,
     });
     await expect(repository.startRunV2(account, start)).resolves.toEqual(created);
+
+    // Give the run enough clicks to be a real, resumable run: only a run at
+    // or above the 2-click floor still blocks a competing start attempt.
+    await recordTwoNonTerminalClicks(repository, clock);
 
     const otherKey = { ...start, idempotencyKey: "start-other-key" };
     await expect(repository.startRunV2(account, otherKey)).rejects.toMatchObject({
@@ -339,7 +344,7 @@ describe("atomic D1 protocol-2 runs", () => {
       }),
     ).rejects.toMatchObject({ code: "idempotency_conflict", status: 409 });
     await expect(count("runs")).resolves.toBe(1);
-    await expect(count("operation_idempotency")).resolves.toBe(3);
+    await expect(count("operation_idempotency")).resolves.toBe(5);
   });
 
   it("serializes concurrent same-key start and click retries to one write set", async () => {
@@ -385,6 +390,11 @@ describe("atomic D1 protocol-2 runs", () => {
     const created = await repository.startRunV2(merged, start);
     expect(created.protocolVersion).toBe(2);
     await expect(runStatus("legacy-alias-run")).resolves.toBe("abandoned");
+    // Cross the 2-click resumability floor so this run is discoverable as
+    // active; a bare 0-click run is deliberately not surfaced (see the
+    // "2-click floor" describe block).
+    await env.VWIKI_RACE_DB.prepare("UPDATE runs SET click_count = 2 WHERE id = ?")
+      .bind(created.id).run();
     await expect(repository.findActiveRun(merged)).resolves.toMatchObject({
       id: created.id,
       protocolVersion: 2,
@@ -761,6 +771,120 @@ describe("atomic D1 protocol-2 runs", () => {
       protocol_version: 1,
       ranked_eligible: 0,
     });
+  });
+});
+
+describe("2-click floor for resumable protocol-2 runs", () => {
+  it("does not surface a 0-click active run from findActiveRun", async () => {
+    const { repository } = fixture();
+    const created = await repository.startRunV2(account, start);
+    expect(created).toMatchObject({ clickCount: 0, status: "active" });
+
+    await expect(repository.findActiveRun(account)).resolves.toBeNull();
+  });
+
+  it("does not surface a 1-click active run from findActiveRun", async () => {
+    const clock = { now: "2026-07-14T01:00:00.000Z" };
+    const { repository } = fixture(clock);
+    await repository.startRunV2(account, start);
+    clock.now = "2026-07-14T01:00:01.000Z";
+    await repository.recordClickV2(account, {
+      ...targetClick,
+      destinationTitle: "Orbit",
+      destinationPageId: 1234,
+      decisionElapsedMs: 1000,
+    });
+
+    await expect(runSnapshot("run-1")).resolves.toMatchObject({
+      status: "active",
+      click_count: 1,
+    });
+    await expect(repository.findActiveRun(account)).resolves.toBeNull();
+  });
+
+  it("surfaces a 2-click active run from findActiveRun", async () => {
+    const clock = { now: "2026-07-14T01:00:00.000Z" };
+    const { repository } = fixture(clock);
+    await repository.startRunV2(account, start);
+    await recordTwoNonTerminalClicks(repository, clock);
+
+    await expect(runSnapshot("run-1")).resolves.toMatchObject({
+      status: "active",
+      click_count: 2,
+    });
+    await expect(repository.findActiveRun(account)).resolves.toMatchObject({
+      id: "run-1",
+      status: "active",
+      clickCount: 2,
+    });
+  });
+
+  it.each([0, 1])(
+    "auto-abandons a %i-click active run and lets a fresh start succeed",
+    async (clickCount) => {
+      const clock = { now: "2026-07-14T01:00:00.000Z" };
+      const { repository } = fixture(clock);
+      const first = await repository.startRunV2(account, start);
+      if (clickCount === 1) {
+        clock.now = "2026-07-14T01:00:01.000Z";
+        await repository.recordClickV2(account, {
+          ...targetClick,
+          destinationTitle: "Orbit",
+          destinationPageId: 1234,
+          decisionElapsedMs: 1000,
+        });
+      }
+      await expect(runSnapshot(first.id)).resolves.toMatchObject({
+        status: "active",
+        click_count: clickCount,
+        start_title: "Moon",
+        target_title: "Gravity",
+      });
+
+      clock.now = "2026-07-14T01:05:00.000Z";
+      const second = await repository.startRunV2(account, {
+        ...start,
+        idempotencyKey: "start-second-attempt",
+      });
+
+      expect(second).toMatchObject({ status: "active", clickCount: 0 });
+      expect(second.id).not.toBe(first.id);
+      await expect(runSnapshot(first.id)).resolves.toMatchObject({
+        status: "abandoned",
+        click_count: clickCount,
+        start_title: "Moon",
+        target_title: "Gravity",
+      });
+      // The fresh run is itself sub-threshold (0 clicks), so it is not yet a
+      // resumable "active run" either -- confirm no run leaked through as active.
+      await expect(runSnapshot(second.id)).resolves.toMatchObject({
+        status: "active",
+        click_count: 0,
+      });
+      await expect(repository.findActiveRun(account)).resolves.toBeNull();
+      await expect(count("runs")).resolves.toBe(2);
+    },
+  );
+
+  it("still rejects a new start with active_run_exists once the active run has 2+ clicks", async () => {
+    const clock = { now: "2026-07-14T01:00:00.000Z" };
+    const { repository } = fixture(clock);
+    const first = await repository.startRunV2(account, start);
+    await recordTwoNonTerminalClicks(repository, clock);
+
+    clock.now = "2026-07-14T01:05:00.000Z";
+    await expect(repository.startRunV2(account, {
+      ...start,
+      idempotencyKey: "start-blocked-attempt",
+    })).rejects.toMatchObject({ code: "active_run_exists", status: 409 });
+
+    await expect(runSnapshot(first.id)).resolves.toMatchObject({
+      status: "active",
+      click_count: 2,
+      start_title: "Moon",
+      target_title: "Gravity",
+    });
+    await expect(count("runs")).resolves.toBe(1);
   });
 });
 
@@ -1934,6 +2058,10 @@ describe("Task 4 D1 projections", () => {
         challengeId: "challenge-0001",
         idempotencyKey: "alias-old-start",
       });
+      // Cross the 2-click resumability floor so this run is discoverable as
+      // active; a bare 0-click run is deliberately not surfaced.
+      await env.VWIKI_RACE_DB.prepare("UPDATE runs SET click_count = 2 WHERE id = ?")
+        .bind("alias-abandon-run").run();
     } else {
       await insertLegacyRun({ id: "alias-abandon-run", accountId: oldAccount.accountId });
     }
@@ -2051,6 +2179,30 @@ function fixture(
       randomId: () => (id++ === 0 ? firstId : `${firstId}-generated-${id}`),
     }),
   };
+}
+
+async function recordTwoNonTerminalClicks(
+  repository: ReturnType<typeof createD1TrackingRepository>,
+  clock: { now: string },
+): Promise<void> {
+  clock.now = "2026-07-14T01:00:01.000Z";
+  await repository.recordClickV2(account, {
+    ...targetClick,
+    destinationTitle: "Orbit",
+    destinationPageId: 1234,
+    decisionElapsedMs: 1000,
+  });
+  clock.now = "2026-07-14T01:00:02.000Z";
+  await repository.recordClickV2(account, {
+    ...targetClick,
+    clientEventId: "00000000-0000-4000-8000-000000000102",
+    expectedStepNumber: 2,
+    sourceTitle: "Orbit",
+    sourcePageId: 1234,
+    destinationTitle: "Nebula",
+    destinationPageId: 5555,
+    decisionElapsedMs: 2000,
+  });
 }
 
 async function insertLegacyRun(input: {

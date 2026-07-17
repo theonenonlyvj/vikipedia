@@ -1,6 +1,10 @@
 export const RUN_EXPIRY_MS = 24 * 60 * 60 * 1000;
 export const MAX_RUN_CLICKS = 250;
 export const DECISION_TIME_GRACE_MS = 5_000;
+// A protocol-2 run isn't a resumable in-progress run until it has this many
+// clicks. Sub-threshold runs are transient "ghosts" that findActiveRun hides
+// and that startRunV2 auto-abandons to make way for a fresh start.
+export const MIN_RESUMABLE_CLICKS = 2;
 
 export interface StartRunV2Input {
   challengeId: string;
