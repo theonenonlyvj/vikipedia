@@ -3417,6 +3417,110 @@ describe("setRunBoardExclusion", () => {
   });
 });
 
+describe("listChallengePlacements", () => {
+  it("collapses repeat attempts to one best row per account", async () => {
+    const accountA = "placement-account-a";
+    const accountB = "placement-account-b";
+    const accountC = "placement-account-c";
+
+    // Account A completes twice: a worse attempt, then a better one.
+    await insertCompletedV2({
+      id: "a-worse",
+      accountId: accountA,
+      elapsedMs: 9_000,
+      completedAt: "2026-07-14T01:00:09.000Z",
+    });
+    await insertCompletedV2({
+      id: "a-better",
+      accountId: accountA,
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+
+    // Account B completes once, slower than A's best.
+    await insertCompletedV2({
+      id: "b-only",
+      accountId: accountB,
+      elapsedMs: 6_000,
+      completedAt: "2026-07-14T01:00:06.000Z",
+    });
+
+    // Account C abandons (DNF) — must be absent from placements entirely.
+    await insertLegacyRun({ id: "c-dnf", accountId: accountC });
+    await env.VWIKI_RACE_DB.prepare(
+      `UPDATE runs SET status='abandoned', protocol_version=2, click_count=2,
+         abandoned_at='2026-07-14T01:00:10.000Z', elapsed_ms=NULL,
+         wall_elapsed_ms=NULL WHERE id='c-dnf'`,
+    ).run();
+
+    const { repository } = fixture();
+    const placements = await repository.listChallengePlacements("challenge-0001");
+
+    expect(placements).toHaveLength(2); // C's DNF absent
+    expect(placements[0].accountId).toBe(accountA);
+    expect(placements[0].placement).toBe(1);
+    expect(placements[0].elapsedMs).toBe(4_000); // best, not latest
+    expect(placements[1].accountId).toBe(accountB);
+    expect(placements[1].placement).toBe(2); // no gaps
+  });
+
+  it("respects board exclusion", async () => {
+    const accountA = "placement-exclusion-account";
+    await insertCompletedV2({
+      id: "a-best-excluded",
+      accountId: accountA,
+      elapsedMs: 3_000,
+      completedAt: "2026-07-14T01:00:03.000Z",
+    });
+    await insertCompletedV2({
+      id: "a-second-best",
+      accountId: accountA,
+      elapsedMs: 7_000,
+      completedAt: "2026-07-14T01:00:07.000Z",
+    });
+
+    await env.VWIKI_RACE_DB.prepare(
+      "UPDATE runs SET board_excluded = 1 WHERE id = ?",
+    ).bind("a-best-excluded").run();
+
+    const { repository } = fixture();
+    const placements = await repository.listChallengePlacements("challenge-0001");
+    const a = placements.find((p) => p.accountId === accountA);
+    // A's best is excluded → A's placement falls back to their other run.
+    expect(a?.elapsedMs).toBe(7_000);
+  });
+
+  it("resolves canonical accounts through account_aliases", async () => {
+    const canonical = "placement-canonical";
+    const ghost = "placement-ghost";
+    await insertCompletedV2({
+      id: "ghost-run",
+      accountId: ghost,
+      elapsedMs: 5_000,
+      completedAt: "2026-07-14T01:00:05.000Z",
+    });
+    await insertCompletedV2({
+      id: "canonical-run",
+      accountId: canonical,
+      elapsedMs: 3_000,
+      completedAt: "2026-07-14T01:00:03.000Z",
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO account_aliases (alias_account_id, canonical_account_id, updated_at)
+       VALUES (?, ?, '2026-07-14T01:00:00.000Z')`,
+    ).bind(ghost, canonical).run();
+
+    const { repository } = fixture();
+    const placements = await repository.listChallengePlacements("challenge-0001");
+    const ids = placements.map((p) => p.accountId);
+    expect(new Set(ids).size).toBe(ids.length); // one row per canonical id
+    expect(ids).toContain(canonical);
+    expect(ids).not.toContain(ghost);
+    const merged = placements.find((p) => p.accountId === canonical);
+    expect(merged?.elapsedMs).toBe(3_000); // canonical's own best beats the alias's run
+  });
+});
+
 function fixture(
   clock: { now: string } = { now: "2026-07-14T01:00:00.000Z" },
   firstId = "run-1",

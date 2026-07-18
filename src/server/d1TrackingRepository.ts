@@ -2311,6 +2311,55 @@ export function createD1TrackingRepository(options: {
       }));
     },
 
+    async listChallengePlacements(challengeId) {
+      const { results } = await db
+        .prepare(
+          `WITH resolved AS (
+             SELECT r.id,
+                    coalesce(a.canonical_account_id, r.canonical_account_id, r.account_id) account_id,
+                    r.elapsed_ms, r.click_count, r.completed_at
+             FROM runs r
+             LEFT JOIN account_aliases a
+               ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
+             WHERE r.challenge_id = ?
+               AND r.board_excluded = 0
+               AND r.status = 'completed'
+               AND r.elapsed_ms IS NOT NULL
+               AND r.completed_at IS NOT NULL
+               AND ((r.protocol_version = 2 AND r.ranked_eligible = 1)
+                    OR r.protocol_version = 1)
+           ), best AS (
+             SELECT *, row_number() OVER (
+               PARTITION BY account_id
+               ORDER BY elapsed_ms ASC, click_count ASC, completed_at ASC, id
+             ) attempt_rank
+             FROM resolved
+           )
+           SELECT best.account_id, best.elapsed_ms, best.click_count,
+                  best.completed_at,
+                  row_number() OVER (
+                    ORDER BY best.elapsed_ms ASC, best.click_count ASC,
+                             best.completed_at ASC, best.id
+                  ) placement,
+                  p.public_name AS display_name
+           FROM best
+           LEFT JOIN account_profiles p ON p.account_id = best.account_id
+           WHERE best.attempt_rank = 1
+           ORDER BY placement
+           LIMIT 100`,
+        )
+        .bind(challengeId)
+        .all<ChallengePlacementQueryRow>();
+      return results.map((row) => ({
+        accountId: row.account_id,
+        displayName: row.display_name ?? null,
+        placement: Number(row.placement),
+        elapsedMs: Number(row.elapsed_ms),
+        clickCount: Number(row.click_count),
+        completedAt: row.completed_at,
+      }));
+    },
+
     async setRunBoardExclusion(runId, excluded) {
       const row = await db
         .prepare(
@@ -4442,6 +4491,15 @@ interface LeaderboardRunRow {
   protocol_version: number;
   rank: number;
   attempt_number: number;
+  display_name?: string | null;
+}
+
+interface ChallengePlacementQueryRow {
+  account_id: string;
+  elapsed_ms: number;
+  click_count: number;
+  completed_at: string;
+  placement: number;
   display_name?: string | null;
 }
 

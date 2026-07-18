@@ -213,6 +213,16 @@ export interface RunProtocolRepository extends TrackingRepository {
     runId: string,
     excluded: boolean,
   ): Promise<{ runId: string; boardExcluded: boolean } | null>;
+  listChallengePlacements(challengeId: string): Promise<
+    Array<{
+      accountId: string;
+      displayName: string | null;
+      placement: number;
+      elapsedMs: number;
+      clickCount: number;
+      completedAt: string;
+    }>
+  >;
   findQueuedDailyCandidate(flavor: DailyFlavor): Promise<DailyQueuedCandidate | null>;
   acceptDailyFeature(job: DailyChallengeJob, selection: DailyFeatureSelection): Promise<Challenge>;
   findChallengeCreationReplay(
