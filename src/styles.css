@@ -777,10 +777,45 @@ h1 {
   font-family: var(--viota-ui-font);
 }
 
-/* Mode-shell panels new this task: Boards' selector, Challenge Detail, the
-   admin-route bypass screen, and You's account chip/claim CTA. */
-.boards-selector {
+/* Mode-shell panels new this task: Challenge Detail, the admin-route
+   bypass screen, and You's account chip/claim CTA. */
+
+/* Boards v1 (Increment 3): the [Today][Yesterday] segmented control - reuses
+   `.bottom-nav`'s pill-toggle look (44px targets, coral active state)
+   rather than inventing a second tabbar pattern. */
+.board-segment-control {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 6px;
   margin-bottom: 14px;
+}
+
+.board-segment-control button {
+  min-height: 44px;
+  background: var(--ink-soft);
+  color: #9fb8bd;
+  font-weight: 850;
+}
+
+.board-segment-control button.active {
+  background: var(--coral);
+  border-color: #ffb4a6;
+  color: #170908;
+}
+
+.board-segment-header {
+  margin-bottom: 12px;
+}
+
+.board-dnf-section {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.board-footnote {
+  margin-top: 14px;
+  font-size: 0.78rem;
 }
 
 .challenge-detail {

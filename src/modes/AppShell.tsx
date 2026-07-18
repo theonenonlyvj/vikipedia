@@ -9,7 +9,7 @@ import { isAdminDailiesRoute } from "../services/urlRouting";
 import type { VGamesIdentitySession } from "../services/vgamesIdentity";
 import type { VWikiRaceApiClient } from "../services/vwikiRaceApiClient";
 import type { WikipediaGateway } from "../services/wikipediaGateway";
-import Boards from "./Boards";
+import Boards, { type BoardsSegment } from "./Boards";
 import ChallengeBrowser from "./challenges/Browse";
 import ChallengeDetail from "./challenges/ChallengeDetail";
 import Home from "./Home";
@@ -46,6 +46,7 @@ export default function AppShell({
   authBusy,
   bannerError,
   bannerNotice,
+  boardsInitialSegment,
   canManageDailies,
   canNominateForDaily,
   challenges,
@@ -61,7 +62,6 @@ export default function AppShell({
   onGoToBoardsFor,
   onOpenChallengeDetail,
   onRaceChallenge,
-  onSelectChallengeForBoards,
   onSelectMode,
   previewWikipediaGateway,
   runPaths,
@@ -75,6 +75,7 @@ export default function AppShell({
   authBusy: boolean;
   bannerError: string | null;
   bannerNotice: string | null;
+  boardsInitialSegment: BoardsSegment;
   canManageDailies: boolean | null;
   canNominateForDaily: boolean;
   challenges: Challenge[];
@@ -87,10 +88,9 @@ export default function AppShell({
   onCreateChallenge: (input: CreateChallengeInput) => Promise<void>;
   onDisclosePath: (runId: string) => void;
   onExitAdmin: () => void;
-  onGoToBoardsFor: (challengeId: string) => void;
+  onGoToBoardsFor: () => void;
   onOpenChallengeDetail: (challengeId: string) => void;
   onRaceChallenge: (challengeId: string) => void;
-  onSelectChallengeForBoards: (challengeId: string) => void;
   onSelectMode: (mode: ModeKey) => void;
   previewWikipediaGateway: WikipediaGateway;
   runPaths: Record<string, ServerPathStep[]>;
@@ -185,13 +185,14 @@ export default function AppShell({
 
         {visibleMode === "boards" ? (
           <Boards
+            apiClient={apiClient}
             challenges={challenges}
-            leaderboard={leaderboard}
-            onDisclosePath={onDisclosePath}
-            onSelectChallenge={onSelectChallengeForBoards}
-            runPaths={runPaths}
-            selectedChallengeId={selectedChallenge?.id ?? null}
-            selectionLocked={selectionLocked}
+            identityAccountId={identitySession?.accountId ?? null}
+            initialSegment={boardsInitialSegment}
+            onRaceChallenge={onRaceChallenge}
+            raceBusy={authBusy}
+            todaysHeroChallenge={todaysHeroChallenge}
+            todayCentral={todayCentral}
           />
         ) : null}
 

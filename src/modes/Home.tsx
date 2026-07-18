@@ -48,7 +48,7 @@ export default function Home({
   challenges: Challenge[];
   heroChallenge: Challenge | null;
   identityAccountId: string | null;
-  onGoToBoards: (challengeId: string) => void;
+  onGoToBoards: () => void;
   onRaceChallenge: (challengeId: string) => void;
   onShowChallenges: () => void;
   raceBusy: boolean;
@@ -199,7 +199,7 @@ export default function Home({
         >
           <button
             className="link-button"
-            onClick={() => onGoToBoards(yesterdaysDaily.id)}
+            onClick={() => onGoToBoards()}
             type="button"
           >
             see full board ›

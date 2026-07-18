@@ -44,6 +44,7 @@ import { useRaceController } from "./hooks/useRaceController";
 import { useTargetPreview } from "./hooks/useTargetPreview";
 import RaceFlow, { type DnfResultSnapshot } from "./race/RaceFlow";
 import AppShell, { type ChallengesView, type ModeKey } from "./modes/AppShell";
+import type { BoardsSegment } from "./modes/Boards";
 import type { CreateChallengeInput } from "./modes/challenges/Browse";
 
 interface AppProps {
@@ -164,6 +165,13 @@ export default function App({
   const [accountStatsProjection, setAccountStatsProjection] =
     useState<AccountStatsProjection | null>(null);
   const [runPaths, setRunPaths] = useState<Record<string, ServerPathStep[]>>({});
+  // Boards v1 (Increment 3) owns its own [Today][Yesterday] segment state
+  // internally, but the *initial* segment on mount depends on how you got
+  // there: the bottom-nav Boards item always cold-starts on Today (Open
+  // Question 4 - avoids duplicating Home's yesterday pre-play card), while
+  // Home's "see full board" link under its yesterday recap means Yesterday
+  // specifically - see goToBoardsFor/selectMode below.
+  const [boardsInitialSegment, setBoardsInitialSegment] = useState<BoardsSegment>("today");
   const [endConfirmationOpen, setEndConfirmationOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runNotice, setRunNotice] = useState<string | null>(null);
@@ -603,29 +611,13 @@ export default function App({
     setRaceStage("preview");
   }
 
-  // Home's "yesterday's results" card ("see full board ›") - switches
-  // Boards' own selection to that specific daily before navigating, so
-  // Boards never shows a stale/unrelated challenge's board.
-  function goToBoardsFor(challengeId: string) {
-    void selectChallengeForBoards(challengeId);
+  // Home's yesterday recap card ("see full board ›") - Boards computes its
+  // own Yesterday segment independently now (Increment 3 rebuild), so this
+  // only needs to land on Boards with that segment pre-selected, not sync
+  // any shared challenge-selection state the old v0 selector used.
+  function goToBoardsFor() {
+    setBoardsInitialSegment("yesterday");
     setMode("boards");
-  }
-
-  // Boards v0's own selector (spec: "challenge-scoped board with its
-  // selector") - unlike openChallengeDetail above, this stays on Boards
-  // rather than jumping to Detail, since Boards is now a standalone
-  // destination.
-  async function selectChallengeForBoards(challengeId: string) {
-    if (challengeLockRef.current) return;
-    setSelectedChallengeId(challengeId);
-    syncChallengeUrl(challengeId);
-    setError(null);
-    setRunNotice(null);
-    try {
-      await refreshLeaderboard(challengeId);
-    } catch (caught) {
-      setError(errorMessage(caught, "Could not load the leaderboard."));
-    }
   }
 
   function selectMode(nextMode: ModeKey) {
@@ -633,6 +625,9 @@ export default function App({
     // Tapping the Challenges nav item always returns to its root (Browse) -
     // Detail is reached only via a share link/back-forward, never the nav.
     if (nextMode === "challenges") setChallengesView("browse");
+    // The bottom-nav Boards item is always a cold entry - Today (Open
+    // Question 4) - distinct from goToBoardsFor's Yesterday-specific link.
+    if (nextMode === "boards") setBoardsInitialSegment("today");
   }
 
   function closeChallengeDetail() {
@@ -1189,6 +1184,7 @@ export default function App({
           authBusy={authBusy}
           bannerError={bannerError}
           bannerNotice={bannerNotice}
+          boardsInitialSegment={boardsInitialSegment}
           canManageDailies={canManageDailies}
           canNominateForDaily={identitySession?.status === "claimed"}
           challenges={challenges}
@@ -1204,7 +1200,6 @@ export default function App({
           onGoToBoardsFor={goToBoardsFor}
           onOpenChallengeDetail={(challengeId) => void openChallengeDetail(challengeId)}
           onRaceChallenge={openRacePreviewFor}
-          onSelectChallengeForBoards={(challengeId) => void selectChallengeForBoards(challengeId)}
           onSelectMode={selectMode}
           previewWikipediaGateway={previewWikipediaGateway}
           runPaths={runPaths}

@@ -1048,12 +1048,15 @@ describe("VWiki Race app", () => {
     expect(screen.getByRole("button", { name: /play again/i })).toBeVisible();
 
     // "View leaderboard" exits the full-screen results takeover back to the
-    // normal shell's Leaderboard tab (Results itself stays unchanged this
-    // increment - see the race-flow spec's Results beat).
+    // normal shell - now Boards (Increment 3 rebuild), not a "Leaderboard"
+    // tab (Results itself stays unchanged this increment - see the
+    // race-flow spec's Results beat). This fixture challenge isn't a real
+    // daily, so Boards' Today segment falls back to it (same fallback Home's
+    // hero uses), and fetches its own deduped board exactly once.
     await user.click(screen.getByRole("button", { name: /view leaderboard/i }));
-    expect(screen.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Boards" })).toBeVisible();
     expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
-    await waitFor(() => expect(leaderboardCalls(fetchImpl, "challenge-0001")).toBe(2));
+    await waitFor(() => expect(boardCalls(fetchImpl, "challenge-0001")).toBe(1));
     expect(completeRunCalls(fetchImpl)).toBe(0);
   });
 
@@ -1075,13 +1078,16 @@ describe("VWiki Race app", () => {
 
   it("locks solution-bearing views throughout an active run", async () => {
     // accountId distinct from claimedStorage's "acc-1" so Home's own
-    // pre-race leaderboard read doesn't mistake this Boards fixture row for
+    // pre-race leaderboard read doesn't mistake this Detail fixture row for
     // "I've already finished today's daily" and hide the Race button.
     const fetchImpl = createFetchMock({ leaderboardRows: [leaderboardRow({ accountId: "acc-other-device" })] });
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: /^boards$/i }));
+    // Path disclosure lives on Challenge Detail now, not Boards (Increment 3
+    // rebuild removed per-run path disclosure from Boards entirely).
+    await user.click(await screen.findByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #1/i }));
     expect(await screen.findByText(/view winning path/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: /^home$/i }));
     await user.click(screen.getByRole("button", { name: /▶ race/i }));
@@ -1436,13 +1442,14 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
-    await user.click(await screen.findByRole("button", { name: /^boards$/i }));
+    // Path disclosure lives on Challenge Detail now - Boards dropped
+    // per-run path disclosure entirely this increment (spec: "paths hidden
+    // until you've played"; invariant 5).
+    await user.click(await screen.findByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #1/i }));
     expect(runPathCalls(fetchImpl, "run-ranked")).toBe(0);
     const disclosure = await screen.findByText(/view winning path/i);
     await user.click(disclosure);
-    // The pair title no longer duplicates into a persistent header outside
-    // Boards (that chrome moved into Home/Detail) - just the disclosed
-    // winning-path breadcrumb itself remains here.
     expect((await screen.findAllByText(/apple -> fruit/i)).length).toBeGreaterThan(0);
     await user.click(disclosure);
     await user.click(disclosure);
@@ -1465,7 +1472,10 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
-    await user.click(await screen.findByRole("button", { name: /^boards$/i }));
+    // Provenance badges are Detail-only content now, same as path
+    // disclosure above.
+    await user.click(await screen.findByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #1/i }));
 
     expect(await screen.findByText("franelpana")).toBeVisible();
     expect(screen.getByText("Historical")).toBeVisible();
@@ -1494,7 +1504,12 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: /^boards$/i }));
+    // Repeat-run badges/full DNF provenance are Detail-only content now -
+    // Boards' DNF section this increment is a plain muted name/clicks/time
+    // row with no path disclosure or provenance badges (see the Boards
+    // describe block below for that coverage).
+    await user.click(await screen.findByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #1/i }));
 
     expect(await screen.findByText("#1")).toBeVisible();
     expect(screen.getByText("DNF")).toBeVisible();
@@ -1722,9 +1737,12 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     const view = render(<App apiOrigin={apiOrigin} fetchImpl={racingFetch} storage={memoryStorage()} />);
     const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    // Challenge Detail is the per-challenge board surface now (Boards only
+    // ever shows Today/Yesterday's daily) - opening challenge-0002's card
+    // exercises the exact same leaderboardProjection staleness guard the
+    // old Boards v0 selector used to.
     await user.click(within(nav).getByRole("button", { name: "Challenges" }));
     await user.click(await screen.findByRole("button", { name: /challenge #2/i }));
-    await user.click(within(nav).getByRole("button", { name: /^boards$/i }));
     expect(await screen.findByText("Mars Runner")).toBeVisible();
     await act(async () => {
       staleLeaderboard.resolve();
@@ -1836,7 +1854,10 @@ describe("VWiki Race app", () => {
       "aria-pressed",
       "true",
     );
-    await user.click(within(nav).getByRole("button", { name: /^boards$/i }));
+    // Detail is already showing the just-created challenge-0002 (Boards
+    // only ever shows Today/Yesterday's daily, so it plays no part in
+    // confirming this) - the late-resolving stale catalog above must not
+    // have clobbered it back to challenge-0001's board.
     expect(await screen.findByText("Mars Runner")).toBeVisible();
     expect(screen.queryByText("Apple Runner")).toBeNull();
   });
@@ -1859,12 +1880,15 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
 
+    // Challenge Detail is the per-challenge board surface now (Boards only
+    // ever shows Today/Yesterday's daily), so this exercises the same
+    // leaderboardProjection staleness guard through Detail instead.
     const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
-    await user.click(within(nav).getByRole("button", { name: /^boards$/i }));
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #1/i }));
     expect(await screen.findByText("Apple Runner")).toBeVisible();
     await user.click(within(nav).getByRole("button", { name: "Challenges" }));
     await user.click(screen.getByRole("button", { name: /challenge #2/i }));
-    await user.click(within(nav).getByRole("button", { name: /^boards$/i }));
     expect(screen.queryByText("Apple Runner")).toBeNull();
     expect(screen.getByText(/no completed runs yet/i)).toBeVisible();
 
@@ -2144,7 +2168,9 @@ describe("VWiki Race app", () => {
     await user.click(screen.getByRole("button", { name: /create challenge/i }));
     await waitFor(() => expect(leaderboardCalls(fetchImpl, existingChallenge.id)).toBe(2));
 
-    await user.click(screen.getByRole("button", { name: /^boards$/i }));
+    // A duplicate creation lands directly on the existing challenge's
+    // Detail (plan-drift fix) - no extra navigation needed to see its
+    // refreshed leaderboard.
     expect(await screen.findByText("Existing Runner")).toBeVisible();
   });
 
@@ -2515,7 +2541,7 @@ describe("VWiki Race app", () => {
 
       await user.click(within(nav).getByRole("button", { name: "Boards" }));
       expect(within(nav).getByRole("button", { name: "Boards" })).toHaveAttribute("aria-pressed", "true");
-      expect(screen.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Boards" })).toBeVisible();
 
       await user.click(within(nav).getByRole("button", { name: "Challenges" }));
       expect(within(nav).getByRole("button", { name: "Challenges" })).toHaveAttribute("aria-pressed", "true");
@@ -3119,9 +3145,15 @@ describe("Home v2: stateful daily hub + teaching gate (Increment 2 Task 2)", () 
     expect(within(yesterdayCard).getByText(/vijay/i)).toBeVisible();
     expect(within(yesterdayCard).getByText(/\(you\)/i)).toBeVisible();
 
+    // "see full board" lands on Boards' Yesterday segment specifically
+    // (goToBoardsFor) - Boards computes that segment's daily itself from the
+    // catalog now, rather than syncing a shared challenge-selection URL
+    // param the old v0 selector needed.
     await user.click(within(yesterdayCard).getByRole("button", { name: /see full board/i }));
-    expect(screen.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
-    expect(window.location.search).toBe("?challenge=challenge-0002");
+    expect(screen.getByRole("heading", { name: "Boards" })).toBeVisible();
+    expect(await screen.findByText(/ari/i)).toBeVisible();
+    expect(screen.getByText(/vijay/i)).toBeVisible();
+    expect(screen.getByText(/\(you\)/i)).toBeVisible();
   });
 
   it("omits the yesterday's-results card when no yesterday daily exists in the catalog (it only carries active challenges)", async () => {
@@ -3304,6 +3336,187 @@ describe("Home v2: stateful daily hub + teaching gate (Increment 2 Task 2)", () 
   });
 });
 
+describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
+  it("renders exactly the Today/Yesterday segments (no trends stubs), defaulting to Today", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = screen.getByRole("region", { name: "Boards" });
+    const segments = within(board).getAllByRole("tab");
+    expect(segments.map((tab) => tab.textContent)).toEqual(["Today", "Yesterday"]);
+    expect(within(board).getByRole("tab", { name: "Today" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("shows today's deduped board - rank, name, time·clicks - and highlights the viewer's own row", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: [
+            { accountId: "acc-ari", displayName: "Ari", placement: 1, elapsedMs: 20_000, clickCount: 3 },
+            { accountId: "acc-1", displayName: "Vijay", placement: 2, elapsedMs: 25_000, clickCount: 4 },
+          ],
+          dnfs: [],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = screen.getByRole("region", { name: "Boards" });
+    expect(await within(board).findByText("Ari")).toBeVisible();
+    expect(within(board).getByText("#1")).toBeVisible();
+    expect(within(board).getByText("0:20 · 3 clk")).toBeVisible();
+    expect(within(board).getByText("Vijay")).toBeVisible();
+    expect(within(board).getByText("0:25 · 4 clk")).toBeVisible();
+    expect(within(board).getByText(/\(you\)/i)).toBeVisible();
+  });
+
+  it("shows a muted DNF section below finishers, with no path disclosure anywhere in Boards", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: [
+            { accountId: "acc-ari", displayName: "Ari", placement: 1, elapsedMs: 20_000, clickCount: 3 },
+          ],
+          dnfs: [
+            { accountId: "acc-1", displayName: "Vijay", clickCount: 2, elapsedMs: 8_000 },
+          ],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = screen.getByRole("region", { name: "Boards" });
+    const dnfSection = await within(board).findByRole("region", { name: "DNF" });
+    expect(within(dnfSection).getByText("Vijay")).toBeVisible();
+    expect(within(dnfSection).getByText("0:08 · 2 clk")).toBeVisible();
+    expect(within(dnfSection).getByText(/\(you\)/i)).toBeVisible();
+    // Invariant 5 / task scope: Boards drops per-run path disclosure
+    // entirely this increment - that's Detail-only content now (see the
+    // "labels leaderboard provenance"/"View winning path" tests above).
+    expect(within(board).queryByText(/view path/i)).toBeNull();
+    expect(within(board).queryByText(/view winning path/i)).toBeNull();
+  });
+
+  it("shows a Race CTA on Today when the viewer hasn't finished, wired to the pre-race preview", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      boardByChallenge: { "challenge-0001": { placements: [], dnfs: [] } },
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = await screen.findByRole("region", { name: "Boards" });
+    await user.click(await within(board).findByRole("button", { name: /race today's daily/i }));
+    expect(await screen.findByRole("button", { name: /start race/i })).toBeVisible();
+  });
+
+  it("hides the Race CTA once the viewer has a completed placement, and never shows it on Yesterday", async () => {
+    const todayChallenge = dailyChallenge("challenge-0001", {
+      dailyDate: "2026-07-17",
+      start: "Apple",
+      target: "Fruit",
+    });
+    const yesterdayChallenge = dailyChallenge("challenge-0002", {
+      dailyDate: "2026-07-16",
+      start: "Mars",
+      target: "Water",
+      label: "Yesterday's Daily",
+    });
+    const fetchImpl = createFetchMock({
+      challenges: [todayChallenge, yesterdayChallenge],
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: [{ accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 20_000, clickCount: 3 }],
+          dnfs: [],
+        },
+        "challenge-0002": { placements: [], dnfs: [] },
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = screen.getByRole("region", { name: "Boards" });
+    await within(board).findByText("Vijay");
+    expect(within(board).queryByRole("button", { name: /race today's daily/i })).toBeNull();
+
+    await user.click(within(board).getByRole("tab", { name: "Yesterday" }));
+    await waitFor(() => expect(within(board).queryByText("Vijay")).toBeNull());
+    expect(within(board).queryByRole("button", { name: /race today's daily/i })).toBeNull();
+  });
+
+  it("switches to Yesterday and shows that daily's own board, never mixing the two", async () => {
+    const todayChallenge = dailyChallenge("challenge-0001", {
+      dailyDate: "2026-07-17",
+      start: "Apple",
+      target: "Fruit",
+    });
+    const yesterdayChallenge = dailyChallenge("challenge-0002", {
+      dailyDate: "2026-07-16",
+      start: "Mars",
+      target: "Water",
+      label: "Yesterday's Daily",
+    });
+    const fetchImpl = createFetchMock({
+      challenges: [todayChallenge, yesterdayChallenge],
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: [{ accountId: "acc-today", displayName: "Today Runner", placement: 1, elapsedMs: 10_000, clickCount: 2 }],
+          dnfs: [],
+        },
+        "challenge-0002": {
+          placements: [{ accountId: "acc-yesterday", displayName: "Yesterday Runner", placement: 1, elapsedMs: 15_000, clickCount: 3 }],
+          dnfs: [],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = screen.getByRole("region", { name: "Boards" });
+    expect(await within(board).findByText("Today Runner")).toBeVisible();
+    expect(within(board).queryByText("Yesterday Runner")).toBeNull();
+
+    await user.click(within(board).getByRole("tab", { name: "Yesterday" }));
+    expect(within(board).queryByText("Today Runner")).toBeNull();
+    expect(await within(board).findByText("Yesterday Runner")).toBeVisible();
+  });
+
+  it("shows a graceful empty state when yesterday's daily is missing from the catalog", async () => {
+    const fetchImpl = createFetchMock({ challenges: [twoChallenges()[0]] });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(within(board).getByRole("tab", { name: "Yesterday" }));
+    expect(within(board).getByText(/yesterday's daily isn't available/i)).toBeVisible();
+  });
+});
+
 function dailyChallenge(
   id: string,
   overrides: {
@@ -3358,6 +3571,11 @@ function createFetchMock(options?: {
   // Takes precedence over the single flat `leaderboardRows` above for any
   // challenge id it covers.
   leaderboardRowsByChallenge?: Record<string, ReturnType<typeof leaderboardRow>[]>;
+  // Boards' daily-view board (GET .../board), keyed by challenge id. Falls
+  // back to deriving placements/DNFs from leaderboardRowsByChallenge /
+  // leaderboardRows above (splitting completed vs. abandoned rows) so tests
+  // that already set those up don't need parallel board-only fixtures too.
+  boardByChallenge?: Record<string, { placements?: unknown[]; dnfs?: unknown[] }>;
   runOldPath?: ServerPathStep[];
   accountAttempts?: number;
   accountCompleted?: number;
@@ -3634,6 +3852,40 @@ function createFetchMock(options?: {
       return jsonResponse({ path: [{ stepNumber: 1, sourceTitle: "Apple", clickedAnchorText: "fruit", destinationTitle: "Fruit", destinationPageId: 10843, elapsedSinceStartMs: 1500, createdAt: "2026-07-14T01:00:01.500Z" }] });
     }
 
+    if (url.startsWith("/api/v2/challenges/") && url.endsWith("/board")) {
+      const challengeIdMatch = url.match(/\/api\/v2\/challenges\/([^/]+)\/board$/);
+      const challengeId = challengeIdMatch?.[1] ?? "challenge-0001";
+      const explicit = options?.boardByChallenge?.[challengeId];
+      if (explicit) {
+        return jsonResponse({
+          challengeId,
+          placements: explicit.placements ?? [],
+          dnfs: explicit.dnfs ?? [],
+        });
+      }
+      const sourceRows = options?.leaderboardRowsByChallenge?.[challengeId] ??
+        options?.leaderboardRows ??
+        (completed && challengeId === "challenge-0001" ? [leaderboardRow({ accountId: "acc-guest" })] : []);
+      const placements = sourceRows
+        .filter((row) => row.status !== "abandoned")
+        .map((row, index) => ({
+          accountId: row.accountId,
+          displayName: row.displayName ?? null,
+          placement: index + 1,
+          elapsedMs: row.elapsedMs,
+          clickCount: row.clickCount,
+        }));
+      const dnfs = sourceRows
+        .filter((row) => row.status === "abandoned")
+        .map((row) => ({
+          accountId: row.accountId,
+          displayName: row.displayName ?? null,
+          clickCount: row.clickCount,
+          elapsedMs: row.elapsedMs,
+        }));
+      return jsonResponse({ challengeId, placements, dnfs });
+    }
+
     if (url.startsWith("/api/v2/challenges/") && url.endsWith("/leaderboard")) {
       const perChallengeMatch = Object.entries(options?.leaderboardRowsByChallenge ?? {})
         .find(([challengeId]) => url.includes(challengeId));
@@ -3728,6 +3980,10 @@ function challengeCatalogCalls(fetchImpl: ReturnType<typeof createFetchMock>): n
 
 function leaderboardCalls(fetchImpl: ReturnType<typeof createFetchMock>, challengeId: string): number {
   return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl(`/api/v2/challenges/${challengeId}/leaderboard`)).length;
+}
+
+function boardCalls(fetchImpl: ReturnType<typeof createFetchMock>, challengeId: string): number {
+  return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl(`/api/v2/challenges/${challengeId}/board`)).length;
 }
 
 function startRunCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
