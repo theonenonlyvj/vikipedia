@@ -728,6 +728,8 @@ describe("VWiki Race API client", () => {
       topStarts: [],
       topTargets: [],
       mostVisited: [],
+      dailyStreak: 0,
+      trend30: { avgPlacement: null, playedCount: 0, ranked: false },
     };
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const requestUrl = String(input);
@@ -824,6 +826,49 @@ describe("VWiki Race API client", () => {
     });
   });
 
+  it("rejects account stats missing the Increment 4 streak/trend30 fields", async () => {
+    const { dailyStreak: _streak, trend30: _trend30, ...withoutTrend } = accountStats(0);
+    const client = createVWikiRaceApiClient(
+      vi.fn(async () => Response.json({ stats: withoutTrend })),
+      { apiOrigin },
+    );
+    await expect(client.getAccountStats("jwt")).rejects.toMatchObject({
+      code: "invalid_response",
+      status: 502,
+    });
+  });
+
+  it("fetches and validates Boards' rolling-trend response", async () => {
+    const trends = {
+      window: "7" as const,
+      guard: 3,
+      ranked: [
+        { accountId: "acc-1", displayName: "Vijay", avgPlacement: 1.3, playedCount: 3 },
+      ],
+      unranked: [
+        { accountId: "acc-2", displayName: "Casey", playedCount: 1 },
+      ],
+    };
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe(`${apiOrigin}/api/v2/boards/trends?window=7`);
+      return Response.json(trends);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await expect(client.getBoardsTrends("7")).resolves.toEqual(trends);
+  });
+
+  it("rejects a malformed Boards trend response", async () => {
+    const client = createVWikiRaceApiClient(
+      vi.fn(async () => Response.json({ window: "7", guard: 3, ranked: [{}], unranked: [] })),
+      { apiOrigin },
+    );
+    await expect(client.getBoardsTrends("7")).rejects.toMatchObject({
+      code: "invalid_response",
+      status: 502,
+    });
+  });
+
   it("preserves Retry-After for quota responses", async () => {
     const fetchImpl = vi.fn(async () => new Response(
       JSON.stringify({
@@ -863,6 +908,8 @@ function accountStats(attempts: number) {
     topStarts: [],
     topTargets: [],
     mostVisited: [],
+    dailyStreak: 0,
+    trend30: { avgPlacement: null, playedCount: 0, ranked: false },
   };
 }
 

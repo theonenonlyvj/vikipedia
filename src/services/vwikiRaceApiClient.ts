@@ -1,6 +1,8 @@
 import type {
   AbandonRunV2Response,
   AccountStatsResponse,
+  BoardsTrendsResponse,
+  BoardsTrendWindow,
   ChallengeBoardResponse,
   ClickV2Response,
   CreateChallengeV2Response,
@@ -70,6 +72,7 @@ export interface VWikiRaceApiClient extends VWikiRaceDailyAdminApiClient {
   ): Promise<AbandonRunV2Response>;
   listLeaderboard(challengeId: string): Promise<RankedLeaderboardRow[]>;
   getChallengeBoard(challengeId: string): Promise<ChallengeBoardResponse>;
+  getBoardsTrends(window: BoardsTrendWindow): Promise<BoardsTrendsResponse>;
   getRunPath(runId: string): Promise<ServerPathStep[]>;
   getAccountStats(token: string): Promise<AccountStats>;
 }
@@ -156,6 +159,9 @@ export function createVWikiRaceApiClient(
     },
     async getChallengeBoard(challengeId) {
       return read(urlPath.board(challengeId), isChallengeBoardResponse);
+    },
+    async getBoardsTrends(window) {
+      return read(urlPath.boardsTrends(window), isBoardsTrendsResponse);
     },
     async getRunPath(runId) {
       const cached = pathCache.get(runId);
@@ -306,6 +312,8 @@ const urlPath = {
     `/api/v2/challenges/${encodeURIComponent(challengeId)}/leaderboard`,
   board: (challengeId: string) =>
     `/api/v2/challenges/${encodeURIComponent(challengeId)}/board`,
+  boardsTrends: (window: BoardsTrendWindow) =>
+    `/api/v2/boards/trends?window=${encodeURIComponent(window)}`,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -369,6 +377,29 @@ function isChallengeBoardDnfRow(value: unknown): value is ChallengeBoardResponse
     (value.displayName === null || hasString(value, "displayName")) &&
     hasNumber(value, "clickCount") &&
     hasNumber(value, "elapsedMs");
+}
+
+function isBoardsTrendsResponse(value: unknown): value is BoardsTrendsResponse {
+  return isRecord(value) &&
+    (value.window === "7" || value.window === "30" || value.window === "lifetime") &&
+    hasNumber(value, "guard") &&
+    Array.isArray(value.ranked) && value.ranked.every(isDailyTrendRankedEntry) &&
+    Array.isArray(value.unranked) && value.unranked.every(isDailyTrendUnrankedEntry);
+}
+
+function isDailyTrendRankedEntry(value: unknown): value is BoardsTrendsResponse["ranked"][number] {
+  return isRecord(value) &&
+    hasString(value, "accountId") &&
+    (value.displayName === null || hasString(value, "displayName")) &&
+    hasNumber(value, "avgPlacement") &&
+    hasNumber(value, "playedCount");
+}
+
+function isDailyTrendUnrankedEntry(value: unknown): value is BoardsTrendsResponse["unranked"][number] {
+  return isRecord(value) &&
+    hasString(value, "accountId") &&
+    (value.displayName === null || hasString(value, "displayName")) &&
+    hasNumber(value, "playedCount");
 }
 
 function isRunPathResponse(value: unknown): value is RunPathResponse {
@@ -587,7 +618,16 @@ function isAccountStats(value: unknown): value is AccountStats {
     hasNumber(totals, "averageElapsedMs") &&
     [value.topStarts, value.topTargets, value.mostVisited].every((rows) =>
       Array.isArray(rows) && rows.every((row) => isRecord(row) && hasString(row, "title") && hasNumber(row, "count")),
-    );
+    ) &&
+    hasNumber(value, "dailyStreak") &&
+    isAccountTrend30(value.trend30);
+}
+
+function isAccountTrend30(value: unknown): value is AccountStats["trend30"] {
+  return isRecord(value) &&
+    (value.avgPlacement === null || hasNumber(value, "avgPlacement")) &&
+    hasNumber(value, "playedCount") &&
+    typeof value.ranked === "boolean";
 }
 
 function isLeaderboardRow(value: unknown): value is RankedLeaderboardRow {
