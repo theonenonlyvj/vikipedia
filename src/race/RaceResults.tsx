@@ -5,7 +5,6 @@ import { compressPathForStrip } from "../domain/pathCompression";
 import { formatTimeAndClicks } from "../domain/formatting";
 import type { GameSession } from "../domain/gameSession";
 import type {
-  AccountStats,
   Article,
   Challenge,
   LeaderboardContext,
@@ -50,7 +49,7 @@ export default function RaceResults({
   todayCentral,
   identityStatus,
   identityDisplayName,
-  accountStats,
+  preRaceCompletions,
   playAgainDisabled,
   playAnotherSuggestion,
   onPlayAgain,
@@ -70,10 +69,14 @@ export default function RaceResults({
   identityStatus: VGamesIdentityStatus | null;
   identityDisplayName: string;
   // Ritual hook (spec Race flow beat 3): "the account's first finish of any
-  // kind - not daily-specific - adds... 'come defend your spot'." Wired from
-  // the same getAccountStats source as the app-shell teaching gate - see
-  // showFirstFinishRitual below.
-  accountStats: AccountStats | null;
+  // kind - not daily-specific - adds... 'come defend your spot'." M2 fix:
+  // this is a snapshot of the account's totals.completed taken at the
+  // moment THIS run started (see App.tsx's preRaceCompletionsRef), not the
+  // live/current accountStats - which can still read stale (pre-refetch) or
+  // already-advanced by the time this screen renders, in either direction.
+  // `null` means no snapshot was taken (e.g. a recovered run resumed after
+  // reload) - treated as "not eligible" rather than guessing.
+  preRaceCompletions: number | null;
   playAgainDisabled: boolean;
   playAnotherSuggestion?: PlayAnotherSuggestion | null;
   onPlayAgain: () => void;
@@ -107,12 +110,10 @@ export default function RaceResults({
   // challenge) gets the generic "on this board"/"Leaderboard" copy instead.
   const isDailyToday = dailyDateForChallenge(challenge) === todayCentral;
   // Ritual hook (spec beat 3): fires only on the account's literal first-ever
-  // completed race. A completion always increments totals.completed by
-  // exactly one server-side before this screen can read fresh stats, so
-  // "now reads exactly 1" *is* "just transitioned 0 -> 1" - no separate
-  // before/after snapshot needed.
+  // completed race - i.e. the pre-race snapshot was exactly 0 completions,
+  // regardless of how long the post-race stats refetch takes (M2 fix).
   const showFirstFinishRitual = outcome.status === "completed" &&
-    accountStats?.totals.completed === 1;
+    preRaceCompletions === 0;
 
   return (
     <section className="race-results">

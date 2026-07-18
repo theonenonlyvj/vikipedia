@@ -136,8 +136,15 @@ export default function AppShell({
   // race, whichever screen it first lands on - Home or Challenge Detail -
   // shows the rules strip"). Fires on both, for as long as the account has
   // zero completed races - migration note (iii): derived from
-  // accountStats.totals.completed, never device-local storage.
-  const showTeachingGate = shouldShowTeachingGate(accountStats) &&
+  // accountStats.totals.completed, never device-local storage. M1 fix:
+  // shouldShowTeachingGate also needs to know whether there's an identified
+  // session at all, so a still-pending or errored stats fetch (both read as
+  // accountStats: null) hides the gate for a returning account instead of
+  // flashing it (or getting stuck showing it) - see teachingGate.ts.
+  const showTeachingGate = shouldShowTeachingGate({
+    hasIdentifiedSession: identitySession !== null,
+    stats: accountStats,
+  }) &&
     (visibleMode === "home" || (visibleMode === "challenges" && challengesView === "detail"));
 
   return (

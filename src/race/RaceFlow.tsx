@@ -1,7 +1,6 @@
 import type { MouseEvent, ReactNode } from "react";
 import type { GameSession } from "../domain/gameSession";
 import type {
-  AccountStats,
   Article,
   Challenge,
   LeaderboardContext,
@@ -59,7 +58,7 @@ export default function RaceFlow({
   todayCentral,
   identityStatus,
   identityDisplayName,
-  accountStats,
+  preRaceCompletions,
   playAnotherSuggestion,
   error,
   authBusy,
@@ -101,7 +100,9 @@ export default function RaceFlow({
   todayCentral: string;
   identityStatus: VGamesIdentityStatus | null;
   identityDisplayName: string;
-  accountStats: AccountStats | null;
+  // See RaceResults' preRaceCompletions doc comment (M2 fix): a snapshot,
+  // not live accountStats.
+  preRaceCompletions: number | null;
   playAnotherSuggestion?: PlayAnotherSuggestion | null;
   error: string | null;
   authBusy: boolean;
@@ -165,7 +166,7 @@ export default function RaceFlow({
         todayCentral={todayCentral}
         identityStatus={identityStatus}
         identityDisplayName={identityDisplayName}
-        accountStats={accountStats}
+        preRaceCompletions={preRaceCompletions}
         playAgainDisabled={authBusy}
         playAnotherSuggestion={playAnotherSuggestion}
         onPlayAgain={onPlayAgain}
@@ -191,7 +192,7 @@ export default function RaceFlow({
         todayCentral={todayCentral}
         identityStatus={identityStatus}
         identityDisplayName={identityDisplayName}
-        accountStats={accountStats}
+        preRaceCompletions={preRaceCompletions}
         playAgainDisabled={authBusy}
         playAnotherSuggestion={playAnotherSuggestion}
         onPlayAgain={onPlayAgain}

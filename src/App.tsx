@@ -194,6 +194,15 @@ export default function App({
   const catalogRefreshQueued = useRef(false);
   const leaderboardRequest = useRef(0);
   const statsRequest = useRef(0);
+  // Ritual hook snapshot (M2 fix - see RaceResults' preRaceCompletions doc
+  // comment): the account's totals.completed captured at the moment a run
+  // actually starts (startChallengeWithSession, below), not read live off
+  // whatever accountStats holds whenever Results later renders - immune to
+  // how long the post-race stats refetch takes, in either direction. Stays
+  // null across a recovered-then-completed run (no fresh start happened
+  // this page load to snapshot) - the ritual simply doesn't fire there
+  // rather than guessing from a live value again.
+  const preRaceCompletionsRef = useRef<number | null>(null);
   const recoveredToken = useRef<string | null>(null);
   const challengeLockRef = useRef(false);
   const startLockRef = useRef(false);
@@ -396,10 +405,23 @@ export default function App({
         // -> Detail for that id. A plain load (no ?challenge=, or one that
         // doesn't match a real challenge) is unaffected - Home keeps
         // showing today's daily exactly as before.
-        if (requestedIdHonored && !initialUrlRouteApplied.current) {
+        //
+        // B1 fix: initialUrlRouteApplied latches on the very FIRST catalog
+        // pass, whether or not that pass honored a requested id - not just
+        // inside the branch that does. A plain load of today's daily
+        // replace-syncs the URL to /?challenge=<daily-id> above; if this
+        // guard only latched when requestedIdHonored was true, that flag
+        // would stay false forever on a plain load, and the very next
+        // focus/visibilitychange-triggered catalog refresh would re-read
+        // that *app-synced* URL, see requestedIdHonored=true this time, and
+        // force-navigate to Challenges -> Detail out from under whatever the
+        // player is doing - including mid-race, under an active takeover.
+        if (!initialUrlRouteApplied.current) {
           initialUrlRouteApplied.current = true;
-          setMode("challenges");
-          setChallengesView("detail");
+          if (requestedIdHonored) {
+            setMode("challenges");
+            setChallengesView("detail");
+          }
         }
         if (nextChallenge) {
           const leaderboardGeneration = ++leaderboardRequest.current;
@@ -729,6 +751,10 @@ export default function App({
       setError("Choose a challenge before starting.");
       return;
     }
+
+    // M2 fix: snapshot pre-race completions HERE, before the run starts -
+    // see preRaceCompletionsRef's doc comment above.
+    preRaceCompletionsRef.current = accountStats?.totals.completed ?? 0;
 
     setError(null);
     setRunNotice(null);
@@ -1138,7 +1164,7 @@ export default function App({
           todayCentral={currentCentralDate}
           identityStatus={identitySession?.status ?? null}
           identityDisplayName={identitySession?.displayName ?? ""}
-          accountStats={accountStats}
+          preRaceCompletions={preRaceCompletionsRef.current}
           error={bannerError}
           authBusy={authBusy}
           endRunIsBlocked={endRunIsBlocked}

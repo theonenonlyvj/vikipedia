@@ -271,6 +271,73 @@ describe("VWiki Race app", () => {
     await waitFor(() => expect(challengeCatalogCalls(fetchImpl)).toBe(2));
   });
 
+  it("keeps a plain load on Home through a focus/visibilitychange catalog refresh (regression: B1 - was force-navigating to Challenges -> Detail)", async () => {
+    // A plain load of today's daily replace-syncs the URL to
+    // /?challenge=<daily-id> (unrelated to this bug, already covered by
+    // "selects and labels today's daily challenge..." above). B1: the
+    // *second* catalog pass (from this focus/visibilitychange refresh) must
+    // not misread that app-synced URL as a genuine share-link request and
+    // force-navigate into Challenges -> Detail.
+    const fetchImpl = createFetchMock({
+      challenges: [dailyChallenge("challenge-daily", { dailyDate: "2026-07-15" })],
+    });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={memoryStorage()}
+        todayUtc={() => "2026-07-15"}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(window.location.search).toBe("?challenge=challenge-daily");
+    expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
+
+    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(() => expect(challengeCatalogCalls(fetchImpl)).toBe(2));
+
+    expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /▶ race/i })).toBeVisible();
+  });
+
+  it("does not silently move mode to Challenges -> Detail during an active race takeover, even after a focus/visibilitychange catalog refresh (regression: B1)", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [dailyChallenge("challenge-daily", { dailyDate: "2026-07-15" })],
+    });
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-15"}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    expect(await screen.findByRole("button", { name: /^end run$/i })).toBeVisible();
+
+    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(() => expect(challengeCatalogCalls(fetchImpl)).toBe(2));
+
+    // Still mid-race takeover, unaffected by the refresh.
+    expect(screen.getByRole("button", { name: /^end run$/i })).toBeVisible();
+
+    // End the run (0 clicks) and return to the shell - if the buggy
+    // refresh above had silently flipped `mode` to "challenges" -> "detail"
+    // underneath the race takeover, it would surface right here: landing on
+    // Challenge Detail instead of back on Home.
+    await user.click(screen.getByRole("button", { name: /^end run$/i }));
+    await user.click(await screen.findByRole("button", { name: /confirm end run/i }));
+
+    expect(await screen.findByRole("button", { name: /try again/i })).toBeVisible();
+    expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
+  });
+
   it("prompts for identity before starting when no session exists", async () => {
     const storage = memoryStorage();
     const fetchImpl = createFetchMock();
@@ -2785,11 +2852,56 @@ describe("Race flow: full-screen takeover", () => {
   });
 
   it("shows the first-finish ritual hook on Results when this is the account's first completed race ever", async () => {
-    // Wired from the same getAccountStats source as the app-shell teaching
-    // gate: totals.completed reading exactly 1 right after this completion
-    // *is* "just transitioned 0 -> 1" (a completion always increments it by
-    // exactly one) - see RaceResults' showFirstFinishRitual.
-    const fetchImpl = createFetchMock({ accountCompleted: 1 });
+    // M2: showFirstFinishRitual is driven by a snapshot of totals.completed
+    // taken at race START (App.tsx's preRaceCompletionsRef), not by
+    // whatever accountStats live-reads whenever Results happens to render -
+    // model the real server sequence explicitly (0 before this race, 1
+    // after) rather than relying on a single static value.
+    const fetchImpl = createFetchMock({ accountCompletedSequence: [0, 1] });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+
+    expect(await screen.findByText(/you reached it/i)).toBeVisible();
+    expect(
+      await screen.findByText(/🔥 day 1 · new daily drops 5:00 am — come defend your spot/i),
+    ).toBeVisible();
+  });
+
+  it("regression: M2 - does not show the ritual hook for a veteran's second finish even if the post-race stats refetch never advances past the stale pre-race reading", async () => {
+    // Pre-race: this account already has 1 completed race (from a prior
+    // session). The stats endpoint keeps reporting "1" after this race too
+    // (a stale/unhelpful refetch, e.g. cache or replica lag) - the old
+    // "accountStats live-read === 1" check would misread that as "just
+    // transitioned 0 -> 1" and wrongly show the Day-1 hook on this account's
+    // SECOND finish. The fix must snapshot the pre-race value (1) and key
+    // off that instead, hiding the hook regardless of what the refetch
+    // (eventually, or never) reports.
+    const fetchImpl = createFetchMock({ accountCompletedSequence: [1, 1] });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+
+    expect(await screen.findByText(/you reached it/i)).toBeVisible();
+    await waitFor(() => expect(accountStatsCalls(fetchImpl)).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText(/come defend your spot/i)).toBeNull();
+  });
+
+  it("regression: M2 - shows the first-finish ritual hook immediately for a true first finish, without waiting on a post-race stats refetch that never resolves", async () => {
+    // Pre-race: a genuine brand-new account (0 completions). The post-race
+    // stats refetch (triggered by bumpStatsRefresh) is modeled as never
+    // resolving at all - if showFirstFinishRitual depended on that live
+    // refetch (the old bug), the hook would never appear. The fix must show
+    // it immediately from the pre-race snapshot (0), independent of whether
+    // the refetch ever completes.
+    const stuckRefetch = new Promise<Response>(() => {});
+    const fetchImpl = createFetchMock({ accountCompleted: 0, delayedStatsAfterFirst: stuckRefetch });
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -3249,6 +3361,16 @@ function createFetchMock(options?: {
   runOldPath?: ServerPathStep[];
   accountAttempts?: number;
   accountCompleted?: number;
+  // Models totals.completed changing across successive /accounts/me/stats
+  // reads (e.g. pre-race fetch vs. post-race refresh) - index N-1 for the
+  // Nth call, holding the last entry once exhausted. Takes precedence over
+  // the static accountCompleted above when provided (M2: RaceResults'
+  // showFirstFinishRitual regression coverage).
+  accountCompletedSequence?: number[];
+  // Every call to /accounts/me/stats after the first returns this
+  // never-resolving promise instead - models a post-race stats refetch that
+  // never comes back, to prove the ritual hook no longer depends on it.
+  delayedStatsAfterFirst?: Promise<Response>;
   leaderboardContext?: { isPersonalBest: boolean; rank: number | null };
   statsUnauthorizedAfterFirst?: boolean;
   creationOutcome?: CreateChallengeOutcome;
@@ -3416,9 +3538,16 @@ function createFetchMock(options?: {
       if (options?.statsUnauthorizedAfterFirst && statsReads > 1) {
         return jsonError("unauthorized", "Session expired.", 401);
       }
+      if (options?.delayedStatsAfterFirst && statsReads > 1) {
+        return options.delayedStatsAfterFirst;
+      }
+      const sequence = options?.accountCompletedSequence;
+      const completed = sequence
+        ? sequence[Math.min(statsReads, sequence.length) - 1]
+        : options?.accountCompleted ?? 0;
       return jsonResponse({
         stats: {
-          totals: { attempts: options?.accountAttempts ?? 0, completed: options?.accountCompleted ?? 0, abandoned: 0, timedCompleted: 0, totalClicks: 0, bestClicks: null, bestElapsedMs: null, averageClicks: 0, averageElapsedMs: 0 },
+          totals: { attempts: options?.accountAttempts ?? 0, completed, abandoned: 0, timedCompleted: 0, totalClicks: 0, bestClicks: null, bestElapsedMs: null, averageClicks: 0, averageElapsedMs: 0 },
           topStarts: [], topTargets: [], mostVisited: [],
         },
       });

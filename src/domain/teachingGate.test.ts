@@ -22,16 +22,33 @@ function stats(completed: number): AccountStats {
 }
 
 describe("shouldShowTeachingGate", () => {
-  it("shows the gate when stats haven't loaded yet (null - includes brand-new guests with no account)", () => {
-    expect(shouldShowTeachingGate(null)).toBe(true);
+  it("shows the gate for a guest with no identified session at all (nothing to fetch)", () => {
+    expect(shouldShowTeachingGate({ hasIdentifiedSession: false, stats: null })).toBe(true);
   });
 
-  it("shows the gate when the account has zero completed races", () => {
-    expect(shouldShowTeachingGate(stats(0))).toBe(true);
+  it("still shows the gate for a guest even if a stray stats value were present", () => {
+    // Shouldn't happen in practice (no session -> nothing to fetch), but
+    // "no identified session" alone must be sufficient to show, regardless
+    // of stats.
+    expect(shouldShowTeachingGate({ hasIdentifiedSession: false, stats: stats(5) })).toBe(true);
   });
 
-  it("hides the gate once the account has at least one completed race", () => {
-    expect(shouldShowTeachingGate(stats(1))).toBe(false);
-    expect(shouldShowTeachingGate(stats(5))).toBe(false);
+  it("M1: hides the gate for an identified session whose stats are still pending (null) - no veteran flash", () => {
+    expect(shouldShowTeachingGate({ hasIdentifiedSession: true, stats: null })).toBe(false);
+  });
+
+  it("M1: hides the gate for an identified session whose stats fetch errored (null) - not stuck showing forever", () => {
+    // Errors and in-flight fetches are indistinguishable at this layer (both
+    // surface as stats: null) - both must hide, not just one of them.
+    expect(shouldShowTeachingGate({ hasIdentifiedSession: true, stats: null })).toBe(false);
+  });
+
+  it("shows the gate once an identified session's stats have loaded and completed is zero", () => {
+    expect(shouldShowTeachingGate({ hasIdentifiedSession: true, stats: stats(0) })).toBe(true);
+  });
+
+  it("hides the gate once an identified session's loaded stats show at least one completed race", () => {
+    expect(shouldShowTeachingGate({ hasIdentifiedSession: true, stats: stats(1) })).toBe(false);
+    expect(shouldShowTeachingGate({ hasIdentifiedSession: true, stats: stats(5) })).toBe(false);
   });
 });

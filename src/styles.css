@@ -984,46 +984,12 @@ h1 {
   font-weight: 400;
 }
 
-.how-to-play {
-  grid-column: 1 / -1;
-  margin: 0;
-  font-family: var(--viota-ui-font);
-  font-size: 0.82rem;
-}
-
-.target-preview-panel {
-  display: grid;
-  min-height: 260px;
-  overflow: hidden;
-  border: 1px solid #a2a9b1;
-  background: #f8f9fa;
-  color: #202122;
-  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
-}
-
-.target-preview-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  padding: clamp(20px, 4vw, 42px);
-}
-
 .target-preview-kicker {
   color: #b32417;
   font-family: var(--viota-ui-font);
   font-size: 0.72rem;
   font-weight: 900;
   text-transform: uppercase;
-}
-
-.target-preview-panel h2 {
-  margin-top: 8px;
-  color: #101418;
-  font-family: var(--viota-display-font);
-  font-size: 3.6rem;
-  font-weight: 400;
-  line-height: 0.96;
-  overflow-wrap: anywhere;
 }
 
 .target-preview-blurb {
@@ -2220,18 +2186,6 @@ h1 {
 
   .challenge-share input {
     min-height: 44px;
-  }
-
-  .target-preview-copy {
-    padding: 20px;
-  }
-
-  .target-preview-panel {
-    min-height: 210px;
-  }
-
-  .target-preview-panel h2 {
-    font-size: 2.55rem;
   }
 
   .pre-race-copy {
