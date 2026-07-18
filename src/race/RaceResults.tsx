@@ -1,9 +1,11 @@
 import { useCallback, useRef, type FocusEvent, type MouseEvent, type PointerEvent } from "react";
 import BoardSnippet from "../components/BoardSnippet";
+import PlayAnotherCard from "../components/PlayAnotherCard";
 import { dailyDateForChallenge } from "../domain/challengeSelection";
 import { compressPathForStrip } from "../domain/pathCompression";
 import { formatTimeAndClicks } from "../domain/formatting";
 import type { GameSession } from "../domain/gameSession";
+import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import type {
   Article,
   Challenge,
@@ -37,11 +39,6 @@ export type RaceResultOutcome =
       runId: string | null;
     };
 
-export interface PlayAnotherSuggestion {
-  title: string;
-  onSelect: () => void;
-}
-
 export default function RaceResults({
   article,
   outcome,
@@ -52,6 +49,10 @@ export default function RaceResults({
   preRaceCompletions,
   playAgainDisabled,
   playAnotherSuggestion,
+  randomChallengeBusy,
+  randomChallengeError,
+  onCreateRandomChallenge,
+  onOpenChallenge,
   onPlayAgain,
   onShowLeaderboard,
   onShowChallenges,
@@ -78,7 +79,13 @@ export default function RaceResults({
   // reload) - treated as "not eligible" rather than guessing.
   preRaceCompletions: number | null;
   playAgainDisabled: boolean;
-  playAnotherSuggestion?: PlayAnotherSuggestion | null;
+  // Increment 5: centrally fetched/owned in App.tsx (see Home's identical
+  // prop) so Results and Home never disagree.
+  playAnotherSuggestion: PlayAnotherSuggestionState;
+  randomChallengeBusy: boolean;
+  randomChallengeError: string | null;
+  onCreateRandomChallenge: () => void;
+  onOpenChallenge: (challengeId: string) => void;
   onPlayAgain: () => void;
   onShowLeaderboard: () => void;
   onShowChallenges: () => void;
@@ -153,9 +160,13 @@ export default function RaceResults({
           highlightRunId={outcome.runId}
         />
 
-        <PlayAnotherSlot
+        <PlayAnotherCard
           onBrowseChallenges={onShowChallenges}
-          suggestion={playAnotherSuggestion ?? null}
+          onCreateRandomChallenge={onCreateRandomChallenge}
+          onOpenChallenge={onOpenChallenge}
+          randomChallengeBusy={randomChallengeBusy}
+          randomChallengeError={randomChallengeError}
+          suggestion={playAnotherSuggestion}
         />
 
         {outcome.status === "completed" ? (
@@ -246,31 +257,6 @@ function PathRecap({ session }: { session: GameSession }) {
         ))}
       </ol>
     </details>
-  );
-}
-
-function PlayAnotherSlot({
-  onBrowseChallenges,
-  suggestion,
-}: {
-  onBrowseChallenges: () => void;
-  // Named seam for Increment 5's smart suggestion endpoint - when populated,
-  // the caller supplies a specific challenge to invite the player into.
-  // v1 leaves this null and shows the static invite only.
-  suggestion: PlayAnotherSuggestion | null;
-}) {
-  return (
-    <section aria-label="Play another challenge" className="play-another-card">
-      <h3>Got a few more minutes?</h3>
-      {suggestion ? (
-        <button type="button" onClick={suggestion.onSelect}>
-          {suggestion.title}
-        </button>
-      ) : null}
-      <button className="link-button" type="button" onClick={onBrowseChallenges}>
-        Browse all challenges ›
-      </button>
-    </section>
   );
 }
 

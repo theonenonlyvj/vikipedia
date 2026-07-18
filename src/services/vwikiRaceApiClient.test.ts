@@ -417,6 +417,26 @@ describe("VWiki Race API client", () => {
     await expect(client.listChallenges()).resolves.toEqual(challenges);
   });
 
+  it("accepts a manual, randomly-sourced challenge (Increment 5: POST /api/v2/challenges/random)", async () => {
+    // d1TrackingRepository's mapChallengeRow: a random-challenge creation
+    // has no dailyFeature/dailyDate but DOES carry `source: "wikipedia_random"`
+    // - distinct from both a typed-in manual challenge (source: "curated")
+    // and an actual Daily (origin: "daily", a real calendar date).
+    const challenge = {
+      ...validChallenge(),
+      id: "challenge-random-1",
+      origin: "manual",
+      source: "wikipedia_random",
+      dailyDate: null,
+    };
+    const client = createVWikiRaceApiClient(
+      vi.fn(async () => Response.json({ challenges: [challenge] })),
+      { apiOrigin },
+    );
+
+    await expect(client.listChallenges()).resolves.toEqual([challenge]);
+  });
+
   it.each([
     ["Daily feature mode", {
       mode: "solo",
@@ -433,8 +453,8 @@ describe("VWiki Race API client", () => {
     ["daily date omission", { origin: "daily", source: "wikipedia_random" }],
     ["daily date format", { origin: "daily", source: "wikipedia_random", dailyDate: "2026-7-15" }],
     ["daily calendar date", { origin: "daily", source: "wikipedia_random", dailyDate: "2026-02-30" }],
-    ["manual source", { origin: "manual", source: "wikipedia_random" }],
-    ["manual daily date", { origin: "manual", source: "curated", dailyDate: "2026-07-15" }],
+    ["manual daily date (curated)", { origin: "manual", source: "curated", dailyDate: "2026-07-15" }],
+    ["manual daily date (random)", { origin: "manual", source: "wikipedia_random", dailyDate: "2026-07-15" }],
     ["legacy source", { source: "wikipedia_random" }],
     ["legacy daily date", { source: "curated", dailyDate: "2026-07-15" }],
     ["unknown origin", { origin: "scheduled", source: "wikipedia_random", dailyDate: "2026-07-15" }],

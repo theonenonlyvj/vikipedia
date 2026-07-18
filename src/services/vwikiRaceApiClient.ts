@@ -579,7 +579,13 @@ function hasCoherentChallengeProvenance(value: Record<string, unknown>): boolean
     return value.source === "curated" && hasNoDailyDate;
   }
   if (value.origin === "manual") {
-    return value.source === "curated" && hasNoDailyDate;
+    // Increment 5: `POST /api/v2/challenges/random` produces exactly this
+    // shape (`origin: "manual"`, `source: "wikipedia_random"`, no daily
+    // date/feature - see d1TrackingRepository's mapChallengeRow) - a
+    // non-daily challenge whose article pair was randomly sourced rather
+    // than typed in by a player. Distinct from the `origin: "daily"` branch
+    // below, which additionally requires a real calendar date.
+    return (value.source === "curated" || value.source === "wikipedia_random") && hasNoDailyDate;
   }
   if (value.origin === "daily") {
     return value.source === "wikipedia_random" && isStrictCalendarDate(value.dailyDate);

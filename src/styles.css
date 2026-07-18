@@ -1652,6 +1652,99 @@ h1 {
   font-weight: 750;
 }
 
+/* Browse full card spec (Increment 5): title + state chip share one row and
+   are both always-visible (council: "keep title + state chip always-visible
+   ... meta line may truncate/omit player count first" at 320-375px) - the
+   `min-width: 0` + `flex: 1 1 auto` on the title lets it wrap/shrink while
+   the chip (flex-shrink: 0) never gets squeezed off. The meta line is a
+   separate row below, allowed to single-line-ellipsis under width pressure
+   instead. */
+.browse-card-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.browse-card-title-row strong {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.browse-card-meta {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  background: var(--ink);
+  color: #dffbfb;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  padding: 4px 6px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.state-chip-completed {
+  border-color: rgba(13, 235, 215, 0.6);
+  background: rgba(13, 235, 215, 0.12);
+  color: var(--cyan);
+}
+
+.state-chip-dnf {
+  border-color: var(--line-strong);
+  background: var(--ink-soft);
+  color: var(--muted);
+}
+
+.state-chip-new {
+  border-color: rgba(13, 235, 215, 0.35);
+  color: #dffbfb;
+}
+
+/*
+ * dvh/svh input rule (Increment 5, council amendment - see the doc comment
+ * in Browse.tsx above the element carrying this class): Browse's search
+ * field is ordinary top-anchored page content. It is NOT sized off `dvh`
+ * ("dynamic" viewport height, which shrinks the instant an on-screen
+ * keyboard starts dismissing - the exact mechanism the identity-dialog fix
+ * below diagnoses); `position: sticky` here is anchored to the page's own
+ * scroll container, not a viewport-height box, so there is no dvh/svh
+ * geometry to get wrong today - this rule (and its `svh`, never `dvh`) is
+ * the standing guard against a future change introducing one.
+ */
+.browse-search-svh-safe {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--ink);
+  padding-bottom: 8px;
+}
+
+.browse-search-svh-safe input {
+  width: 100%;
+}
+
+.browse-random-challenge {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
 .leaderboard li {
   display: grid;
   grid-template-columns: 54px minmax(110px, 1fr) 80px 86px minmax(72px, auto);

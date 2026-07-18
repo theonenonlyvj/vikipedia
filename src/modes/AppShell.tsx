@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import AdminDailies from "../components/AdminDailies";
 import TeachingGate from "../components/TeachingGate";
 import { selectDefaultChallenge } from "../domain/challengeSelection";
+import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import { shouldShowTeachingGate } from "../domain/teachingGate";
 import type { CreateChallengeInput } from "./challenges/Browse";
 import type { AccountStats, Challenge, RankedLeaderboardRow, ServerPathStep } from "../domain/types";
@@ -57,13 +58,17 @@ export default function AppShell({
   onClaimIdentity,
   onCloseChallengeDetail,
   onCreateChallenge,
+  onCreateRandomChallenge,
   onDisclosePath,
   onExitAdmin,
   onGoToBoardsFor,
   onOpenChallengeDetail,
   onRaceChallenge,
   onSelectMode,
+  playAnotherSuggestion,
   previewWikipediaGateway,
+  randomChallengeBusy,
+  randomChallengeError,
   runPaths,
   selectedChallenge,
   selectionLocked,
@@ -86,13 +91,19 @@ export default function AppShell({
   onClaimIdentity: () => void;
   onCloseChallengeDetail: () => void;
   onCreateChallenge: (input: CreateChallengeInput) => Promise<void>;
+  onCreateRandomChallenge: () => void;
   onDisclosePath: (runId: string) => void;
   onExitAdmin: () => void;
   onGoToBoardsFor: () => void;
   onOpenChallengeDetail: (challengeId: string) => void;
   onRaceChallenge: (challengeId: string) => void;
   onSelectMode: (mode: ModeKey) => void;
+  // Increment 5: centrally fetched/owned in App.tsx - see Home.tsx's doc
+  // comment on the identically-named prop.
+  playAnotherSuggestion: PlayAnotherSuggestionState;
   previewWikipediaGateway: WikipediaGateway;
+  randomChallengeBusy: boolean;
+  randomChallengeError: string | null;
   runPaths: Record<string, ServerPathStep[]>;
   selectedChallenge: Challenge | null;
   selectionLocked: boolean;
@@ -173,10 +184,15 @@ export default function AppShell({
             challenges={challenges}
             heroChallenge={todaysHeroChallenge}
             identityAccountId={identitySession?.accountId ?? null}
+            onCreateRandomChallenge={onCreateRandomChallenge}
             onGoToBoards={onGoToBoardsFor}
+            onOpenChallenge={onOpenChallengeDetail}
             onRaceChallenge={onRaceChallenge}
             onShowChallenges={() => onSelectMode("challenges")}
+            playAnotherSuggestion={playAnotherSuggestion}
             raceBusy={authBusy}
+            randomChallengeBusy={randomChallengeBusy}
+            randomChallengeError={randomChallengeError}
             selectedChallengeId={selectedChallenge?.id ?? null}
             sessionDnfChallengeIds={sessionDnfChallengeIds}
             sharedLeaderboard={leaderboard}
@@ -212,10 +228,15 @@ export default function AppShell({
             />
           ) : (
             <ChallengeBrowser
+              apiClient={apiClient}
               canNominateForDaily={canNominateForDaily}
               challenges={challenges}
+              identityToken={identitySession?.token ?? null}
               onCreateChallenge={onCreateChallenge}
+              onCreateRandomChallenge={onCreateRandomChallenge}
               onOpenChallenge={onOpenChallengeDetail}
+              randomChallengeBusy={randomChallengeBusy}
+              randomChallengeError={randomChallengeError}
               selectedChallengeId={selectedChallenge?.id ?? null}
               selectionLocked={selectionLocked}
               todayCentral={todayCentral}

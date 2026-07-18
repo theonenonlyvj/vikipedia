@@ -3411,6 +3411,170 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
   });
 });
 
+describe("Increment 5: Play-another suggestion + create-random (Browse full card spec)", () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  it("shows the specific Play-another suggestion with player count on Home's post-play card, opening Detail (Browse-card-consistent route) on click", async () => {
+    const [daily, other] = twoChallenges();
+    const fetchImpl = createFetchMock({
+      challenges: [daily, other],
+      leaderboardRows: [
+        leaderboardRow({ rank: 1, runId: "run-1", accountId: "acc-1", displayName: "Vijay", elapsedMs: 42_000, clickCount: 6 }),
+      ],
+      playAnotherSuggestion: other,
+      challengesSummary: [{ challengeId: "challenge-0002", playerCount: 4, best: null }],
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const card = await screen.findByRole("region", { name: /play another challenge/i });
+    const suggestionButton = await within(card).findByRole(
+      "button",
+      { name: /🏁 mars → water · 4 players/i },
+    );
+    await user.click(suggestionButton);
+
+    const detail = await screen.findByRole("region", { name: /challenge detail/i });
+    expect(within(detail).getByText(/water/i)).toBeVisible();
+    expect(window.location.search).toBe("?challenge=challenge-0002");
+  });
+
+  it("swaps in 'Create a random new one' once the account has started everything, and lands on the new challenge's Detail on success", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      leaderboardRows: [
+        leaderboardRow({ rank: 1, runId: "run-1", accountId: "acc-1", displayName: "Vijay", elapsedMs: 42_000, clickCount: 6 }),
+      ],
+      playAnotherSuggestion: null,
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const card = await screen.findByRole("region", { name: /play another challenge/i });
+    await user.click(await within(card).findByRole("button", { name: /create a random new one/i }));
+
+    const detail = await screen.findByRole("region", { name: /challenge detail/i });
+    expect(within(detail).getByText(/ice/i)).toBeVisible();
+    expect(window.location.search).toBe("?challenge=challenge-random-1");
+    expect(randomChallengeCalls(fetchImpl)).toBe(1);
+  });
+
+  it("shows a friendly 429 error respecting Retry-After from the create-random action", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      leaderboardRows: [
+        leaderboardRow({ rank: 1, runId: "run-1", accountId: "acc-1", displayName: "Vijay", elapsedMs: 42_000, clickCount: 6 }),
+      ],
+      playAnotherSuggestion: null,
+      randomChallengeError: {
+        status: 429,
+        code: "random_challenge_quota_exceeded",
+        message: "You've reached the hourly limit for random challenges. Try again later.",
+        retryAfterSeconds: 3600,
+      },
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const card = await screen.findByRole("region", { name: /play another challenge/i });
+    await user.click(await within(card).findByRole("button", { name: /create a random new one/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "You've reached the hourly limit for random challenges. Try again later. (retry in 60 minutes)",
+    );
+    expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
+  });
+
+  it("shows the mandated 503 copy from the create-random action", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      leaderboardRows: [
+        leaderboardRow({ rank: 1, runId: "run-1", accountId: "acc-1", displayName: "Vijay", elapsedMs: 42_000, clickCount: 6 }),
+      ],
+      playAnotherSuggestion: null,
+      randomChallengeError: {
+        status: 503,
+        code: "random_challenge_unavailable",
+        message: "Could not find a random challenge right now. Try again.",
+        retryAfterSeconds: 5,
+      },
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const card = await screen.findByRole("region", { name: /play another challenge/i });
+    await user.click(await within(card).findByRole("button", { name: /create a random new one/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Wikipedia wasn't cooperating — try again.",
+    );
+  });
+
+  it("disables the button and fires only one request while a random-challenge creation is in flight (no double-fire)", async () => {
+    const deferredResponse = createDeferredResponse({
+      challenge: {
+        id: "challenge-random-1",
+        label: "Random Find",
+        mode: "solo",
+        origin: "manual",
+        start: { title: "Comet" },
+        target: { title: "Ice" },
+        ruleset: "ranked_classic",
+        source: "wikipedia_random",
+      },
+      disposition: "created",
+      nomination: "not_requested",
+    });
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      leaderboardRows: [
+        leaderboardRow({ rank: 1, runId: "run-1", accountId: "acc-1", displayName: "Vijay", elapsedMs: 42_000, clickCount: 6 }),
+      ],
+      playAnotherSuggestion: null,
+      delayedRandomChallenge: deferredResponse.promise,
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const card = await screen.findByRole("region", { name: /play another challenge/i });
+    const button = await within(card).findByRole("button", { name: /create a random new one/i });
+    await user.click(button);
+
+    expect(await screen.findByRole("button", { name: /rolling the dice on wikipedia/i })).toBeDisabled();
+    // A second click while disabled/in-flight must not fire a second request
+    // - the shared App-level lock (spec: "a per-account concurrency cap of 1
+    // in-flight request").
+    await user.click(screen.getByRole("button", { name: /rolling the dice on wikipedia/i }));
+    expect(randomChallengeCalls(fetchImpl)).toBe(1);
+
+    deferredResponse.resolve();
+    const detail = await screen.findByRole("region", { name: /challenge detail/i });
+    expect(within(detail).getByText(/ice/i)).toBeVisible();
+    expect(randomChallengeCalls(fetchImpl)).toBe(1);
+  });
+
+  it("prompts for identity before creating a random challenge from Browse for an anonymous visitor, then resumes after guest signup", async () => {
+    const fetchImpl = createFetchMock({ challenges: [twoChallenges()[0]] });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /create a random new one/i }));
+
+    const identityDialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    await user.click(within(identityDialog).getByRole("button", { name: /^guest$/i }));
+    await user.type(screen.getByLabelText(/display name/i), "Vijay");
+    await user.click(screen.getByRole("button", { name: /continue as guest/i }));
+
+    const detail = await screen.findByRole("region", { name: /challenge detail/i });
+    expect(within(detail).getByText(/ice/i)).toBeVisible();
+    expect(randomChallengeCalls(fetchImpl)).toBe(1);
+  });
+});
+
 describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
   it("renders the Today/Yesterday/7d/30d/Lifetime segments, defaulting to Today", async () => {
     const user = userEvent.setup();
@@ -3880,6 +4044,18 @@ function createFetchMock(options?: {
   // exercising the DNF Results variant/DNF-aware confirm copy.
   clickStaysActive?: boolean;
   dailyAdminState?: { nominations: DailyNomination[]; queueEntries: DailyQueueEntry[] };
+  // Increment 5 (Browse full card spec + Play-another/create-random).
+  challengesSummary?: Array<{ challengeId: string; playerCount: number; best: { elapsedMs: number; clickCount: number } | null }>;
+  challengeOutcomes?: Array<{ challengeId: string; outcome: "completed" | "dnf"; best: { elapsedMs: number; clickCount: number } | null }>;
+  playAnotherSuggestion?: Challenge | null;
+  // `error` short-circuits a successful random-challenge creation with the
+  // given status/code/message/Retry-After - models the server's documented
+  // 429 in-progress/quota and 503 candidate-unavailable responses.
+  randomChallengeError?: { status: number; code: string; message: string; retryAfterSeconds?: number };
+  randomChallengeChallenge?: Challenge;
+  // Delays the random-challenge response indefinitely (a caller resolves it
+  // manually) - for no-double-fire assertions.
+  delayedRandomChallenge?: Promise<Response>;
 }) {
   let completed = false;
   let unauthorizedStartRemaining = options?.startUnauthorizedOnce ? 1 : 0;
@@ -4070,6 +4246,56 @@ function createFetchMock(options?: {
 
     if (url === "/api/v2/accounts/me/capabilities") {
       return jsonResponse({ canManageDailies: options?.canManageDailies ?? false });
+    }
+
+    if (url === "/api/v2/challenges/summary") {
+      return jsonResponse({ challenges: options?.challengesSummary ?? [] });
+    }
+
+    if (url === "/api/v2/account/challenge-outcomes") {
+      return jsonResponse({ outcomes: options?.challengeOutcomes ?? [] });
+    }
+
+    if (url === "/api/v2/challenges/suggestion") {
+      return jsonResponse({ challenge: options?.playAnotherSuggestion ?? null });
+    }
+
+    if (url === "/api/v2/challenges/random" && method === "POST") {
+      expect(readJsonBody(init)).toEqual({});
+      expect(init?.headers).toMatchObject({
+        Authorization: expect.stringMatching(/^Bearer jwt-/),
+        "Idempotency-Key": expect.any(String),
+      });
+      if (options?.delayedRandomChallenge) {
+        return options.delayedRandomChallenge;
+      }
+      if (options?.randomChallengeError) {
+        const { status, code, message, retryAfterSeconds } = options.randomChallengeError;
+        return new Response(
+          JSON.stringify({ error: { code, message } }),
+          {
+            status,
+            headers: {
+              "Content-Type": "application/json",
+              ...(retryAfterSeconds !== undefined ? { "Retry-After": String(retryAfterSeconds) } : {}),
+            },
+          },
+        );
+      }
+      const challenge: Challenge = options?.randomChallengeChallenge ?? {
+        id: "challenge-random-1",
+        label: "Random Find",
+        sortOrder: 3,
+        isActive: true,
+        mode: "solo",
+        origin: "manual",
+        start: { title: "Comet" },
+        target: { title: "Ice" },
+        ruleset: "ranked_classic",
+        source: "wikipedia_random",
+      };
+      challenges = [...challenges, challenge];
+      return jsonResponse({ challenge, disposition: "created", nomination: "not_requested" });
     }
 
     if (url === "/api/v2/admin/dailies") {
@@ -4308,6 +4534,12 @@ function clickRequestBodies(fetchImpl: ReturnType<typeof createFetchMock>): Arra
   return fetchImpl.mock.calls
     .filter(([input]) => String(input) === apiUrl("/api/v2/runs/run-1/click"))
     .map(([, init]) => readJsonBody(init) as Record<string, unknown>);
+}
+
+function randomChallengeCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
+  return fetchImpl.mock.calls.filter(([input, init]) =>
+    String(input) === apiUrl("/api/v2/challenges/random") && init?.method === "POST"
+  ).length;
 }
 
 function createChallengeCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {

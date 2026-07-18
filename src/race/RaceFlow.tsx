@@ -8,12 +8,13 @@ import type {
 } from "../domain/types";
 import type { RacePhase } from "../hooks/useRaceController";
 import type { TargetPreviewState } from "../hooks/useTargetPreview";
+import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import type { VGamesIdentityStatus } from "../services/vgamesIdentity";
 import type { ActiveRunRecord } from "../server/trackingRepository";
 import PreRacePreview from "./PreRacePreview";
 import RaceMode from "./RaceMode";
 import RaceRecoveryInterstitial from "./RaceRecoveryInterstitial";
-import RaceResults, { type PlayAnotherSuggestion } from "./RaceResults";
+import RaceResults from "./RaceResults";
 
 export interface DnfResultSnapshot {
   challenge: Challenge;
@@ -60,9 +61,13 @@ export default function RaceFlow({
   identityDisplayName,
   preRaceCompletions,
   playAnotherSuggestion,
+  randomChallengeBusy,
+  randomChallengeError,
   error,
   authBusy,
   endRunIsBlocked,
+  onCreateRandomChallenge,
+  onOpenChallenge,
   onRetryPending,
   onRetryRecovery,
   onRetryCatalog,
@@ -103,10 +108,19 @@ export default function RaceFlow({
   // See RaceResults' preRaceCompletions doc comment (M2 fix): a snapshot,
   // not live accountStats.
   preRaceCompletions: number | null;
-  playAnotherSuggestion?: PlayAnotherSuggestion | null;
+  // Increment 5: App.tsx owns this centrally (like accountStats) so Home and
+  // Results can never suggest different challenges in the same session.
+  playAnotherSuggestion: PlayAnotherSuggestionState;
+  randomChallengeBusy: boolean;
+  randomChallengeError: string | null;
   error: string | null;
   authBusy: boolean;
   endRunIsBlocked: boolean;
+  onCreateRandomChallenge: () => void;
+  // Play-another's suggestion opens Challenge Detail, same as Browse's own
+  // cards - this exits the race takeover AND navigates, unlike
+  // onShowChallenges (which only lands on Browse's root).
+  onOpenChallenge: (challengeId: string) => void;
   onRetryPending: () => void;
   onRetryRecovery: () => void;
   onRetryCatalog: () => void;
@@ -169,6 +183,10 @@ export default function RaceFlow({
         preRaceCompletions={preRaceCompletions}
         playAgainDisabled={authBusy}
         playAnotherSuggestion={playAnotherSuggestion}
+        randomChallengeBusy={randomChallengeBusy}
+        randomChallengeError={randomChallengeError}
+        onCreateRandomChallenge={onCreateRandomChallenge}
+        onOpenChallenge={onOpenChallenge}
         onPlayAgain={onPlayAgain}
         onShowLeaderboard={onShowLeaderboard}
         onShowChallenges={onShowChallenges}
@@ -195,6 +213,10 @@ export default function RaceFlow({
         preRaceCompletions={preRaceCompletions}
         playAgainDisabled={authBusy}
         playAnotherSuggestion={playAnotherSuggestion}
+        randomChallengeBusy={randomChallengeBusy}
+        randomChallengeError={randomChallengeError}
+        onCreateRandomChallenge={onCreateRandomChallenge}
+        onOpenChallenge={onOpenChallenge}
         onPlayAgain={onPlayAgain}
         onShowLeaderboard={onShowLeaderboard}
         onShowChallenges={onShowChallenges}

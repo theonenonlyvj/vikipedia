@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import BoardSnippet from "../components/BoardSnippet";
+import PlayAnotherCard from "../components/PlayAnotherCard";
 import { dailyDateForChallenge, previousCentralDate } from "../domain/challengeSelection";
 import { dailyFlavorLabel } from "../domain/dailyEditorial";
 import { dailyTrendGuard } from "../domain/dailyTrends";
 import { formatTimeAndClicks } from "../domain/formatting";
+import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import type { AccountStats, Challenge, RankedLeaderboardRow } from "../domain/types";
 import { ShareResultButton } from "../race/shared";
 import type { VWikiRaceApiClient } from "../services/vwikiRaceApiClient";
@@ -38,9 +40,14 @@ export default function Home({
   heroChallenge,
   identityAccountId,
   onGoToBoards,
+  onOpenChallenge,
+  onCreateRandomChallenge,
   onRaceChallenge,
   onShowChallenges,
+  playAnotherSuggestion,
   raceBusy,
+  randomChallengeBusy,
+  randomChallengeError,
   selectedChallengeId,
   sessionDnfChallengeIds,
   sharedLeaderboard,
@@ -57,9 +64,21 @@ export default function Home({
   heroChallenge: Challenge | null;
   identityAccountId: string | null;
   onGoToBoards: () => void;
+  // Play-another's suggestion opens Challenge Detail - same route as
+  // Browse's own cards (spec: "a Race affordance (route consistent with
+  // Browse cards → Detail)") - reuses App.tsx's existing openChallengeDetail.
+  onOpenChallenge: (challengeId: string) => void;
+  onCreateRandomChallenge: () => void;
   onRaceChallenge: (challengeId: string) => void;
   onShowChallenges: () => void;
+  // Increment 5 (spec: "Home post-play 'Got a few more minutes?' card...
+  // uses the suggestion endpoint"): centrally fetched in App.tsx (like
+  // accountStats) so Home and Results can never suggest different
+  // challenges to the same account in the same session.
+  playAnotherSuggestion: PlayAnotherSuggestionState;
   raceBusy: boolean;
+  randomChallengeBusy: boolean;
+  randomChallengeError: string | null;
   // The app shell already fetches/refreshes a leaderboard for whatever
   // challenge is currently selected elsewhere (Boards/Detail) - when that
   // happens to be today's daily too (the common case: nothing else has been
@@ -232,12 +251,14 @@ export default function Home({
             rank={myCompletedRow.rank}
           />
 
-          <section aria-label="Play another challenge" className="play-another-card">
-            <h3>Got a few more minutes?</h3>
-            <button className="link-button" onClick={onShowChallenges} type="button">
-              Browse all challenges ›
-            </button>
-          </section>
+          <PlayAnotherCard
+            onBrowseChallenges={onShowChallenges}
+            onCreateRandomChallenge={onCreateRandomChallenge}
+            onOpenChallenge={onOpenChallenge}
+            randomChallengeBusy={randomChallengeBusy}
+            randomChallengeError={randomChallengeError}
+            suggestion={playAnotherSuggestion}
+          />
 
           <StreakTrendRow stats={accountStats} />
 

@@ -13,6 +13,7 @@ import {
   selectDefaultChallenge,
 } from "./domain/challengeSelection";
 import type { CreateChallengeOutcome } from "./domain/dailyEditorial";
+import { describeRandomChallengeError, type PlayAnotherSuggestionState } from "./domain/playAnother";
 import type {
   AccountStats,
   Challenge,
@@ -40,6 +41,7 @@ import {
   syncChallengeUrl,
 } from "./services/urlRouting";
 import { createWikipediaGateway } from "./services/wikipediaGateway";
+import { ApiRequestError } from "./services/apiRequest";
 import { useRaceController } from "./hooks/useRaceController";
 import { useTargetPreview } from "./hooks/useTargetPreview";
 import RaceFlow, { type DnfResultSnapshot } from "./race/RaceFlow";
@@ -76,6 +78,7 @@ type AuthPromptIntent =
   | { type: "retry-click" }
   | { type: "end-run" }
   | { type: "claim" }
+  | { type: "random-challenge" }
   | {
       type: "create";
       input: CreateChallengeInput;
@@ -195,6 +198,14 @@ export default function App({
   const [sessionDnfChallengeIds, setSessionDnfChallengeIds] = useState<
     ReadonlySet<string>
   >(new Set());
+  // Increment 5 (UX redesign spec §Home "Play-another suggestion logic" +
+  // §Race flow beat 3): centrally fetched here - like accountStats - so
+  // Home's post-play card and Results' Play-another slot always agree on
+  // the same suggestion, rather than each independently racing the endpoint.
+  const [playAnotherSuggestion, setPlayAnotherSuggestion] =
+    useState<PlayAnotherSuggestionState>({ status: "loading" });
+  const [randomChallengeBusy, setRandomChallengeBusy] = useState(false);
+  const [randomChallengeError, setRandomChallengeError] = useState<string | null>(null);
   const identityTrigger = useRef<HTMLElement | null>(null);
   const endRunTrigger = useRef<HTMLElement | null>(null);
   const requestedPaths = useRef(new Set<string>());
@@ -202,6 +213,13 @@ export default function App({
   const catalogRefreshQueued = useRef(false);
   const leaderboardRequest = useRef(0);
   const statsRequest = useRef(0);
+  const suggestionRequest = useRef(0);
+  // Increment 5 (spec: "a per-account concurrency cap of 1 in-flight
+  // request... Disable while in flight (no double-fire)") - one lock shared
+  // by every entry point (Browse's bottom action, Home's and Results'
+  // null-suggestion slot), mirroring challengeLockRef/startLockRef's
+  // existing pattern.
+  const randomChallengeLockRef = useRef(false);
   // Ritual hook snapshot (M2 fix - see RaceResults' preRaceCompletions doc
   // comment): the account's totals.completed captured at the moment a run
   // actually starts (startChallengeWithSession, below), not read live off
@@ -561,6 +579,49 @@ export default function App({
     };
   }, [apiClient, identitySession, statsRefreshVersion]);
 
+  // Play-another suggestion (Increment 5): same proactive-fetch shape as
+  // account stats above, for the same reason - Home's post-play card and
+  // Results' Play-another slot both need it, and Results in particular is
+  // reached long before "You." Re-fetched on `statsRefreshVersion` (bumped
+  // after every run-ending event) so a just-finished/just-abandoned
+  // challenge drops out of "never started" promptly.
+  useEffect(() => {
+    if (!identitySession) {
+      setPlayAnotherSuggestion({ status: "loading" });
+      return;
+    }
+    let cancelled = false;
+    const request = ++suggestionRequest.current;
+    const token = identitySession.token;
+    setPlayAnotherSuggestion({ status: "loading" });
+    void (async () => {
+      try {
+        const suggested = await apiClient.getPlayAnotherSuggestion(token);
+        if (cancelled || request !== suggestionRequest.current) return;
+        if (!suggested) {
+          setPlayAnotherSuggestion({ status: "empty" });
+          return;
+        }
+        let playerCount: number | null = null;
+        try {
+          const summary = await apiClient.getChallengesSummary();
+          playerCount = summary.find((entry) => entry.challengeId === suggested.id)?.playerCount ?? null;
+        } catch {
+          // Degrade gracefully - the suggestion title just omits player
+          // count (same "never fabricate" rule as Browse's own meta line).
+        }
+        if (cancelled || request !== suggestionRequest.current) return;
+        setPlayAnotherSuggestion({ status: "ready", challenge: suggested, playerCount });
+      } catch {
+        if (cancelled || request !== suggestionRequest.current) return;
+        setPlayAnotherSuggestion({ status: "error" });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, identitySession, statsRefreshVersion]);
+
   async function refreshLeaderboard(challengeId: string) {
     const request = ++leaderboardRequest.current;
     setLeaderboardProjection({ challengeId, rows: [] });
@@ -705,6 +766,66 @@ export default function App({
     }
   }
 
+  // Increment 5 (spec: "Create-random UX... generated idempotencyKey;
+  // bounded fun loading state... success → the new challenge's Detail; 429
+  // ... 503 ...; Disable while in flight (no double-fire)"). Shared by
+  // Browse's bottom action and the null-suggestion Play-another slot (Home
+  // and Results) via one App-level busy flag/lock, mirroring
+  // createChallenge/createChallengeWithSession's own auth-prompt-then-resume
+  // shape exactly.
+  async function createRandomChallenge() {
+    if (randomChallengeLockRef.current) return;
+    if (!identitySession) {
+      openAuthPrompt({ type: "random-challenge" });
+      return;
+    }
+    await createRandomChallengeWithSession(identitySession);
+  }
+
+  async function createRandomChallengeWithSession(
+    sessionForRequest: VGamesIdentitySession,
+  ) {
+    if (randomChallengeLockRef.current) return;
+    randomChallengeLockRef.current = true;
+    setRandomChallengeBusy(true);
+    setRandomChallengeError(null);
+    try {
+      const outcome = await apiClient.createRandomChallenge(sessionForRequest.token);
+      const { challenge } = outcome;
+      catalogRequest.current += 1;
+      setChallenges((current) => getSortedChallenges([
+        ...current.filter((item) => item.id !== challenge.id),
+        challenge,
+      ]));
+      if (!challengeLockRef.current) {
+        race.resetCompleted();
+        setSelectedChallengeId(challenge.id);
+        syncChallengeUrl(challenge.id);
+        setLeaderboardProjection({ challengeId: challenge.id, rows: [] });
+        setRaceStage(null);
+        setMode("challenges");
+        setChallengesView("detail");
+      }
+      setRunNotice("Found a fresh challenge for you.");
+      if (!challengeLockRef.current) {
+        try {
+          await refreshLeaderboard(challenge.id);
+        } catch (caught) {
+          setError(errorMessage(caught, "Could not load the leaderboard."));
+        }
+      }
+    } catch (caught) {
+      if (isUnauthorizedError(caught)) {
+        clearStaleIdentity({ type: "random-challenge" });
+        return;
+      }
+      setRandomChallengeError(describeRandomChallengeError(toRandomChallengeFailure(caught)));
+    } finally {
+      randomChallengeLockRef.current = false;
+      setRandomChallengeBusy(false);
+    }
+  }
+
   function exitRaceFlow(nextMode: ModeKey) {
     setRaceStage(null);
     selectMode(nextMode);
@@ -715,6 +836,17 @@ export default function App({
     setDnfResult(null);
     setRaceStage(null);
     selectMode(nextMode);
+  }
+
+  // Play-another's suggestion (Home and Results) opens Challenge Detail -
+  // same route as Browse's own cards (spec: "route consistent with Browse
+  // cards → Detail"). From inside the race takeover this must also exit the
+  // takeover first, unlike onOpenChallengeDetail (App-shell-only).
+  function exitCompletedRaceToChallenge(challengeId: string) {
+    race.resetCompleted();
+    setDnfResult(null);
+    setRaceStage(null);
+    void openChallengeDetail(challengeId);
   }
 
   function requestEndRun(event: MouseEvent<HTMLElement>) {
@@ -964,6 +1096,11 @@ export default function App({
       return;
     }
 
+    if (prompt.type === "random-challenge") {
+      await createRandomChallengeWithSession(nextIdentitySession);
+      return;
+    }
+
     await createChallengeWithSession(prompt.input, nextIdentitySession);
   }
 
@@ -1160,9 +1297,14 @@ export default function App({
           identityStatus={identitySession?.status ?? null}
           identityDisplayName={identitySession?.displayName ?? ""}
           preRaceCompletions={preRaceCompletionsRef.current}
+          playAnotherSuggestion={playAnotherSuggestion}
+          randomChallengeBusy={randomChallengeBusy}
+          randomChallengeError={randomChallengeError}
           error={bannerError}
           authBusy={authBusy}
           endRunIsBlocked={endRunIsBlocked}
+          onCreateRandomChallenge={() => void createRandomChallenge()}
+          onOpenChallenge={(challengeId) => exitCompletedRaceToChallenge(challengeId)}
           onRetryPending={() => void retryPendingClick()}
           onRetryRecovery={() => void retryRecovery()}
           onRetryCatalog={() => setCatalogRefreshVersion((version) => version + 1)}
@@ -1195,13 +1337,17 @@ export default function App({
           onClaimIdentity={() => openAuthPrompt({ type: "claim" })}
           onCloseChallengeDetail={closeChallengeDetail}
           onCreateChallenge={createChallenge}
+          onCreateRandomChallenge={() => void createRandomChallenge()}
           onDisclosePath={(runId) => void loadRunPath(runId)}
           onExitAdmin={exitAdmin}
           onGoToBoardsFor={goToBoardsFor}
           onOpenChallengeDetail={(challengeId) => void openChallengeDetail(challengeId)}
           onRaceChallenge={openRacePreviewFor}
           onSelectMode={selectMode}
+          playAnotherSuggestion={playAnotherSuggestion}
           previewWikipediaGateway={previewWikipediaGateway}
+          randomChallengeBusy={randomChallengeBusy}
+          randomChallengeError={randomChallengeError}
           runPaths={runPaths}
           selectedChallenge={selectedChallenge}
           selectionLocked={challengeIsLocked}
@@ -1557,6 +1703,27 @@ function mergeCreatedChallenge(
 
 function errorMessage(caught: unknown, fallback: string): string {
   return caught instanceof Error ? caught.message : fallback;
+}
+
+/**
+ * Extracts the plain primitives `describeRandomChallengeError` (a pure
+ * domain function, no src/services dependency) needs from a caught
+ * `ApiRequestError` - the one place in App.tsx that reaches into the error
+ * class itself for this particular flow.
+ */
+function toRandomChallengeFailure(caught: unknown): {
+  status: number | null;
+  message: string;
+  retryAfterSeconds: number | null;
+} {
+  if (caught instanceof ApiRequestError) {
+    return {
+      status: caught.status,
+      message: caught.message,
+      retryAfterSeconds: caught.retryAfterMs !== null ? Math.ceil(caught.retryAfterMs / 1000) : null,
+    };
+  }
+  return { status: null, message: errorMessage(caught, ""), retryAfterSeconds: null };
 }
 
 function suggestUsername(displayName: string): string {
