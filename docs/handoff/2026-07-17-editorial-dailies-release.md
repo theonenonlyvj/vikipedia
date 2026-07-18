@@ -2,10 +2,9 @@
 
 Date: 2026-07-17
 
-Status: implementation handoff prepared for deployment. Migration
-`0005_editorial_dailies.sql` is pending until the production D1 ledger is
-inspected. Fill the release record only from completed gates and deployment
-output; do not infer runtime state from the local commit.
+Status: deployed and production-smoke-tested on 2026-07-18 UTC. Migration
+`0005_editorial_dailies.sql` is recorded in production D1 and the ledger has no
+pending migrations.
 
 ## Scope
 
@@ -101,21 +100,30 @@ name, expose account IDs to public clients, or add a local identity namespace.
 
 ## Release Record
 
-Complete these fields from the final verified release. Placeholders are
-intentional until deployment and testing are complete.
-
-- Runtime source commit SHA: `<final-runtime-sha>`
-- Client tests: `<client-passed>/<client-total>`
-- Worker tests: `<worker-passed>/<worker-total>`
-- Production build/bundle result: `<final-build-result>`
-- Dependency audit result: `<final-audit-result>`
-- Remote migration ledger before deployment: `<ledger-before>`
-- Remote migration ledger after deployment: `<ledger-after>`
-- Private backup identifier/location: `<private-backup-reference>`
-- Worker deployment/version ID and UTC time: `<worker-deployment-id>`, `<utc>`
-- Pages deployment ID, URL, and UTC time: `<pages-deployment-id>`,
-  `<pages-url>`, `<utc>`
-- Production smoke result: `<final-smoke-result>`
+- Runtime source commit SHA: `320f2f6`
+- Client tests: 488/488
+- Worker tests: 112/112
+- Production build/bundle result: TypeScript, Vite production build, and bundle
+  verification passed; deployed assets are `index-8mVFS7Fv.js` and
+  `index-CKQrhNPl.css`.
+- Dependency audit result: `npm audit --omit=dev` found 0 vulnerabilities.
+- Remote migration ledger before deployment: only
+  `0005_editorial_dailies.sql` pending.
+- Remote migration ledger after deployment: no pending migrations; exactly one
+  `0005_editorial_dailies.sql` ledger row.
+- Private backup identifier/location: ignored private D1 export, SHA-256
+  `afca434add893b12c3fc691550a44c59e20a3ea815439feee4e8121a9f392522`.
+- Worker deployment/version ID and UTC time:
+  `33bd5b92-1758-434c-b424-cce437df1f12`, `2026-07-17T23:59:06.975056Z`.
+- Pages deployment ID, URL, and UTC time:
+  `a446d93c-180a-4ec4-b9c2-92694050ba4f`,
+  `https://a446d93c.vwikirace.pages.dev`, `2026-07-18T00:01Z`.
+- Production smoke result: passed on canonical and immutable Pages URLs.
+  Catalog returned all 6 challenges and 3 backfilled Daily features; Challenge
+  #3 retained both completed leaderboard runs; VGames health returned 200;
+  protected routes failed closed; desktop and 390 px mobile had no horizontal
+  overflow; challenge and admin deep links returned the SPA; final D1 counts
+  remained 6 challenges and 30 runs.
 
 Do not record credentials, session tokens, raw D1 exports, or unredacted
 private backup paths in this file.
