@@ -385,6 +385,7 @@ describe("daily candidate evaluator", () => {
     })).resolves.toEqual({
       startTitle: "Start two",
       startPageId: 102,
+      startAllowedLinkCount: 8,
       targetTitle: "Target canonical",
       targetPageId: 1,
       selectedScore: 79,

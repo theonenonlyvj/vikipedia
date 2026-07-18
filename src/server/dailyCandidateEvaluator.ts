@@ -25,6 +25,17 @@ const USER_AGENT =
 export interface DailyChallengeCandidate {
   startTitle: string;
   startPageId: number;
+  /**
+   * Count of real, allowed (main-namespace, non-self) links found on the
+   * rendered start article (`EvaluatedStart.allowedLinks.length`). Exposed
+   * (Increment 5) so the on-demand random-challenge endpoint can satisfy
+   * `createChallengeV2`'s `startAllowedLinkCount >= 1` eligibility check
+   * without re-fetching the article - scoring already guarantees this is
+   * >= 8 (`scoreDailyCandidate`'s `start_too_few_links` rejection), well
+   * above that floor. Purely additive: existing daily-generator consumers
+   * that don't read this field are unaffected.
+   */
+  startAllowedLinkCount: number;
   targetTitle: string;
   targetPageId: number;
   selectedScore: number;
@@ -504,6 +515,7 @@ function toCandidate(pair: CandidatePair, flavor: DailyFlavor): DailyChallengeCa
   return {
     startTitle: pair.start.title,
     startPageId: pair.start.pageId,
+    startAllowedLinkCount: pair.start.allowedLinks.length,
     targetTitle: pair.target.title,
     targetPageId: pair.target.pageId,
     selectedScore: selectedFlavorScore(pair, flavor),

@@ -214,6 +214,7 @@ describe("daily challenge D1 jobs", () => {
     const findCandidate = vi.fn(async () => ({
       startTitle: "Start",
       startPageId: 201,
+      startAllowedLinkCount: 8,
       targetTitle: "Target",
       targetPageId: 202,
       selectedScore: 79,
@@ -257,6 +258,7 @@ describe("daily challenge D1 jobs", () => {
     const findCandidate = vi.fn(async () => ({
       startTitle: "Start",
       startPageId: 201,
+      startAllowedLinkCount: 8,
       targetTitle: "Target",
       targetPageId: 202,
       selectedScore: 74,
@@ -294,6 +296,7 @@ describe("daily challenge D1 jobs", () => {
     const findCandidate = vi.fn(async () => ({
       startTitle: "Retry start",
       startPageId: 501,
+      startAllowedLinkCount: 8,
       targetTitle: "Retry target",
       targetPageId: 502,
       selectedScore: 68,
@@ -518,6 +521,7 @@ describe("daily challenge D1 jobs", () => {
     const findCandidate = vi.fn(async () => ({
       startTitle: "Automatic start",
       startPageId: 7203,
+      startAllowedLinkCount: 8,
       targetTitle: "Automatic target",
       targetPageId: 7204,
       selectedScore: 79,
@@ -575,6 +579,7 @@ describe("daily challenge D1 jobs", () => {
         findCandidate: vi.fn(async () => ({
           startTitle: "Automatic start",
           startPageId: 7301,
+          startAllowedLinkCount: 8,
           targetTitle: "Automatic target",
           targetPageId: 7302,
           selectedScore: 79,
@@ -593,6 +598,7 @@ describe("daily challenge D1 jobs", () => {
       candidate: {
         startTitle: "Automatic start",
         startPageId: 7301,
+        startAllowedLinkCount: 8,
         targetTitle: "Automatic target",
         targetPageId: 7302,
       },
@@ -620,6 +626,7 @@ describe("daily challenge D1 jobs", () => {
     const findCandidate = vi.fn(async () => ({
       startTitle: "Automatic start",
       startPageId: 7301,
+      startAllowedLinkCount: 8,
       targetTitle: "Automatic target",
       targetPageId: 7302,
       selectedScore: 79,
@@ -730,6 +737,7 @@ describe("daily challenge D1 jobs", () => {
     const findCandidate = vi.fn(async () => ({
       startTitle: "Automatic start",
       startPageId: 7401,
+      startAllowedLinkCount: 8,
       targetTitle: "Automatic target",
       targetPageId: 7402,
       selectedScore: 83,
