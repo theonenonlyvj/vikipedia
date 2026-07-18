@@ -3,6 +3,7 @@ import { optionalNumber, requiredString } from "./http";
 import { ApiError } from "./http";
 import type {
   AbandonRunResponse,
+  ChallengeBoardResponse,
   ChallengesResponse,
   ClickRequest,
   ClickResponse,
@@ -59,6 +60,7 @@ export interface ApiHandlers {
     accountId: string,
   ): Promise<AbandonRunResponse>;
   listLeaderboard(challengeId: string): Promise<LeaderboardResponse>;
+  getChallengeBoard(challengeId: string): Promise<ChallengeBoardResponse>;
   getRunPath(runId: string): Promise<RunPathResponse>;
   listDailyAdminState(): Promise<DailyAdminStateResponse>;
   approveDailyNomination(
@@ -353,6 +355,35 @@ export function createApiHandlers(
             "A challenge id is required.",
           ),
         ),
+      };
+    },
+
+    async getChallengeBoard(challengeId) {
+      const cleanChallengeId = requiredString(
+        challengeId,
+        "invalid_challenge_id",
+        "A challenge id is required.",
+      );
+      const protocol = dailyProtocol(repository);
+      const [placements, dnfs] = await Promise.all([
+        protocol.listChallengePlacements(cleanChallengeId),
+        protocol.listChallengeDnfs(cleanChallengeId),
+      ]);
+      return {
+        challengeId: cleanChallengeId,
+        placements: placements.map((placement) => ({
+          accountId: placement.accountId,
+          displayName: placement.displayName,
+          placement: placement.placement,
+          elapsedMs: placement.elapsedMs,
+          clickCount: placement.clickCount,
+        })),
+        dnfs: dnfs.map((dnf) => ({
+          accountId: dnf.accountId,
+          displayName: dnf.displayName,
+          clickCount: dnf.clickCount,
+          elapsedMs: dnf.elapsedMs,
+        })),
       };
     },
 

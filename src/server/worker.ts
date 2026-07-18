@@ -448,6 +448,17 @@ async function dispatchV2(
     );
   }
 
+  const boardMatch = url.pathname.match(
+    /^\/api\/v2\/challenges\/([^/]+)\/board$/,
+  );
+  if (request.method === "GET" && boardMatch?.[1]) {
+    return json(
+      await tracking.handlers.getChallengeBoard(decodeURIComponent(boardMatch[1])),
+      { headers: noStoreHeaders() },
+      corsHeaders,
+    );
+  }
+
   const runMatch = url.pathname.match(/^\/api\/v2\/runs\/([^/]+)\/([^/]+)$/);
   if (runMatch?.[1] && runMatch[2]) {
     const runId = decodeURIComponent(runMatch[1]);

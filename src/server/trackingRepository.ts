@@ -223,6 +223,15 @@ export interface RunProtocolRepository extends TrackingRepository {
       completedAt: string;
     }>
   >;
+  listChallengeDnfs(challengeId: string): Promise<
+    Array<{
+      accountId: string;
+      displayName: string | null;
+      elapsedMs: number;
+      clickCount: number;
+      abandonedAt: string;
+    }>
+  >;
   findQueuedDailyCandidate(flavor: DailyFlavor): Promise<DailyQueuedCandidate | null>;
   acceptDailyFeature(job: DailyChallengeJob, selection: DailyFeatureSelection): Promise<Challenge>;
   findChallengeCreationReplay(

@@ -613,6 +613,45 @@ describe("VWiki Race API client", () => {
       .rejects.toMatchObject({ code: "invalid_response", status: 502 });
   });
 
+  it("fetches the daily board with placements and DNFs", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({
+      challengeId: "challenge-0001",
+      placements: [
+        { accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 4_000, clickCount: 3 },
+      ],
+      dnfs: [
+        { accountId: "acc-2", displayName: null, clickCount: 2, elapsedMs: 2_000 },
+      ],
+    }));
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await expect(client.getChallengeBoard("challenge-0001")).resolves.toEqual({
+      challengeId: "challenge-0001",
+      placements: [
+        { accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 4_000, clickCount: 3 },
+      ],
+      dnfs: [
+        { accountId: "acc-2", displayName: null, clickCount: 2, elapsedMs: 2_000 },
+      ],
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `${apiOrigin}/api/v2/challenges/challenge-0001/board`,
+      expect.anything(),
+    );
+  });
+
+  it("rejects a malformed daily board response", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({
+      challengeId: "challenge-0001",
+      placements: [{ accountId: "acc-1" }],
+      dnfs: [],
+    }));
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await expect(client.getChallengeBoard("challenge-0001"))
+      .rejects.toMatchObject({ code: "invalid_response", status: 502 });
+  });
+
   it.each(["completed", "abandoned"] as const)(
     "rejects a %s run from start-run responses",
     async (status) => {

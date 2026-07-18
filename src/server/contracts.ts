@@ -4,6 +4,8 @@ import type {
   AbandonRunTransition,
   AuthorizedAccount,
   Challenge,
+  ChallengeBoardDnfRow,
+  ChallengeBoardPlacement,
   LeaderboardContext,
   RankedLeaderboardRow,
   RunTransition,
@@ -102,6 +104,18 @@ export type AbandonRunV2Response = AbandonRunTransition;
 
 export interface LeaderboardResponse {
   leaderboard: RankedLeaderboardRow[];
+}
+
+/**
+ * Boards' daily-view endpoint (Increment 3, UX redesign spec §Boards): the
+ * full deduped board for one challenge - a completed placement per canonical
+ * account plus, separately, accounts that only DNF'd (invariant 2: "a
+ * completion supersedes DNF" - no account appears in both arrays).
+ */
+export interface ChallengeBoardResponse {
+  challengeId: string;
+  placements: ChallengeBoardPlacement[];
+  dnfs: ChallengeBoardDnfRow[];
 }
 
 export interface RunPathResponse {

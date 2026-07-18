@@ -642,6 +642,51 @@ describe("api handlers", () => {
       status: 400,
     });
   });
+
+  it("composes the daily board from placements and DNFs, dropping internal-only fields", async () => {
+    const repository = fakeRepository();
+    Object.assign(repository, {
+      listChallengePlacements: vi.fn(async () => [
+        {
+          accountId: "acc-1",
+          displayName: "Vijay",
+          placement: 1,
+          elapsedMs: 4_000,
+          clickCount: 3,
+          completedAt: "2026-07-14T01:00:04.000Z",
+        },
+      ]),
+      listChallengeDnfs: vi.fn(async () => [
+        {
+          accountId: "acc-2",
+          displayName: "Casey",
+          elapsedMs: 2_000,
+          clickCount: 2,
+          abandonedAt: "2026-07-14T01:00:02.000Z",
+        },
+      ]),
+    });
+    const handlers = createApiHandlers(repository);
+
+    await expect(handlers.getChallengeBoard("challenge-0001")).resolves.toEqual({
+      challengeId: "challenge-0001",
+      placements: [
+        { accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 4_000, clickCount: 3 },
+      ],
+      dnfs: [
+        { accountId: "acc-2", displayName: "Casey", clickCount: 2, elapsedMs: 2_000 },
+      ],
+    });
+  });
+
+  it("requires a challenge id for the daily board", async () => {
+    const handlers = createApiHandlers(fakeRepository());
+
+    await expect(handlers.getChallengeBoard("")).rejects.toMatchObject({
+      code: "invalid_challenge_id",
+      status: 400,
+    });
+  });
 });
 
 describe("Worker API route versions", () => {

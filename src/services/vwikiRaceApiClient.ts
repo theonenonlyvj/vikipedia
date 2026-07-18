@@ -1,6 +1,7 @@
 import type {
   AbandonRunV2Response,
   AccountStatsResponse,
+  ChallengeBoardResponse,
   ClickV2Response,
   CreateChallengeV2Response,
   DailyAdminStateResponse,
@@ -68,6 +69,7 @@ export interface VWikiRaceApiClient extends VWikiRaceDailyAdminApiClient {
     input?: { recoveryProtocolVersion?: 1 },
   ): Promise<AbandonRunV2Response>;
   listLeaderboard(challengeId: string): Promise<RankedLeaderboardRow[]>;
+  getChallengeBoard(challengeId: string): Promise<ChallengeBoardResponse>;
   getRunPath(runId: string): Promise<ServerPathStep[]>;
   getAccountStats(token: string): Promise<AccountStats>;
 }
@@ -151,6 +153,9 @@ export function createVWikiRaceApiClient(
     },
     async listLeaderboard(challengeId) {
       return (await read(urlPath.leaderboard(challengeId), isLeaderboardResponse)).leaderboard;
+    },
+    async getChallengeBoard(challengeId) {
+      return read(urlPath.board(challengeId), isChallengeBoardResponse);
     },
     async getRunPath(runId) {
       const cached = pathCache.get(runId);
@@ -299,6 +304,8 @@ const urlPath = {
     `/api/v2/runs/${encodeURIComponent(runId)}/${action}`,
   leaderboard: (challengeId: string) =>
     `/api/v2/challenges/${encodeURIComponent(challengeId)}/leaderboard`,
+  board: (challengeId: string) =>
+    `/api/v2/challenges/${encodeURIComponent(challengeId)}/board`,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -338,6 +345,30 @@ function isLeaderboardResponse(value: unknown): value is LeaderboardResponse {
   return isRecord(value) &&
     Array.isArray(value.leaderboard) &&
     value.leaderboard.every(isLeaderboardRow);
+}
+
+function isChallengeBoardResponse(value: unknown): value is ChallengeBoardResponse {
+  return isRecord(value) &&
+    hasString(value, "challengeId") &&
+    Array.isArray(value.placements) && value.placements.every(isChallengeBoardPlacement) &&
+    Array.isArray(value.dnfs) && value.dnfs.every(isChallengeBoardDnfRow);
+}
+
+function isChallengeBoardPlacement(value: unknown): value is ChallengeBoardResponse["placements"][number] {
+  return isRecord(value) &&
+    hasString(value, "accountId") &&
+    (value.displayName === null || hasString(value, "displayName")) &&
+    hasNumber(value, "placement") &&
+    hasNumber(value, "elapsedMs") &&
+    hasNumber(value, "clickCount");
+}
+
+function isChallengeBoardDnfRow(value: unknown): value is ChallengeBoardResponse["dnfs"][number] {
+  return isRecord(value) &&
+    hasString(value, "accountId") &&
+    (value.displayName === null || hasString(value, "displayName")) &&
+    hasNumber(value, "clickCount") &&
+    hasNumber(value, "elapsedMs");
 }
 
 function isRunPathResponse(value: unknown): value is RunPathResponse {

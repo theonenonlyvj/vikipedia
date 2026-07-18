@@ -505,6 +505,7 @@ function apiClient(overrides: Partial<VWikiRaceApiClient> = {}): VWikiRaceApiCli
     recordClick: vi.fn(async () => activeClick()),
     abandonRun: vi.fn(),
     listLeaderboard: vi.fn(async () => []),
+    getChallengeBoard: vi.fn(async () => ({ challengeId: challenge.id, placements: [], dnfs: [] })),
     getRunPath: vi.fn(async () => []),
     getAccountStats: vi.fn(),
     getCapabilities: vi.fn(async () => ({ canManageDailies: false })),

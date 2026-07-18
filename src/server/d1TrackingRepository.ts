@@ -2360,6 +2360,63 @@ export function createD1TrackingRepository(options: {
       }));
     },
 
+    async listChallengeDnfs(challengeId) {
+      const { results } = await db
+        .prepare(
+          `WITH resolved AS (
+             SELECT r.id,
+                    coalesce(a.canonical_account_id, r.canonical_account_id, r.account_id) account_id,
+                    r.status, r.elapsed_ms, r.click_count, r.completed_at,
+                    r.abandoned_at, r.protocol_version, r.ranked_eligible
+             FROM runs r
+             LEFT JOIN account_aliases a
+               ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
+             WHERE r.challenge_id = ?
+               AND r.board_excluded = 0
+           ), completed_eligible_accounts AS (
+             SELECT DISTINCT account_id
+             FROM resolved
+             WHERE status = 'completed'
+               AND elapsed_ms IS NOT NULL
+               AND completed_at IS NOT NULL
+               AND ((protocol_version = 2 AND ranked_eligible = 1)
+                    OR protocol_version = 1)
+           ), dnf_eligible AS (
+             SELECT *
+             FROM resolved
+             WHERE status = 'abandoned'
+               AND click_count > 0
+               AND elapsed_ms IS NOT NULL
+               AND abandoned_at IS NOT NULL
+               AND account_id NOT IN (SELECT account_id FROM completed_eligible_accounts)
+           ), best AS (
+             SELECT *, row_number() OVER (
+               PARTITION BY account_id
+               ORDER BY click_count DESC, elapsed_ms DESC, abandoned_at ASC, id
+             ) attempt_rank
+             FROM dnf_eligible
+           )
+           SELECT best.account_id, best.elapsed_ms, best.click_count,
+                  best.abandoned_at,
+                  p.public_name AS display_name
+           FROM best
+           LEFT JOIN account_profiles p ON p.account_id = best.account_id
+           WHERE best.attempt_rank = 1
+           ORDER BY best.click_count DESC, best.elapsed_ms DESC,
+                    best.abandoned_at ASC, best.id
+           LIMIT 100`,
+        )
+        .bind(challengeId)
+        .all<ChallengeDnfQueryRow>();
+      return results.map((row) => ({
+        accountId: row.account_id,
+        displayName: row.display_name ?? null,
+        elapsedMs: Number(row.elapsed_ms),
+        clickCount: Number(row.click_count),
+        abandonedAt: row.abandoned_at,
+      }));
+    },
+
     async setRunBoardExclusion(runId, excluded) {
       const row = await db
         .prepare(
@@ -4501,6 +4558,14 @@ interface ChallengePlacementQueryRow {
   click_count: number;
   completed_at: string;
   placement: number;
+  display_name?: string | null;
+}
+
+interface ChallengeDnfQueryRow {
+  account_id: string;
+  elapsed_ms: number;
+  click_count: number;
+  abandoned_at: string;
   display_name?: string | null;
 }
 

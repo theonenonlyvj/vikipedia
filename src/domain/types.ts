@@ -214,3 +214,33 @@ export interface AccountStats {
 export interface RankedLeaderboardRow extends ServerLeaderboardRow {
   rank: number;
 }
+
+/**
+ * Boards' daily-view finisher row (Increment 3, UX redesign spec §Boards):
+ * one row per canonical account, deduped to their best attempt - the wire
+ * shape of `listChallengePlacements`, already invariant-2-correct (unlike
+ * `RankedLeaderboardRow`, which is per-attempt). No `runId` - Boards never
+ * discloses a per-run path this increment (spec: "paths hidden until
+ * you've played"), so there's nothing to key a path disclosure on.
+ */
+export interface ChallengeBoardPlacement {
+  accountId: string;
+  displayName: string | null;
+  placement: number;
+  elapsedMs: number;
+  clickCount: number;
+}
+
+/**
+ * Boards' daily-view DNF row: accounts with an eligible abandoned run and no
+ * completed eligible run on this challenge (invariant 2 - "a completion
+ * supersedes DNF"), one row per canonical account keeping their
+ * most-progressed attempt. Ordered by progress (clicks), not time - DNFs
+ * aren't placed/ranked.
+ */
+export interface ChallengeBoardDnfRow {
+  accountId: string;
+  displayName: string | null;
+  clickCount: number;
+  elapsedMs: number;
+}

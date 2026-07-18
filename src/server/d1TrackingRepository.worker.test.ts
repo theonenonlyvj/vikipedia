@@ -3587,6 +3587,225 @@ describe("listChallengePlacements", () => {
   });
 });
 
+describe("listChallengeDnfs", () => {
+  it("collapses repeat DNFs to the most-progressed attempt (max clicks, then longest elapsed)", async () => {
+    const accountA = "dnf-account-a";
+    await insertAbandonedV2({
+      id: "a-shallow",
+      accountId: accountA,
+      clickCount: 2,
+      elapsedMs: 9_000,
+      abandonedAt: "2026-07-14T01:00:09.000Z",
+    });
+    await insertAbandonedV2({
+      id: "a-deepest",
+      accountId: accountA,
+      clickCount: 5,
+      elapsedMs: 4_000,
+      abandonedAt: "2026-07-14T01:00:04.000Z",
+    });
+    // Same click count as the deepest attempt but a longer elapsed time -
+    // the tie-break ("then longest elapsed") should prefer this one.
+    await insertAbandonedV2({
+      id: "a-deepest-slower",
+      accountId: accountA,
+      clickCount: 5,
+      elapsedMs: 7_000,
+      abandonedAt: "2026-07-14T01:00:07.000Z",
+    });
+
+    const { repository } = fixture();
+    const dnfs = await repository.listChallengeDnfs("challenge-0001");
+
+    expect(dnfs).toHaveLength(1);
+    expect(dnfs[0]).toMatchObject({
+      accountId: accountA,
+      clickCount: 5,
+      elapsedMs: 7_000,
+    });
+  });
+
+  it("excludes an account with a completed eligible run - a completion supersedes DNF", async () => {
+    const accountB = "dnf-account-b";
+    await insertAbandonedV2({
+      id: "b-dnf",
+      accountId: accountB,
+      clickCount: 3,
+      elapsedMs: 5_000,
+      abandonedAt: "2026-07-14T01:00:05.000Z",
+    });
+    await insertCompletedV2({
+      id: "b-completed",
+      accountId: accountB,
+      elapsedMs: 8_000,
+      completedAt: "2026-07-14T01:00:08.000Z",
+    });
+
+    const { repository } = fixture();
+    const dnfs = await repository.listChallengeDnfs("challenge-0001");
+
+    expect(dnfs.map((d) => d.accountId)).not.toContain(accountB);
+  });
+
+  it("never surfaces a 0-click abandon (matches listLeaderboard's click_count > 0 eligibility)", async () => {
+    const accountC = "dnf-account-c";
+    await insertLegacyRun({ id: "c-zero-click", accountId: accountC });
+    await env.VWIKI_RACE_DB.prepare(
+      `UPDATE runs SET status='abandoned', protocol_version=2, click_count=0,
+         abandoned_at='2026-07-14T01:00:02.000Z', elapsed_ms=2000,
+         wall_elapsed_ms=2000 WHERE id='c-zero-click'`,
+    ).run();
+
+    const { repository } = fixture();
+    const dnfs = await repository.listChallengeDnfs("challenge-0001");
+
+    expect(dnfs.map((d) => d.accountId)).not.toContain(accountC);
+  });
+
+  it("respects board exclusion", async () => {
+    const accountD = "dnf-account-d";
+    await insertAbandonedV2({
+      id: "d-excluded-best",
+      accountId: accountD,
+      clickCount: 9,
+      elapsedMs: 3_000,
+      abandonedAt: "2026-07-14T01:00:03.000Z",
+    });
+    await insertAbandonedV2({
+      id: "d-remaining",
+      accountId: accountD,
+      clickCount: 4,
+      elapsedMs: 6_000,
+      abandonedAt: "2026-07-14T01:00:06.000Z",
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      "UPDATE runs SET board_excluded = 1 WHERE id = ?",
+    ).bind("d-excluded-best").run();
+
+    const { repository } = fixture();
+    const dnfs = await repository.listChallengeDnfs("challenge-0001");
+    const d = dnfs.find((entry) => entry.accountId === accountD);
+
+    // D's most-progressed (9 clicks) attempt is excluded -> falls back to
+    // the remaining eligible attempt (4 clicks), not absent entirely.
+    expect(d?.clickCount).toBe(4);
+  });
+
+  it("resolves canonical accounts through account_aliases", async () => {
+    const canonical = "dnf-canonical";
+    const ghost = "dnf-ghost";
+    await insertAbandonedV2({
+      id: "ghost-dnf",
+      accountId: ghost,
+      clickCount: 6,
+      elapsedMs: 5_000,
+      abandonedAt: "2026-07-14T01:00:05.000Z",
+    });
+    await insertAbandonedV2({
+      id: "canonical-dnf",
+      accountId: canonical,
+      clickCount: 3,
+      elapsedMs: 3_000,
+      abandonedAt: "2026-07-14T01:00:03.000Z",
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO account_aliases (alias_account_id, canonical_account_id, updated_at)
+       VALUES (?, ?, '2026-07-14T01:00:00.000Z')`,
+    ).bind(ghost, canonical).run();
+
+    const { repository } = fixture();
+    const dnfs = await repository.listChallengeDnfs("challenge-0001");
+    const ids = dnfs.map((d) => d.accountId);
+
+    expect(new Set(ids).size).toBe(ids.length); // one row per canonical id
+    expect(ids).toContain(canonical);
+    expect(ids).not.toContain(ghost);
+    // The alias's 6-click attempt beats the canonical's own 3-click attempt
+    // once merged under the canonical id (most-progressed wins).
+    const merged = dnfs.find((d) => d.accountId === canonical);
+    expect(merged?.clickCount).toBe(6);
+  });
+
+  it("orders the list by clicks descending", async () => {
+    const accountLow = "dnf-order-low";
+    const accountHigh = "dnf-order-high";
+    await insertAbandonedV2({
+      id: "order-low",
+      accountId: accountLow,
+      clickCount: 2,
+      elapsedMs: 4_000,
+      abandonedAt: "2026-07-14T01:00:04.000Z",
+    });
+    await insertAbandonedV2({
+      id: "order-high",
+      accountId: accountHigh,
+      clickCount: 7,
+      elapsedMs: 6_000,
+      abandonedAt: "2026-07-14T01:00:06.000Z",
+    });
+
+    const { repository } = fixture();
+    const dnfs = await repository.listChallengeDnfs("challenge-0001");
+
+    expect(dnfs.map((d) => d.accountId)).toEqual([accountHigh, accountLow]);
+  });
+});
+
+describe("GET /api/v2/challenges/:id/board", () => {
+  it("returns the challenge id, deduped placements, and DNFs together, unauthenticated", async () => {
+    await insertCompletedV2({
+      id: "board-route-completed",
+      accountId: "board-route-account-a",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    await insertAbandonedV2({
+      id: "board-route-dnf",
+      accountId: "board-route-account-b",
+      clickCount: 3,
+      elapsedMs: 5_000,
+      abandonedAt: "2026-07-14T01:00:05.000Z",
+    });
+
+    const { repository } = fixture();
+    const worker = createWorker({
+      createTracking: () => ({
+        handlers: createApiHandlers(repository),
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => account,
+      } as unknown as WorkerTracking),
+    });
+
+    const response = await worker.fetch(
+      new Request("https://worker.example/api/v2/challenges/challenge-0001/board"),
+      workerEnv(),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      challengeId: "challenge-0001",
+      placements: [
+        {
+          accountId: "board-route-account-a",
+          displayName: null,
+          placement: 1,
+          elapsedMs: 4_000,
+          clickCount: 1,
+        },
+      ],
+      dnfs: [
+        {
+          accountId: "board-route-account-b",
+          displayName: null,
+          clickCount: 3,
+          elapsedMs: 5_000,
+        },
+      ],
+    });
+  });
+});
+
 function fixture(
   clock: { now: string } = { now: "2026-07-14T01:00:00.000Z" },
   firstId = "run-1",
@@ -3677,6 +3896,37 @@ async function insertCompletedV2(input: {
     input.elapsedMs,
     input.elapsedMs,
     input.completedAt,
+  ).run();
+}
+
+async function insertAbandonedV2(input: {
+  id: string;
+  accountId: string;
+  clickCount: number;
+  elapsedMs: number;
+  abandonedAt: string;
+}) {
+  await env.VWIKI_RACE_DB.prepare(
+    `INSERT INTO runs
+       (id, challenge_id, account_id, canonical_account_id, status, started_at,
+        abandoned_at, elapsed_ms, wall_elapsed_ms, click_count, start_title,
+        target_title, start_page_id, target_page_id, last_page_id,
+        last_title, expires_at, ranked_eligible, protocol_version, created_at,
+        updated_at)
+     VALUES (?, 'challenge-0001', ?, ?, 'abandoned',
+             '2026-07-14T01:00:00.000Z', ?, ?, ?, ?, 'Moon', 'Gravity',
+             19331, 38579, 38579, 'Gravity',
+             '2026-07-15T01:00:00.000Z', 0, 2,
+             '2026-07-14T01:00:00.000Z', ?)`,
+  ).bind(
+    input.id,
+    input.accountId,
+    input.accountId,
+    input.abandonedAt,
+    input.elapsedMs,
+    input.elapsedMs,
+    input.clickCount,
+    input.abandonedAt,
   ).run();
 }
 
