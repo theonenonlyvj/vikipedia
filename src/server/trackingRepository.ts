@@ -4,6 +4,8 @@ import type {
   AbandonRunTransition,
   AuthorizedAccount,
   Challenge,
+  DailyTrendRankedEntry,
+  DailyTrendUnrankedEntry,
   LeaderboardContext,
   RankedLeaderboardRow,
   RunTransition,
@@ -232,6 +234,25 @@ export interface RunProtocolRepository extends TrackingRepository {
       abandonedAt: string;
     }>
   >;
+  /**
+   * Boards' 7d/30d/lifetime trend segments (Increment 4). `windowDays` is
+   * `null` for lifetime (all dailies, no date filter). Uses the same
+   * best-rank-per-account-per-daily dedup as `listChallengePlacements`, with
+   * NO `LIMIT` (unlike that query and `listChallengeDnfs`) - see Task 3.1's
+   * flagged "revisit at Increment 4": rolling trends must consider every
+   * eligible finisher of each daily, not just the first 100.
+   */
+  listDailyTrends(windowDays: 7 | 30 | null, todayCentral: string): Promise<{
+    ranked: DailyTrendRankedEntry[];
+    unranked: DailyTrendUnrankedEntry[];
+  }>;
+  /**
+   * Boards/Home streak (Increment 4): consecutive Central dates, ending
+   * today or yesterday, on which `accountId` (alias-resolved) has ≥1
+   * eligible completed run on that date's daily. Silent reset on a missed
+   * day - no grace period.
+   */
+  getAccountDailyStreak(accountId: string, todayCentral: string): Promise<number>;
   findQueuedDailyCandidate(flavor: DailyFlavor): Promise<DailyQueuedCandidate | null>;
   acceptDailyFeature(job: DailyChallengeJob, selection: DailyFeatureSelection): Promise<Challenge>;
   findChallengeCreationReplay(

@@ -6,6 +6,8 @@ import type {
   Challenge,
   ChallengeBoardDnfRow,
   ChallengeBoardPlacement,
+  DailyTrendRankedEntry,
+  DailyTrendUnrankedEntry,
   LeaderboardContext,
   RankedLeaderboardRow,
   RunTransition,
@@ -116,6 +118,22 @@ export interface ChallengeBoardResponse {
   challengeId: string;
   placements: ChallengeBoardPlacement[];
   dnfs: ChallengeBoardDnfRow[];
+}
+
+/**
+ * Boards' rolling-trend endpoint (Increment 4, UX redesign spec §Boards -
+ * "7d/30d/lifetime" paragraph). `window` echoes the validated query param
+ * vocabulary (`?window=7|30|lifetime`) verbatim, and `guard` is the
+ * participation threshold that produced this exact `ranked`/`unranked`
+ * split - the client renders copy off `guard`, it never re-derives it.
+ */
+export type BoardsTrendWindow = "7" | "30" | "lifetime";
+
+export interface BoardsTrendsResponse {
+  window: BoardsTrendWindow;
+  guard: number;
+  ranked: DailyTrendRankedEntry[];
+  unranked: DailyTrendUnrankedEntry[];
 }
 
 export interface RunPathResponse {

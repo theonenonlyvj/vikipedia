@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import type { AuthorizedAccount, Challenge } from "../domain/types";
+import { centralDateKey } from "../domain/challengeSelection";
 import { dailyFlavorForCentralDate, type DailyFlavor } from "../domain/dailyEditorial";
 import { createApiHandlers, type ApiHandlers } from "./apiHandlers";
 import { createD1TrackingRepository } from "./d1TrackingRepository";
@@ -107,7 +108,7 @@ export function createWorker(options: WorkerOptions = {}) {
       const tracking = buildTracking(env);
 
       try {
-        const v2Response = await dispatchV2(request, url, tracking, corsHeaders, env, requestId);
+        const v2Response = await dispatchV2(request, url, tracking, corsHeaders, env, requestId, now());
         if (v2Response) {
           response = v2Response;
         } else {
@@ -270,6 +271,7 @@ async function dispatchV2(
   corsHeaders: HeadersInit,
   env: Env,
   requestId: string,
+  now: Date,
 ): Promise<Response | null> {
   if (request.method === "POST" && url.pathname === "/api/client-error") {
     return handleClientError(request, env, corsHeaders, requestId);
@@ -454,6 +456,14 @@ async function dispatchV2(
   if (request.method === "GET" && boardMatch?.[1]) {
     return json(
       await tracking.handlers.getChallengeBoard(decodeURIComponent(boardMatch[1])),
+      { headers: noStoreHeaders() },
+      corsHeaders,
+    );
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/v2/boards/trends") {
+    return json(
+      await tracking.handlers.getBoardsTrends(url.searchParams.get("window"), centralDateKey(now)),
       { headers: noStoreHeaders() },
       corsHeaders,
     );

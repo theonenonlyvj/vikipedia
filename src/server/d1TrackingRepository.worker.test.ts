@@ -3274,6 +3274,8 @@ describe("Task 4 D1 projections", () => {
       topStarts: [],
       topTargets: [],
       mostVisited: [],
+      dailyStreak: 0,
+      trend30: { avgPlacement: null, playedCount: 0, ranked: false },
     });
   });
 
@@ -3326,6 +3328,8 @@ describe("Task 4 D1 projections", () => {
         { title: "Moon", count: 3 },
         { title: "Gravity", count: 1 },
       ],
+      dailyStreak: 0,
+      trend30: { avgPlacement: null, playedCount: 0, ranked: false },
     });
     await expect(count("account_profiles")).resolves.toBe(0);
     await expect(count("account_aliases")).resolves.toBe(1);
@@ -3751,6 +3755,365 @@ describe("listChallengeDnfs", () => {
   });
 });
 
+describe("listDailyTrends (Increment 4)", () => {
+  it("computes avg placement per account across a window's dailies, deduping repeat attempts, applying the participation guard", async () => {
+    await insertDailyChallenge({ id: "trend-d1", sortOrder: 501 });
+    await insertDailyChallenge({ id: "trend-d2", sortOrder: 502 });
+    await insertDailyChallenge({ id: "trend-d3", sortOrder: 503 });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-16", challengeId: "trend-d1", selectionSource: "automatic" });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-17", challengeId: "trend-d2", selectionSource: "automatic" });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId: "trend-d3", selectionSource: "automatic" });
+
+    const accountA = "trend-account-a";
+    const accountB = "trend-account-b";
+    // Day 1: A's worse attempt then a better one (dedup must keep the best) - A places 1st, B 2nd.
+    await insertCompletedV2({ id: "d1-a-worse", accountId: accountA, elapsedMs: 9_000, completedAt: "2026-07-16T01:00:09.000Z", challengeId: "trend-d1" });
+    await insertCompletedV2({ id: "d1-a-better", accountId: accountA, elapsedMs: 5_000, completedAt: "2026-07-16T01:00:05.000Z", challengeId: "trend-d1" });
+    await insertCompletedV2({ id: "d1-b", accountId: accountB, elapsedMs: 8_000, completedAt: "2026-07-16T01:00:08.000Z", challengeId: "trend-d1" });
+    // Day 2: B places 1st, A 2nd.
+    await insertCompletedV2({ id: "d2-a", accountId: accountA, elapsedMs: 9_000, completedAt: "2026-07-17T01:00:09.000Z", challengeId: "trend-d2" });
+    await insertCompletedV2({ id: "d2-b", accountId: accountB, elapsedMs: 4_000, completedAt: "2026-07-17T01:00:04.000Z", challengeId: "trend-d2" });
+    // Day 3: only A plays, alone in 1st.
+    await insertCompletedV2({ id: "d3-a", accountId: accountA, elapsedMs: 3_000, completedAt: "2026-07-18T01:00:03.000Z", challengeId: "trend-d3" });
+
+    const { repository } = fixture();
+    const { ranked, unranked } = await repository.listDailyTrends(7, "2026-07-18");
+
+    // A: placements 1, 2, 1 -> avg 1.333... rounded to 1 decimal -> 1.3; played 3 >= guard(3) -> ranked.
+    expect(ranked).toEqual([
+      { accountId: accountA, displayName: null, avgPlacement: 1.3, playedCount: 3 },
+    ]);
+    // B: placements 2, 1 -> played 2 < guard(3) -> unranked, no avgPlacement reported.
+    expect(unranked).toEqual([
+      { accountId: accountB, displayName: null, playedCount: 2 },
+    ]);
+  });
+
+  it("only counts dailies within the requested window; lifetime has no date bound", async () => {
+    await insertDailyChallenge({ id: "trend-window-inside", sortOrder: 510 });
+    await insertDailyChallenge({ id: "trend-window-outside", sortOrder: 511 });
+    // Inside the 7d window ending 2026-07-18 (2026-07-12..2026-07-18).
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId: "trend-window-inside", selectionSource: "automatic" });
+    // 17 days before "today" - outside the 7d window.
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-01", challengeId: "trend-window-outside", selectionSource: "automatic" });
+
+    const accountId = "trend-window-account";
+    await insertCompletedV2({ id: "window-inside-run", accountId, elapsedMs: 5_000, completedAt: "2026-07-18T01:00:05.000Z", challengeId: "trend-window-inside" });
+    await insertCompletedV2({ id: "window-outside-run", accountId, elapsedMs: 5_000, completedAt: "2026-07-01T01:00:05.000Z", challengeId: "trend-window-outside" });
+
+    const { repository } = fixture();
+    const week = await repository.listDailyTrends(7, "2026-07-18");
+    const lifetime = await repository.listDailyTrends(null, "2026-07-18");
+
+    expect(week.unranked.find((entry) => entry.accountId === accountId)?.playedCount).toBe(1);
+    expect(lifetime.unranked.find((entry) => entry.accountId === accountId)?.playedCount).toBe(2);
+  });
+
+  it("ranks exactly at the participation guard boundary (30d guard = 10) and leaves one fewer play unranked", async () => {
+    const rankedAccount = "trend-guard-ranked";
+    const unrankedAccount = "trend-guard-unranked";
+    for (let index = 0; index < 10; index += 1) {
+      const challengeId = `trend-guard-challenge-${index}`;
+      const dailyDate = `2026-07-${String(9 + index).padStart(2, "0")}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 600 + index });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      await insertCompletedV2({
+        id: `${challengeId}-ranked`,
+        accountId: rankedAccount,
+        elapsedMs: 5_000,
+        completedAt: `${dailyDate}T01:00:05.000Z`,
+        challengeId,
+      });
+      if (index > 0) {
+        // Skips the very first daily -> exactly 9 plays, one short of the guard.
+        await insertCompletedV2({
+          id: `${challengeId}-unranked`,
+          accountId: unrankedAccount,
+          elapsedMs: 6_000,
+          completedAt: `${dailyDate}T01:00:06.000Z`,
+          challengeId,
+        });
+      }
+    }
+
+    const { repository } = fixture();
+    const { ranked, unranked } = await repository.listDailyTrends(30, "2026-07-18");
+
+    expect(ranked.find((entry) => entry.accountId === rankedAccount)).toMatchObject({ playedCount: 10 });
+    expect(unranked.find((entry) => entry.accountId === unrankedAccount)).toMatchObject({ playedCount: 9 });
+    expect(ranked.find((entry) => entry.accountId === unrankedAccount)).toBeUndefined();
+  });
+
+  it("does not truncate a single daily's finishers at 100 (no LIMIT, unlike listChallengePlacements)", async () => {
+    const challengeId = "trend-nolimit-challenge";
+    await insertDailyChallenge({ id: challengeId, sortOrder: 700 });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId, selectionSource: "automatic" });
+    const total = 105;
+    for (let index = 0; index < total; index += 1) {
+      await insertCompletedV2({
+        id: `nolimit-run-${index}`,
+        accountId: `nolimit-account-${index}`,
+        elapsedMs: 1_000 + index,
+        completedAt: "2026-07-18T01:00:00.000Z",
+        challengeId,
+      });
+    }
+
+    const { repository } = fixture();
+    const { unranked } = await repository.listDailyTrends(null, "2026-07-18");
+
+    expect(unranked).toHaveLength(total);
+    expect(unranked.find((entry) => entry.accountId === "nolimit-account-104")).toBeDefined();
+  }, 20_000);
+
+  it("excludes board_excluded runs from a daily's placement computation", async () => {
+    const challengeId = "trend-excluded-challenge";
+    await insertDailyChallenge({ id: challengeId, sortOrder: 810 });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId, selectionSource: "automatic" });
+    const accountId = "trend-excluded-account";
+    await insertCompletedV2({ id: "excluded-run", accountId, elapsedMs: 3_000, completedAt: "2026-07-18T01:00:03.000Z", challengeId });
+    await env.VWIKI_RACE_DB.prepare("UPDATE runs SET board_excluded = 1 WHERE id = ?").bind("excluded-run").run();
+
+    const { repository } = fixture();
+    const { ranked, unranked } = await repository.listDailyTrends(7, "2026-07-18");
+
+    expect(ranked.find((entry) => entry.accountId === accountId)).toBeUndefined();
+    expect(unranked.find((entry) => entry.accountId === accountId)).toBeUndefined();
+  });
+
+  it("resolves canonical accounts through account_aliases", async () => {
+    const canonical = "trend-alias-canonical";
+    const ghost = "trend-alias-ghost";
+    const challengeId = "trend-alias-challenge";
+    await insertDailyChallenge({ id: challengeId, sortOrder: 820 });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId, selectionSource: "automatic" });
+    await insertCompletedV2({ id: "alias-ghost-run", accountId: ghost, elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId });
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO account_aliases (alias_account_id, canonical_account_id, updated_at)
+       VALUES (?, ?, '2026-07-18T00:00:00.000Z')`,
+    ).bind(ghost, canonical).run();
+
+    const { repository } = fixture();
+    const { unranked } = await repository.listDailyTrends(7, "2026-07-18");
+    const ids = unranked.map((entry) => entry.accountId);
+
+    expect(ids).toContain(canonical);
+    expect(ids).not.toContain(ghost);
+  });
+
+  it("orders ranked entries by avgPlacement ascending, tying accounts by playedCount (more played first)", async () => {
+    const dana = "trend-order-dana";
+    const casey = "trend-order-casey";
+    await insertAccountProfile(dana, "Dana");
+    await insertAccountProfile(casey, "Casey");
+    const danaDailies = ["2026-07-15", "2026-07-16", "2026-07-17", "2026-07-18"];
+    const caseyDailies = ["2026-07-12", "2026-07-13", "2026-07-14"];
+    for (const [index, dailyDate] of danaDailies.entries()) {
+      const challengeId = `trend-order-dana-${index}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 900 + index });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      await insertCompletedV2({ id: `${challengeId}-run`, accountId: dana, elapsedMs: 5_000, completedAt: `${dailyDate}T01:00:05.000Z`, challengeId });
+    }
+    for (const [index, dailyDate] of caseyDailies.entries()) {
+      const challengeId = `trend-order-casey-${index}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 910 + index });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      await insertCompletedV2({ id: `${challengeId}-run`, accountId: casey, elapsedMs: 5_000, completedAt: `${dailyDate}T01:00:05.000Z`, challengeId });
+    }
+
+    const { repository } = fixture();
+    const { ranked } = await repository.listDailyTrends(7, "2026-07-18");
+
+    // Both solo every daily they played -> avg placement 1.0 for each (tied);
+    // Dana played 4, Casey 3 - more played must sort first on the tie.
+    expect(ranked.map((entry) => entry.accountId)).toEqual([dana, casey]);
+  });
+
+  it("breaks an avgPlacement + playedCount tie alphabetically by display name", async () => {
+    const beta = "trend-order-beta";
+    const alpha = "trend-order-alpha";
+    await insertAccountProfile(beta, "Beta");
+    await insertAccountProfile(alpha, "Alpha");
+    // `daily_features.daily_date` is a system-wide primary key (one daily
+    // per calendar date) - each account solos a distinct set of dates
+    // within the 7d window so neither ever competes with the other, and
+    // both land on the exact same avg placement (1.0) and played count (3).
+    const betaDailies = ["2026-07-13", "2026-07-14", "2026-07-15"];
+    const alphaDailies = ["2026-07-16", "2026-07-17", "2026-07-18"];
+    for (const [index, dailyDate] of betaDailies.entries()) {
+      const challengeId = `trend-order-beta-${index}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 920 + index });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      await insertCompletedV2({ id: `${challengeId}-run`, accountId: beta, elapsedMs: 5_000, completedAt: `${dailyDate}T01:00:05.000Z`, challengeId });
+    }
+    for (const [index, dailyDate] of alphaDailies.entries()) {
+      const challengeId = `trend-order-alpha-${index}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 930 + index });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      await insertCompletedV2({ id: `${challengeId}-run`, accountId: alpha, elapsedMs: 5_000, completedAt: `${dailyDate}T01:00:05.000Z`, challengeId });
+    }
+
+    const { repository } = fixture();
+    const { ranked } = await repository.listDailyTrends(7, "2026-07-18");
+
+    expect(ranked.map((entry) => entry.accountId)).toEqual([alpha, beta]);
+  });
+});
+
+describe("getAccountDailyStreak (Increment 4)", () => {
+  it("counts consecutive played Central dates ending today", async () => {
+    const accountId = "streak-consecutive";
+    for (const dailyDate of ["2026-07-16", "2026-07-17", "2026-07-18"]) {
+      const challengeId = `streak-consecutive-${dailyDate}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 1000 + Number(dailyDate.slice(-2)) });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      await insertCompletedV2({ id: `${challengeId}-run`, accountId, elapsedMs: 4_000, completedAt: `${dailyDate}T01:00:04.000Z`, challengeId });
+    }
+
+    const { repository } = fixture();
+    await expect(repository.getAccountDailyStreak(accountId, "2026-07-18")).resolves.toBe(3);
+  });
+
+  it("silently resets on a missed day - a played day before a miss doesn't count", async () => {
+    const accountId = "streak-missed-day";
+    const played = ["2026-07-16", "2026-07-18"]; // 2026-07-17 has a daily but is NOT played.
+    for (const dailyDate of ["2026-07-16", "2026-07-17", "2026-07-18"]) {
+      const challengeId = `streak-missed-${dailyDate}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 1100 + Number(dailyDate.slice(-2)) });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      if (played.includes(dailyDate)) {
+        await insertCompletedV2({ id: `${challengeId}-run`, accountId, elapsedMs: 4_000, completedAt: `${dailyDate}T01:00:04.000Z`, challengeId });
+      }
+    }
+
+    const { repository } = fixture();
+    // Today (07-18) counts; yesterday (07-17) wasn't played -> silent reset,
+    // the earlier 07-16 play doesn't carry through the gap.
+    await expect(repository.getAccountDailyStreak(accountId, "2026-07-18")).resolves.toBe(1);
+  });
+
+  it("doesn't break the streak when today simply hasn't been played yet", async () => {
+    const accountId = "streak-today-pending";
+    for (const dailyDate of ["2026-07-16", "2026-07-17", "2026-07-18"]) {
+      const challengeId = `streak-pending-${dailyDate}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 1200 + Number(dailyDate.slice(-2)) });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      if (dailyDate !== "2026-07-18") {
+        await insertCompletedV2({ id: `${challengeId}-run`, accountId, elapsedMs: 4_000, completedAt: `${dailyDate}T01:00:04.000Z`, challengeId });
+      }
+    }
+
+    const { repository } = fixture();
+    await expect(repository.getAccountDailyStreak(accountId, "2026-07-18")).resolves.toBe(2);
+  });
+
+  it("a DNF-only today still doesn't break the streak (the day hasn't passed)", async () => {
+    const accountId = "streak-today-dnf";
+    const yesterdayChallengeId = "streak-dnf-yesterday";
+    const todayChallengeId = "streak-dnf-today";
+    await insertDailyChallenge({ id: yesterdayChallengeId, sortOrder: 1300 });
+    await insertDailyChallenge({ id: todayChallengeId, sortOrder: 1301 });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-17", challengeId: yesterdayChallengeId, selectionSource: "automatic" });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId: todayChallengeId, selectionSource: "automatic" });
+    await insertCompletedV2({ id: "streak-dnf-yesterday-run", accountId, elapsedMs: 4_000, completedAt: "2026-07-17T01:00:04.000Z", challengeId: yesterdayChallengeId });
+    await insertAbandonedV2({ id: "streak-dnf-today-run", accountId, clickCount: 3, elapsedMs: 5_000, abandonedAt: "2026-07-18T01:00:05.000Z", challengeId: todayChallengeId });
+
+    const { repository } = fixture();
+    await expect(repository.getAccountDailyStreak(accountId, "2026-07-18")).resolves.toBe(1);
+  });
+
+  it("is alias-resolved", async () => {
+    const canonical = "streak-alias-canonical";
+    const ghost = "streak-alias-ghost";
+    const challengeId = "streak-alias-challenge";
+    await insertDailyChallenge({ id: challengeId, sortOrder: 1400 });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId, selectionSource: "automatic" });
+    await insertCompletedV2({ id: "streak-alias-run", accountId: ghost, elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId });
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO account_aliases (alias_account_id, canonical_account_id, updated_at)
+       VALUES (?, ?, '2026-07-18T00:00:00.000Z')`,
+    ).bind(ghost, canonical).run();
+
+    const { repository } = fixture();
+    await expect(repository.getAccountDailyStreak(canonical, "2026-07-18")).resolves.toBe(1);
+  });
+
+  it("returns 0 for an account that has never played", async () => {
+    const { repository } = fixture();
+    await expect(repository.getAccountDailyStreak("streak-never-played", "2026-07-18")).resolves.toBe(0);
+  });
+
+  it("treats a genuine gap in daily_features itself as a break, same as a missed day", async () => {
+    const accountId = "streak-catalog-gap";
+    // 2026-07-17 has no daily_features row at all (a real catalog gap).
+    for (const dailyDate of ["2026-07-16", "2026-07-18"]) {
+      const challengeId = `streak-gap-${dailyDate}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 1500 + Number(dailyDate.slice(-2)) });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+      await insertCompletedV2({ id: `${challengeId}-run`, accountId, elapsedMs: 4_000, completedAt: `${dailyDate}T01:00:04.000Z`, challengeId });
+    }
+
+    const { repository } = fixture();
+    await expect(repository.getAccountDailyStreak(accountId, "2026-07-18")).resolves.toBe(1);
+  });
+});
+
+describe("GET /api/v2/boards/trends", () => {
+  it("returns window/guard/ranked/unranked, unauthenticated", async () => {
+    const challengeId = "boards-trends-route-challenge";
+    await insertDailyChallenge({ id: challengeId, sortOrder: 1600 });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId, selectionSource: "automatic" });
+    await insertCompletedV2({ id: "boards-trends-route-run", accountId: "boards-trends-account", elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId });
+
+    const { repository } = fixture({ now: "2026-07-18T20:00:00.000Z" });
+    const worker = createWorker({
+      now: () => new Date("2026-07-18T20:00:00.000Z"),
+      createTracking: () => ({
+        handlers: createApiHandlers(repository),
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => account,
+      } as unknown as WorkerTracking),
+    });
+
+    const response = await worker.fetch(
+      new Request("https://worker.example/api/v2/boards/trends?window=7"),
+      workerEnv(),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      window: "7",
+      guard: 3,
+      ranked: [],
+      unranked: [
+        { accountId: "boards-trends-account", displayName: null, playedCount: 1 },
+      ],
+    });
+  });
+
+  it("rejects an invalid window with 400", async () => {
+    const { repository } = fixture();
+    const worker = createWorker({
+      now: () => new Date("2026-07-18T20:00:00.000Z"),
+      createTracking: () => ({
+        handlers: createApiHandlers(repository),
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => account,
+      } as unknown as WorkerTracking),
+    });
+
+    const response = await worker.fetch(
+      new Request("https://worker.example/api/v2/boards/trends?window=nope"),
+      workerEnv(),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "invalid_window" } });
+  });
+});
+
 describe("GET /api/v2/challenges/:id/board", () => {
   it("returns the challenge id, deduped placements, and DNFs together, unauthenticated", async () => {
     await insertCompletedV2({
@@ -3875,6 +4238,7 @@ async function insertCompletedV2(input: {
   accountId: string;
   elapsedMs: number;
   completedAt: string;
+  challengeId?: string;
 }) {
   await env.VWIKI_RACE_DB.prepare(
     `INSERT INTO runs
@@ -3883,13 +4247,14 @@ async function insertCompletedV2(input: {
         target_title, final_title, start_page_id, target_page_id, last_page_id,
         last_title, expires_at, ranked_eligible, protocol_version, created_at,
         updated_at)
-     VALUES (?, 'challenge-0001', ?, ?, 'completed',
+     VALUES (?, ?, ?, ?, 'completed',
              '2026-07-14T01:00:00.000Z', ?, ?, ?, 1, 'Moon', 'Gravity',
              'Gravity', 19331, 38579, 38579, 'Gravity',
              '2026-07-15T01:00:00.000Z', 1, 2,
              '2026-07-14T01:00:00.000Z', ?)`,
   ).bind(
     input.id,
+    input.challengeId ?? "challenge-0001",
     input.accountId,
     input.accountId,
     input.completedAt,
@@ -3905,6 +4270,7 @@ async function insertAbandonedV2(input: {
   clickCount: number;
   elapsedMs: number;
   abandonedAt: string;
+  challengeId?: string;
 }) {
   await env.VWIKI_RACE_DB.prepare(
     `INSERT INTO runs
@@ -3913,13 +4279,14 @@ async function insertAbandonedV2(input: {
         target_title, start_page_id, target_page_id, last_page_id,
         last_title, expires_at, ranked_eligible, protocol_version, created_at,
         updated_at)
-     VALUES (?, 'challenge-0001', ?, ?, 'abandoned',
+     VALUES (?, ?, ?, ?, 'abandoned',
              '2026-07-14T01:00:00.000Z', ?, ?, ?, ?, 'Moon', 'Gravity',
              19331, 38579, 38579, 'Gravity',
              '2026-07-15T01:00:00.000Z', 0, 2,
              '2026-07-14T01:00:00.000Z', ?)`,
   ).bind(
     input.id,
+    input.challengeId ?? "challenge-0001",
     input.accountId,
     input.accountId,
     input.abandonedAt,
@@ -4143,6 +4510,21 @@ async function insertEditorialFeature(
     input.selectionSource,
     input.queueEntryId ?? null,
   ).run();
+}
+
+async function insertDailyChallenge(input: { id: string; sortOrder: number }): Promise<void> {
+  await env.VWIKI_RACE_DB.prepare(
+    `INSERT INTO challenges
+       (id, label, start_title, target_title, ruleset, sort_order, is_active, created_at)
+     VALUES (?, ?, 'Moon', 'Gravity', 'ranked_classic', ?, 1, '2026-07-14T00:00:00.000Z')`,
+  ).bind(input.id, input.id, input.sortOrder).run();
+}
+
+async function insertAccountProfile(accountId: string, publicName: string): Promise<void> {
+  await env.VWIKI_RACE_DB.prepare(
+    `INSERT INTO account_profiles (account_id, public_name, identity_status, updated_at)
+     VALUES (?, ?, 'claimed', '2026-07-14T00:00:00.000Z')`,
+  ).bind(accountId, publicName).run();
 }
 
 async function runStatus(runId: string): Promise<string | undefined> {

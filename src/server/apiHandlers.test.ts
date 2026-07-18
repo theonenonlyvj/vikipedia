@@ -687,6 +687,50 @@ describe("api handlers", () => {
       status: 400,
     });
   });
+
+  it("composes Boards' rolling-trend response, echoing the validated window and its guard", async () => {
+    const repository = fakeRepository();
+    const listDailyTrends = vi.fn(async () => ({
+      ranked: [{ accountId: "acc-1", displayName: "Vijay", avgPlacement: 1.3, playedCount: 3 }],
+      unranked: [{ accountId: "acc-2", displayName: null, playedCount: 1 }],
+    }));
+    Object.assign(repository, { listDailyTrends });
+    const handlers = createApiHandlers(repository);
+
+    await expect(handlers.getBoardsTrends("7", "2026-07-18")).resolves.toEqual({
+      window: "7",
+      guard: 3,
+      ranked: [{ accountId: "acc-1", displayName: "Vijay", avgPlacement: 1.3, playedCount: 3 }],
+      unranked: [{ accountId: "acc-2", displayName: null, playedCount: 1 }],
+    });
+    expect(listDailyTrends).toHaveBeenCalledWith(7, "2026-07-18");
+  });
+
+  it("maps window=30 to a guard of 10 and window=lifetime to a null windowDays", async () => {
+    const repository = fakeRepository();
+    const listDailyTrends = vi.fn(async () => ({ ranked: [], unranked: [] }));
+    Object.assign(repository, { listDailyTrends });
+    const handlers = createApiHandlers(repository);
+
+    await expect(handlers.getBoardsTrends("30", "2026-07-18")).resolves.toMatchObject({ window: "30", guard: 10 });
+    expect(listDailyTrends).toHaveBeenCalledWith(30, "2026-07-18");
+
+    await expect(handlers.getBoardsTrends("lifetime", "2026-07-18")).resolves.toMatchObject({ window: "lifetime", guard: 10 });
+    expect(listDailyTrends).toHaveBeenCalledWith(null, "2026-07-18");
+  });
+
+  it("rejects a window outside 7|30|lifetime", async () => {
+    const handlers = createApiHandlers(fakeRepository());
+
+    await expect(handlers.getBoardsTrends("14", "2026-07-18")).rejects.toMatchObject({
+      code: "invalid_window",
+      status: 400,
+    });
+    await expect(handlers.getBoardsTrends(null, "2026-07-18")).rejects.toMatchObject({
+      code: "invalid_window",
+      status: 400,
+    });
+  });
 });
 
 describe("Worker API route versions", () => {

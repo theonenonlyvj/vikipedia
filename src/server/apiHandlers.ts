@@ -1,8 +1,11 @@
 import { getSortedChallenges } from "../domain/challenges";
+import { dailyTrendGuard } from "../domain/dailyTrends";
 import { optionalNumber, requiredString } from "./http";
 import { ApiError } from "./http";
 import type {
   AbandonRunResponse,
+  BoardsTrendsResponse,
+  BoardsTrendWindow,
   ChallengeBoardResponse,
   ChallengesResponse,
   ClickRequest,
@@ -61,6 +64,7 @@ export interface ApiHandlers {
   ): Promise<AbandonRunResponse>;
   listLeaderboard(challengeId: string): Promise<LeaderboardResponse>;
   getChallengeBoard(challengeId: string): Promise<ChallengeBoardResponse>;
+  getBoardsTrends(windowParam: string | null, todayCentral: string): Promise<BoardsTrendsResponse>;
   getRunPath(runId: string): Promise<RunPathResponse>;
   listDailyAdminState(): Promise<DailyAdminStateResponse>;
   approveDailyNomination(
@@ -387,6 +391,17 @@ export function createApiHandlers(
       };
     },
 
+    async getBoardsTrends(windowParam, todayCentral) {
+      const window = parseBoardsTrendWindow(windowParam);
+      const windowDays = window === "lifetime" ? null : (Number(window) as 7 | 30);
+      const guard = dailyTrendGuard(windowDays);
+      const { ranked, unranked } = await dailyProtocol(repository).listDailyTrends(
+        windowDays,
+        requiredString(todayCentral, "invalid_today_central", "A Central date is required."),
+      );
+      return { window, guard, ranked, unranked };
+    },
+
     async getRunPath(runId) {
       return {
         path: await repository.getRunPath(
@@ -586,6 +601,15 @@ function boundedRequiredString(
 
 function dailyProtocol(repository: TrackingRepository): RunProtocolRepository {
   return repository as RunProtocolRepository;
+}
+
+function parseBoardsTrendWindow(value: string | null): BoardsTrendWindow {
+  if (value === "7" || value === "30" || value === "lifetime") return value;
+  throw new ApiError(
+    "invalid_window",
+    "window must be 7, 30, or lifetime.",
+    400,
+  );
 }
 
 function dailyRequiredString(value: unknown, code: string, message: string): string {

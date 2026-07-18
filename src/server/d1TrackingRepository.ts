@@ -7,12 +7,16 @@ import type {
   DailyQueueEntry,
 } from "../domain/dailyEditorial";
 import { dailyFlavorForCentralDate } from "../domain/dailyEditorial";
+import { centralDateKey, previousCentralDate } from "../domain/challengeSelection";
+import { dailyTrendGuard, dailyTrendWindowStart } from "../domain/dailyTrends";
 import type {
   AccountStatus,
   AccountStats,
   AbandonRunTransition,
   AuthorizedAccount,
   Challenge,
+  DailyTrendRankedEntry,
+  DailyTrendUnrankedEntry,
   LeaderboardContext,
   RankedLeaderboardRow,
   RunTransition,
@@ -2417,6 +2421,144 @@ export function createD1TrackingRepository(options: {
       }));
     },
 
+    async listDailyTrends(windowDays, todayCentral) {
+      const dateFilter = windowDays === null
+        ? ""
+        : "WHERE daily_date BETWEEN ? AND ?";
+      const dateBindings = windowDays === null
+        ? []
+        : [dailyTrendWindowStart(todayCentral, windowDays), todayCentral];
+
+      // Deliberately no LIMIT anywhere in this query (Task 3.1's flagged
+      // "revisit at Increment 4"): a rolling trend must weigh every
+      // eligible finisher of each daily, not just the first 100 - a
+      // truncated per-daily field would silently distort every account's
+      // average once aggregated across many dailies.
+      const { results } = await db
+        .prepare(
+          `WITH windowed_dailies AS (
+             SELECT daily_date, challenge_id FROM daily_features ${dateFilter}
+           ), resolved AS (
+             SELECT wd.challenge_id,
+                    coalesce(a.canonical_account_id, r.canonical_account_id, r.account_id) account_id,
+                    r.id, r.elapsed_ms, r.click_count, r.completed_at
+             FROM windowed_dailies wd
+             JOIN runs r ON r.challenge_id = wd.challenge_id
+             LEFT JOIN account_aliases a
+               ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
+             WHERE r.board_excluded = 0
+               AND r.status = 'completed'
+               AND r.elapsed_ms IS NOT NULL
+               AND r.completed_at IS NOT NULL
+               AND ((r.protocol_version = 2 AND r.ranked_eligible = 1)
+                    OR r.protocol_version = 1)
+           ), best AS (
+             SELECT *, row_number() OVER (
+               PARTITION BY challenge_id, account_id
+               ORDER BY elapsed_ms ASC, click_count ASC, completed_at ASC, id
+             ) attempt_rank
+             FROM resolved
+           ), placements AS (
+             SELECT challenge_id, account_id,
+                    row_number() OVER (
+                      PARTITION BY challenge_id
+                      ORDER BY elapsed_ms ASC, click_count ASC, completed_at ASC, id
+                    ) placement
+             FROM best
+             WHERE attempt_rank = 1
+           )
+           SELECT placements.account_id, avg(placements.placement) avg_placement,
+                  count(*) played_count, p.public_name AS display_name
+           FROM placements
+           LEFT JOIN account_profiles p ON p.account_id = placements.account_id
+           GROUP BY placements.account_id, p.public_name`,
+        )
+        .bind(...dateBindings)
+        .all<DailyTrendQueryRow>();
+
+      const guard = dailyTrendGuard(windowDays);
+      const ranked: DailyTrendRankedEntry[] = [];
+      const unranked: DailyTrendUnrankedEntry[] = [];
+      for (const row of results) {
+        const playedCount = Number(row.played_count);
+        const displayName = row.display_name ?? null;
+        if (playedCount >= guard) {
+          ranked.push({
+            accountId: row.account_id,
+            displayName,
+            avgPlacement: Math.round(Number(row.avg_placement) * 10) / 10,
+            playedCount,
+          });
+        } else {
+          unranked.push({ accountId: row.account_id, displayName, playedCount });
+        }
+      }
+      ranked.sort((left, right) =>
+        left.avgPlacement - right.avgPlacement ||
+        right.playedCount - left.playedCount ||
+        (left.displayName ?? "").localeCompare(right.displayName ?? ""));
+      unranked.sort((left, right) =>
+        right.playedCount - left.playedCount ||
+        (left.displayName ?? "").localeCompare(right.displayName ?? ""));
+
+      return { ranked, unranked };
+    },
+
+    async getAccountDailyStreak(accountId, todayCentral) {
+      const { results: dailyRows } = await db
+        .prepare(
+          `SELECT daily_date, challenge_id FROM daily_features
+           WHERE daily_date <= ?
+           ORDER BY daily_date DESC
+           LIMIT 500`,
+        )
+        .bind(todayCentral)
+        .all<{ daily_date: string; challenge_id: string }>();
+
+      if (!dailyRows.length) return 0;
+
+      const challengeIds = dailyRows.map((row) => row.challenge_id);
+      const placeholders = challengeIds.map(() => "?").join(", ");
+      const { results: playedRows } = await db
+        .prepare(
+          `SELECT DISTINCT r.challenge_id
+           FROM runs r
+           LEFT JOIN account_aliases a
+             ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
+           WHERE coalesce(a.canonical_account_id, r.canonical_account_id, r.account_id) = ?
+             AND r.board_excluded = 0
+             AND r.status = 'completed'
+             AND r.elapsed_ms IS NOT NULL
+             AND r.completed_at IS NOT NULL
+             AND ((r.protocol_version = 2 AND r.ranked_eligible = 1)
+                  OR r.protocol_version = 1)
+             AND r.challenge_id IN (${placeholders})`,
+        )
+        .bind(accountId, ...challengeIds)
+        .all<{ challenge_id: string }>();
+
+      const playedChallengeIds = new Set(playedRows.map((row) => row.challenge_id));
+      const dailyByDate = new Map(dailyRows.map((row) => [row.daily_date, row.challenge_id]));
+
+      const isPlayed = (date: string): boolean => {
+        const challengeId = dailyByDate.get(date);
+        return challengeId !== undefined && playedChallengeIds.has(challengeId);
+      };
+
+      // "Today not yet played doesn't break the streak until the day
+      // passes" (spec): only start counting today itself if it was already
+      // played; otherwise the walk starts at yesterday, silently skipping
+      // over an in-progress/unplayed today rather than treating it as a
+      // miss.
+      let cursor = isPlayed(todayCentral) ? todayCentral : previousCentralDate(todayCentral);
+      let streak = 0;
+      while (isPlayed(cursor)) {
+        streak += 1;
+        cursor = previousCentralDate(cursor);
+      }
+      return streak;
+    },
+
     async setRunBoardExclusion(runId, excluded) {
       const row = await db
         .prepare(
@@ -2546,6 +2688,23 @@ export function createD1TrackingRepository(options: {
                    SELECT title, count(*) count FROM visits
                    GROUP BY title ORDER BY count DESC, title ASC LIMIT 5`),
       ]);
+      // Increment 4: streak + 30-day trend, both alias-resolved against the
+      // same canonical `account.accountId` the rest of this method already
+      // resolved to. `trend30` reuses `listDailyTrends` wholesale (rather
+      // than a bespoke single-account query) so Boards' 30d segment and this
+      // "my stats" number can never disagree - it's the exact same
+      // computation, just read for one account instead of rendered for all.
+      const todayCentral = centralDateKey(now());
+      const [dailyStreak, trend] = await Promise.all([
+        repository.getAccountDailyStreak(account.accountId, todayCentral),
+        repository.listDailyTrends(30, todayCentral),
+      ]);
+      const selfRanked = trend.ranked.find((entry) => entry.accountId === account.accountId);
+      const selfUnranked = trend.unranked.find((entry) => entry.accountId === account.accountId);
+      const trend30 = selfRanked
+        ? { avgPlacement: selfRanked.avgPlacement, playedCount: selfRanked.playedCount, ranked: true }
+        : { avgPlacement: null, playedCount: selfUnranked?.playedCount ?? 0, ranked: false };
+
       return {
         totals: {
           attempts: Number(totals?.attempts ?? 0),
@@ -2561,6 +2720,8 @@ export function createD1TrackingRepository(options: {
         topStarts,
         topTargets,
         mostVisited,
+        dailyStreak,
+        trend30,
       } satisfies AccountStats;
     },
   };
@@ -4566,6 +4727,13 @@ interface ChallengeDnfQueryRow {
   elapsed_ms: number;
   click_count: number;
   abandoned_at: string;
+  display_name?: string | null;
+}
+
+interface DailyTrendQueryRow {
+  account_id: string;
+  avg_placement: number;
+  played_count: number;
   display_name?: string | null;
 }
 
