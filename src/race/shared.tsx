@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { writeTextWithTimeout } from "../services/challengeShare";
 
 /**
@@ -35,48 +35,65 @@ export function copyTextFallback(text: string): boolean {
   }
 }
 
-export function ChallengeShareButton({ challengeId }: { challengeId: string }) {
-  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");
-  const activeChallengeId = useRef(challengeId);
+export type ClipboardShareStatus = "idle" | "copying" | "copied" | "failed";
+
+/**
+ * Clipboard-write machinery shared by every "copy/share" affordance in the
+ * race flow (challenge-link copy today, Results' composed share line). One
+ * place owns the timeout + legacy-execCommand fallback + stale-request
+ * guarding so beats don't reimplement it.
+ */
+export function useClipboardShare(text: string): {
+  status: ClipboardShareStatus;
+  copy: () => Promise<void>;
+} {
+  const [status, setStatus] = useState<ClipboardShareStatus>("idle");
+  const activeText = useRef(text);
   const copyGeneration = useRef(0);
-  const shareUrl = challengeShareUrl(challengeId);
-  activeChallengeId.current = challengeId;
+  activeText.current = text;
 
   useEffect(() => {
     copyGeneration.current += 1;
     setStatus("idle");
-  }, [challengeId]);
+  }, [text]);
 
-  async function copyChallengeLink() {
+  const copy = useCallback(async () => {
     const generation = ++copyGeneration.current;
     const requestIsCurrent = () =>
-      generation === copyGeneration.current && activeChallengeId.current === challengeId;
+      generation === copyGeneration.current && activeText.current === text;
     setStatus("copying");
     try {
       if (!navigator.clipboard?.writeText) {
         throw new Error("Clipboard API unavailable.");
       }
       await writeTextWithTimeout(
-        (text) => navigator.clipboard.writeText(text),
-        shareUrl,
+        (value) => navigator.clipboard.writeText(value),
+        text,
         1_200,
       );
       if (!requestIsCurrent()) return;
       setStatus("copied");
     } catch {
       if (!requestIsCurrent()) return;
-      const fallbackCopied = copyTextFallback(shareUrl);
+      const fallbackCopied = copyTextFallback(text);
       if (!requestIsCurrent()) return;
       setStatus(fallbackCopied ? "copied" : "failed");
     }
-  }
+  }, [text]);
+
+  return { status, copy };
+}
+
+export function ChallengeShareButton({ challengeId }: { challengeId: string }) {
+  const shareUrl = challengeShareUrl(challengeId);
+  const { status, copy } = useClipboardShare(shareUrl);
 
   return (
     <div className="challenge-share">
       <button
         className="secondary-button"
         disabled={status === "copying"}
-        onClick={() => void copyChallengeLink()}
+        onClick={() => void copy()}
         type="button"
       >
         Copy challenge link
