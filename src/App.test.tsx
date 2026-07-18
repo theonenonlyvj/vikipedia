@@ -173,6 +173,7 @@ describe("VWiki Race app", () => {
     await userEvent.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );
+    await userEvent.click(await screen.findByRole("button", { name: /start race/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     expect(screen.queryByRole("link", { name: "Feedback" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Click here" })).toBeNull();
@@ -204,6 +205,7 @@ describe("VWiki Race app", () => {
     expect(within(preview).queryByRole("link", { name: /^fruit$/i })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     expect(screen.queryByRole("region", { name: /target preview/i })).toBeNull();
     const targetReference = screen.getByRole("group", { name: /target reference/i });
@@ -297,6 +299,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     const identityDialog = await screen.findByRole("dialog", { name: /save your stats/i });
     expect(identityDialog).toBeVisible();
@@ -328,6 +331,7 @@ describe("VWiki Race app", () => {
     await user.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     expect(
       await screen.findByRole("dialog", { name: /save your stats/i }),
@@ -347,6 +351,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
     const options = within(dialog).getByRole("group", { name: /identity options/i });
@@ -373,6 +378,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
@@ -397,6 +403,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "different-pass");
@@ -423,6 +430,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "Mike Smith");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
@@ -450,6 +458,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "abc");
     await user.type(screen.getByLabelText(/confirm password/i), "abc");
@@ -480,6 +489,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
@@ -502,6 +512,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(screen.getByRole("button", { name: /^guest$/i }));
     await user.type(screen.getByLabelText(/display name/i), "vijay");
     await user.click(screen.getByRole("button", { name: /continue as guest/i }));
@@ -517,6 +528,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(screen.getByRole("button", { name: /log in \/ existing/i }));
     const username = screen.getByLabelText(/^username$/i) as HTMLInputElement;
     const password = screen.getByLabelText(/^password$/i) as HTMLInputElement;
@@ -558,6 +570,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(screen.getByRole("button", { name: /log in \/ existing/i }));
     await user.type(screen.getByLabelText(/^username$/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
@@ -599,6 +612,7 @@ describe("VWiki Race app", () => {
     );
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(screen.getByRole("button", { name: /log in \/ existing/i }));
     await user.type(screen.getByLabelText(/^username$/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
@@ -606,7 +620,6 @@ describe("VWiki Race app", () => {
 
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull();
-    expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent("vijay");
   });
 
   it("starts immediately for claimed sessions", async () => {
@@ -624,12 +637,10 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={storage} />);
 
     await userEvent.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /start race/i }));
 
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull();
-    expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent(
-      "Vijay",
-    );
     expect(screen.getByRole("link", { name: /source revision/i })).toHaveAttribute(
       "href",
       expect.stringContaining("oldid="),
@@ -656,6 +667,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
     expect(await screen.findByText(/target reached/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: /play again/i }));
@@ -682,6 +694,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     expect(await screen.findByRole("dialog", { name: /save your stats/i })).toBeVisible();
     expect(screen.getByRole("button", { name: /create vgames account/i })).toBeVisible();
@@ -724,6 +737,7 @@ describe("VWiki Race app", () => {
     await user.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(screen.getByRole("button", { name: /^guest$/i }));
     await user.click(await screen.findByRole("button", { name: /continue as guest/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
@@ -732,7 +746,6 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
     expect(await screen.findByText(/target reached/i)).toBeVisible();
-    expect(await screen.findByText("Vijay")).toBeVisible();
     expect(screen.getAllByText(/1 click/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/1\.5s/i).length).toBeGreaterThanOrEqual(1);
     await waitFor(() => {
@@ -768,6 +781,7 @@ describe("VWiki Race app", () => {
     await user.click(
       await screen.findByRole("button", { name: /start challenge #1/i }),
     );
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
 
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
@@ -790,6 +804,7 @@ describe("VWiki Race app", () => {
       render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
       await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+      await user.click(await screen.findByRole("button", { name: /start race/i }));
       expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
       scrollIntoView.mockClear();
 
@@ -825,6 +840,7 @@ describe("VWiki Race app", () => {
     expect(beforeStart.defaultPrevented).toBe(false);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     const duringRun = new KeyboardEvent("keydown", {
       key: "f",
@@ -852,6 +868,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
     await waitFor(() => expect(clickRequestBodies(fetchImpl)).toHaveLength(1));
 
@@ -869,6 +886,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
     expect(await screen.findByRole("button", { name: /retry click/i })).toBeVisible();
@@ -880,18 +898,19 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     const endRun = screen.getByRole("button", { name: /^end run$/i });
     expect(endRun).toBeEnabled();
     // Locks in the dedicated styling hook so the control reads as an obvious,
     // actionable "end / give up" affordance rather than a bare header button.
     expect(endRun).toHaveClass("end-run-button");
-    // The header is always in its "compact" layout while a run is active
-    // (see headerState in App.tsx), which previously hid this exact button
-    // via a `.player-gate button:first-child` CSS rule. Guard the DOM shape
-    // that rule keys off so a regression there is caught here too.
-    expect(endRun.closest(".app-shell")).toHaveClass("header-compact");
-    expect(endRun).toBe(endRun.parentElement?.firstElementChild);
+    // Zero global chrome during an active race: End Run lives in the slim
+    // race HUD inside the full-screen takeover, not the old app header/
+    // tabbar (which no longer render at all while engaged - see (a) below).
+    expect(endRun.closest(".race-takeover")).not.toBeNull();
+    expect(endRun.closest(".race-hud")).not.toBeNull();
+    expect(screen.queryByRole("navigation", { name: /vwiki race views/i })).toBeNull();
 
     await user.click(endRun);
     expect(screen.getByRole("dialog", { name: /end this run/i })).toBeVisible();
@@ -912,6 +931,7 @@ describe("VWiki Race app", () => {
     );
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     const metrics = screen.getByLabelText(/current run/i);
     const timer = within(metrics).getByText("Timer").nextElementSibling;
     expect(timer).toHaveTextContent("0.0s");
@@ -942,6 +962,7 @@ describe("VWiki Race app", () => {
     );
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     const link = await screen.findByRole("link", { name: /fruit/i });
     now = 2_000;
     await act(async () => {
@@ -959,6 +980,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
     expect(await screen.findByText(/target reached/i)).toBeVisible();
     expect(screen.getByText(/personal best/i)).toBeVisible();
@@ -967,13 +989,31 @@ describe("VWiki Race app", () => {
     const article = screen.getByRole("article");
     expect(result?.compareDocumentPosition(article)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(screen.getByRole("button", { name: /play again/i })).toBeVisible();
+
+    // "View leaderboard" exits the full-screen results takeover back to the
+    // normal shell's Leaderboard tab (Results itself stays unchanged this
+    // increment - see the race-flow spec's Results beat).
     await user.click(screen.getByRole("button", { name: /view leaderboard/i }));
     expect(screen.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: /^play$/i }));
-    await user.click(screen.getByRole("button", { name: /choose another challenge/i }));
-    expect(screen.getByRole("heading", { name: "Challenges" })).toBeVisible();
+    expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
     await waitFor(() => expect(leaderboardCalls(fetchImpl, "challenge-0001")).toBe(2));
     expect(completeRunCalls(fetchImpl)).toBe(0);
+  });
+
+  it("exits the results takeover to Challenges when Choose another challenge is clicked", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+    expect(await screen.findByText(/target reached/i)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /choose another challenge/i }));
+
+    expect(screen.getByRole("heading", { name: "Challenges" })).toBeVisible();
+    expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
+    expect(screen.queryByText(/target reached/i)).toBeNull();
   });
 
   it("locks solution-bearing views throughout an active run", async () => {
@@ -984,11 +1024,16 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("button", { name: /leaderboard/i }));
     expect(await screen.findByText(/view winning path/i)).toBeVisible();
     await user.click(screen.getByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
-    expect(screen.getByRole("button", { name: /^play$/i })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: /leaderboard/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /challenges/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /stats/i })).toBeDisabled();
+    // Zero chrome, not "disabled" chrome: the full-screen race takeover
+    // deletes the "why are Leaderboard/Stats visible-but-disabled mid-race?"
+    // problem at the root by not rendering the tabbar/header at all.
+    await screen.findByRole("heading", { name: "Apple" });
+    expect(screen.queryByRole("navigation", { name: /vwiki race views/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^leaderboard$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^challenges$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^stats$/i })).toBeNull();
     expect(screen.queryByText(/view winning path/i)).toBeNull();
   });
 
@@ -1000,6 +1045,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
     expect(await screen.findByText(/not a personal best/i)).toBeVisible();
@@ -1012,10 +1058,11 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
     expect(await screen.findByText(/target reached/i)).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: /challenges/i }));
+    await user.click(screen.getByRole("button", { name: /choose another challenge/i }));
     const challengeTwo = screen.getByRole("button", { name: /challenge #2/i });
     expect(challengeTwo).toBeEnabled();
     await user.click(challengeTwo);
@@ -1032,9 +1079,10 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
     expect(await screen.findByText(/target reached/i)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: /challenges/i }));
+    await user.click(screen.getByRole("button", { name: /choose another challenge/i }));
     await user.click(screen.getByRole("button", { name: /challenge #2/i }));
 
     expect(screen.queryByText(/target reached/i)).toBeNull();
@@ -1050,6 +1098,7 @@ describe("VWiki Race app", () => {
 
     const startButton = await screen.findByRole("button", { name: /start challenge #1/i });
     await user.click(startButton);
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
     expect(dialog).toBeVisible();
     expect(storage.getItem("vwiki-race:vgames-session")).toBeNull();
@@ -1070,6 +1119,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     const fruitCallsBeforeClick = wikipediaArticleCalls(fetchImpl, "Fruit");
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
@@ -1096,7 +1146,8 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 
-    const trigger = await screen.findByRole("button", { name: /start challenge #1/i });
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    const trigger = await screen.findByRole("button", { name: /start race/i });
     await user.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
     expect(document.body.style.overflow).toBe("hidden");
@@ -1137,46 +1188,51 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeEnabled();
   });
 
-  it("locks recovery challenge creation and history as well as selection", async () => {
+  it("locks out challenge browsing during active-run recovery and honors the back-gesture lock", async () => {
     const storage = claimedStorage();
     const fetchImpl = createFetchMock({
       activeRun: activeRunFixture({ protocolVersion: 1 }),
       challenges: twoChallenges(),
     });
-    const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     expect(await screen.findByRole("button", { name: /end old run/i })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: /challenges/i }));
-    const startInput = screen.getByLabelText(/start article/i);
-    const targetInput = screen.getByLabelText(/target article/i);
-    expect(startInput).toBeDisabled();
-    expect(targetInput).toBeDisabled();
-    expect(screen.getByRole("button", { name: /create challenge/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /challenge #2/i })).toBeDisabled();
-
-    fireEvent.submit(startInput.closest("form") as HTMLFormElement);
+    // Zero chrome during recovery (spec: "control is not released to
+    // Home/bottom-nav until it resolves") - no tabbar, no reachable
+    // challenge browser/creation form to route around the gate through.
+    expect(screen.queryByRole("navigation", { name: /vwiki race views/i })).toBeNull();
+    expect(screen.queryByLabelText(/start article/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /challenge #2/i })).toBeNull();
     expect(createChallengeCalls(fetchImpl)).toBe(0);
+
+    // Migration note (i): the back-gesture/history lock must keep working
+    // through the restructuring - popstate during a locked (recovering) run
+    // re-syncs the URL instead of navigating away.
     window.history.pushState({}, "", "/?challenge=challenge-0002");
     window.dispatchEvent(new PopStateEvent("popstate"));
     await waitFor(() => expect(window.location.search).toBe("?challenge=challenge-0001"));
   });
 
-  it("keeps Start unavailable until authenticated active-run discovery settles", async () => {
+  it("keeps the race takeover engaged until authenticated active-run discovery settles", async () => {
     const storage = claimedStorage();
     const activeDiscovery = createDeferredResponse({ run: null });
     const fetchImpl = createFetchMock({ delayedActiveRun: activeDiscovery.promise });
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
-    const start = await screen.findByRole("button", { name: /start challenge #1/i });
     await waitFor(() => expect(activeRunCalls(fetchImpl)).toBe(1));
-    expect(start).toBeDisabled();
+    // Spec: "On load, recovery takes priority over everything else" - the
+    // existing recoverActiveRun check runs before any mode shell renders,
+    // so the takeover is engaged (Start/tabbar unreachable) until it
+    // settles, even for the common "nothing to recover" outcome.
+    expect(screen.queryByRole("button", { name: /start challenge #1/i })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: /vwiki race views/i })).toBeNull();
 
     await act(async () => {
       activeDiscovery.resolve();
       await activeDiscovery.promise;
     });
-    await waitFor(() => expect(start).toBeEnabled());
+
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeEnabled();
   });
 
   it("offers End Old Run when Start receives active_run_exists", async () => {
@@ -1190,6 +1246,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     expect(await screen.findByRole("button", { name: /end old run/i })).toBeVisible();
     expect(screen.getByText(/end the old run/i)).toBeVisible();
@@ -1207,6 +1264,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     const retry = await screen.findByRole("button", { name: /retry resume/i });
     expect(screen.getByRole("button", { name: /end old run/i })).toBeVisible();
@@ -1267,6 +1325,7 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     window.history.pushState({}, "", "/?challenge=challenge-0002");
     window.dispatchEvent(new PopStateEvent("popstate"));
@@ -1361,13 +1420,15 @@ describe("VWiki Race app", () => {
     expect(accountStatsCalls(fetchImpl)).toBe(1);
   });
 
-  it("keeps Stats unavailable while a timed run is active", async () => {
+  it("keeps Stats unreachable while a timed run is active", async () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
 
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
-    expect(screen.getByRole("button", { name: /^stats$/i })).toBeDisabled();
+    await screen.findByRole("heading", { name: "Apple" });
+    expect(screen.queryByRole("button", { name: /^stats$/i })).toBeNull();
   });
 
   it("keys account stats by identity and ignores an older token response", async () => {
@@ -1414,6 +1475,7 @@ describe("VWiki Race app", () => {
     expect(await screen.findByText("7")).toBeVisible();
     await user.click(screen.getByRole("button", { name: /^play$/i }));
     await user.click(screen.getByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("button", { name: /^end run$/i }));
     await user.click(screen.getByRole("button", { name: /confirm end run/i }));
     await user.click(screen.getByRole("button", { name: /^stats$/i }));
@@ -1456,6 +1518,7 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={storage} />);
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     const trigger = screen.getByRole("button", { name: /^end run$/i });
     await user.click(trigger);
@@ -1478,6 +1541,7 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     await user.click(screen.getByRole("button", { name: /^end run$/i }));
     await user.click(screen.getByRole("button", { name: /confirm end run/i }));
@@ -1491,6 +1555,7 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(screen.getByRole("button", { name: /^end run$/i }));
     await user.click(screen.getByRole("button", { name: /confirm end run/i }));
 
@@ -1506,6 +1571,7 @@ describe("VWiki Race app", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
     await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(screen.getByRole("button", { name: /^end run$/i }));
     await user.click(screen.getByRole("button", { name: /confirm end run/i }));
 
@@ -2040,6 +2106,7 @@ describe("VWiki Race app", () => {
       0,
     );
     await user.click(await screen.findByRole("button", { name: /start challenge #2/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
 
     await waitFor(() => {
       expect(fetchImpl).toHaveBeenCalledWith(
@@ -2114,6 +2181,7 @@ describe("VWiki Race app", () => {
       );
 
       await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+      await user.click(await screen.findByRole("button", { name: /start race/i }));
       await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
       expect(await screen.findByText(/target reached/i)).toBeVisible();
@@ -2272,6 +2340,138 @@ describe("VWiki Race app", () => {
         Reflect.deleteProperty(navigator, "clipboard");
       }
     }
+  });
+});
+
+describe("Race flow: full-screen takeover", () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  it("shows the pre-race preview beat with target, attribution, and start-article label before Start", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+
+    const preview = await screen.findByRole("region", { name: /pre-race preview/i });
+    expect(within(preview).getByText(/your target/i)).toBeVisible();
+    expect(within(preview).getByRole("heading", { name: "Fruit" })).toBeVisible();
+    await within(preview).findByText(/seed-bearing structure/i);
+    expect(within(preview).getByRole("link", { name: /source revision/i })).toHaveAttribute(
+      "href",
+      expect.stringContaining("oldid=78910"),
+    );
+    expect(within(preview).getByText(/start: apple/i)).toBeVisible();
+    expect(within(preview).getByRole("button", { name: /^back$/i })).toBeVisible();
+    expect(within(preview).getByRole("button", { name: /start race/i })).toBeEnabled();
+    expect(within(preview).getByRole("button", { name: /see other challenges/i })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Apple" })).toBeNull();
+  });
+
+  it("keeps Start race enabled from the preview when the target preview is unavailable", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ targetPreviewFailure: true })}
+        storage={claimedStorage()}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+
+    const preview = await screen.findByRole("region", { name: /pre-race preview/i });
+    await within(preview).findByText(/preview unavailable/i);
+    expect(within(preview).getByRole("button", { name: /start race/i })).toBeEnabled();
+  });
+
+  it("(b) creates no run when backing out of the preview", async () => {
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /^back$/i }));
+
+    expect(startRunCalls(fetchImpl)).toBe(0);
+    expect(await screen.findByRole("button", { name: /start challenge #1/i })).toBeVisible();
+    expect(screen.queryByRole("region", { name: /pre-race preview/i })).toBeNull();
+  });
+
+  it("(c) lands on the Challenges view via 'See other challenges' without creating a run", async () => {
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /see other challenges/i }));
+
+    expect(screen.getByRole("heading", { name: "Challenges" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: /pre-race preview/i })).toBeNull();
+    expect(startRunCalls(fetchImpl)).toBe(0);
+  });
+
+  it("(d) calls the same run-start API from the preview's Start race button", async () => {
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+
+    await waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledWith(
+        apiUrl("/api/v2/runs/start"),
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ challengeId: "challenge-0001" }),
+        }),
+      );
+    });
+    expect(startRunCalls(fetchImpl)).toBe(1);
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+  });
+
+  it("returns to the preview (not home) when the identity prompt is closed mid-Start", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    await user.click(within(dialog).getByRole("button", { name: /close identity prompt/i }));
+
+    expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull();
+    expect(await screen.findByRole("region", { name: /pre-race preview/i })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Apple" })).toBeNull();
+  });
+
+  it("(a) + (e) renders zero global chrome and the full-screen takeover once race.phase is active", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+
+    const heading = await screen.findByRole("heading", { name: "Apple" });
+    expect(heading.closest(".race-takeover")).not.toBeNull();
+    expect(screen.queryByRole("navigation", { name: /vwiki race views/i })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "VWiki Race" })).toBeNull();
+    expect(screen.queryByRole("status", { name: /current player/i })).toBeNull();
+  });
+
+  it("keeps the takeover engaged and shows Results (not the shell) immediately on completion", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /start challenge #1/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+
+    const result = await screen.findByText(/target reached/i);
+    expect(result.closest(".race-takeover")).not.toBeNull();
+    expect(screen.queryByRole("navigation", { name: /vwiki race views/i })).toBeNull();
   });
 });
 

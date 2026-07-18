@@ -736,6 +736,164 @@ h1 {
   align-items: start;
 }
 
+/*
+ * Race flow: full-screen, zero-chrome takeover (preview -> race -> results).
+ * Rendered by RaceFlow in place of the app header/tabbar whenever engaged
+ * (see raceEngaged in App.tsx). `.race-takeover` covers the viewport above
+ * the normal shell but below modals (identity/end-run confirm), which must
+ * still be able to render on top of an active or recovering run.
+ */
+.race-takeover {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--ink);
+  padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
+    max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+}
+
+.race-hud {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  background: rgba(6, 16, 20, 0.96);
+  padding: 9px 14px;
+  backdrop-filter: blur(16px);
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+  font-family: var(--viota-ui-font);
+}
+
+.race-hud-status {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.race-hud .run-metrics {
+  flex: 0 0 auto;
+}
+
+.race-mode,
+.race-results {
+  display: grid;
+  gap: 14px;
+  width: min(1320px, 100%);
+  margin-inline: auto;
+  padding-bottom: 44px;
+}
+
+.race-mode .path-strip {
+  position: static;
+  top: auto;
+}
+
+.pre-race-preview {
+  position: relative;
+  display: grid;
+  min-height: calc(100vh - 28px);
+  place-items: center;
+  width: min(760px, 100%);
+  margin-inline: auto;
+  padding-top: 54px;
+}
+
+.pre-race-back {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.pre-race-copy {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  border: 1px solid #a2a9b1;
+  background: #f8f9fa;
+  color: #202122;
+  padding: clamp(20px, 4vw, 42px);
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+}
+
+.pre-race-copy h2 {
+  margin-top: 8px;
+  color: #101418;
+  font-family: var(--viota-display-font);
+  font-size: 3.4rem;
+  font-weight: 400;
+  line-height: 0.96;
+  overflow-wrap: anywhere;
+}
+
+.pre-race-start-article {
+  margin-top: 18px;
+  color: #54595d;
+  font-weight: 700;
+}
+
+.start-race-button {
+  border-color: #ffb4a6;
+  background: var(--coral);
+  color: #170908;
+  min-height: 48px;
+  margin-top: 18px;
+  font-size: 1.05rem;
+  font-weight: 900;
+}
+
+.start-race-button:not(:disabled):hover {
+  box-shadow: 0 0 0 3px rgba(255, 118, 95, 0.35);
+}
+
+.link-button {
+  min-width: 0;
+  min-height: 44px;
+  border: none;
+  background: none;
+  clip-path: none;
+  color: var(--cyan);
+  padding: 6px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.link-button:not(:disabled):hover {
+  box-shadow: none;
+  transform: none;
+  color: #dffbfb;
+}
+
+.pre-race-see-other {
+  justify-self: start;
+  margin-top: 6px;
+}
+
+.recovery-notice {
+  display: grid;
+  gap: 10px;
+  width: min(520px, 100%);
+  margin: 40px auto 0;
+  border: 1px solid var(--line);
+  background: var(--ink-raised);
+  color: #eef7f8;
+  padding: 20px;
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  font-family: var(--viota-ui-font);
+}
+
+.recovery-notice h2 {
+  font-family: var(--viota-display-font);
+  font-size: 1.8rem;
+  font-weight: 400;
+}
+
 .how-to-play {
   grid-column: 1 / -1;
   margin: 0;
@@ -2048,6 +2206,22 @@ h1 {
 
   .target-preview-panel h2 {
     font-size: 2.55rem;
+  }
+
+  .pre-race-copy {
+    padding: 20px;
+  }
+
+  .pre-race-copy h2 {
+    font-size: 2.55rem;
+  }
+
+  .pre-race-preview {
+    padding-top: 48px;
+  }
+
+  .race-hud {
+    justify-content: end;
   }
 
   .empty-state h2 {

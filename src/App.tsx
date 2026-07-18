@@ -1,5 +1,4 @@
 import {
-  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -10,8 +9,6 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
-  type PointerEvent,
-  type FocusEvent,
 } from "react";
 import { getSortedChallenges } from "./domain/challenges";
 import {
@@ -20,15 +17,9 @@ import {
   selectDefaultChallenge,
 } from "./domain/challengeSelection";
 import type { CreateChallengeOutcome } from "./domain/dailyEditorial";
-import {
-  type GameSession,
-} from "./domain/gameSession";
-import { compressPathForStrip } from "./domain/pathCompression";
 import type {
   AccountStats,
-  Article,
   Challenge,
-  LeaderboardContext,
   RankedLeaderboardRow,
   ServerPathStep,
 } from "./domain/types";
@@ -46,13 +37,14 @@ import {
   type VWikiRaceApiClient,
 } from "./services/vwikiRaceApiClient";
 import { createWikipediaGateway } from "./services/wikipediaGateway";
-import { writeTextWithTimeout } from "./services/challengeShare";
-import { type RacePhase, useRaceController } from "./hooks/useRaceController";
+import { useRaceController } from "./hooks/useRaceController";
 import AdminDailies from "./components/AdminDailies";
 import {
   type TargetPreviewState,
   useTargetPreview,
 } from "./hooks/useTargetPreview";
+import RaceFlow from "./race/RaceFlow";
+import { ChallengeShareButton, formatElapsed } from "./race/shared";
 
 interface AppProps {
   apiOrigin?: string;
@@ -65,7 +57,6 @@ interface AppProps {
   identityRepository?: VGamesIdentityRepository;
 }
 
-type ModeState = RacePhase;
 type TabKey = "play" | "leaderboard" | "challenges" | "stats" | "admin";
 type AuthMode = "guest" | "create" | "login";
 interface LoginFormInput {
@@ -124,6 +115,7 @@ export default function App({
   const [activeTab, setActiveTab] = useState<TabKey>(() =>
     isAdminDailiesRoute() ? "admin" : "play",
   );
+  const [raceStage, setRaceStage] = useState<"preview" | null>(null);
   const [canManageDailies, setCanManageDailies] = useState<boolean | null>(null);
   const [authPrompt, setAuthPrompt] = useState<AuthPromptIntent | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("create");
@@ -195,6 +187,13 @@ export default function App({
     !["idle", "completed"].includes(race.phase) || Boolean(race.recoveryRun);
   challengeLockRef.current = challengeIsLocked;
   startLockRef.current = startIsLocked;
+  // Full-screen, zero-chrome race-flow takeover (spec: "Race flow" section).
+  // Engaged whenever the preview beat is open, the run is mid-flight in any
+  // sense (including transient preparing/syncing/abandoning and the
+  // completed results beat), or an active-run recovery gate is pending.
+  const raceEngaged = raceStage !== null ||
+    ["preparing", "active", "syncing", "completed", "abandoning"].includes(race.phase) ||
+    Boolean(race.recoveryRun);
 
   const selectedChallenge =
     challenges.find((challenge) => challenge.id === selectedChallengeId) ??
@@ -217,12 +216,6 @@ export default function App({
   const displayNameIsReady =
     (identitySession?.displayName ?? displayNameDraft).trim().length > 0;
   const isBusy = ["preparing", "syncing", "abandoning"].includes(modeState) || authBusy;
-  const headerState =
-    modeState === "completed"
-      ? "result"
-      : session && modeState !== "idle"
-        ? "compact"
-        : "expanded";
 
   useEffect(() => {
     const cachedSession = identityRepository.getSession();
@@ -350,6 +343,16 @@ export default function App({
       if (outcome.status === "unauthorized") clearStaleIdentity();
     });
   }, [challenges, identitySession, race.recoverActiveRun]);
+
+  useEffect(() => {
+    // Once a run actually starts (or recovery finds one), the race.phase
+    // condition alone keeps the takeover engaged - drop the preview stage
+    // marker so a later return to "idle" (e.g. after End Run) correctly
+    // exits back to the normal shell instead of re-showing the preview.
+    if (race.phase !== "idle" && raceStage !== null) {
+      setRaceStage(null);
+    }
+  }, [race.phase, raceStage]);
 
   useEffect(() => {
     const lockedChallenge = race.challenge ??
@@ -516,6 +519,27 @@ export default function App({
       setError(errorMessage(caught, "Could not create that challenge."));
       throw caught;
     }
+  }
+
+  function openRacePreview() {
+    if (!selectedChallenge) return;
+    setRaceStage("preview");
+  }
+
+  function exitRaceFlow(tab: TabKey) {
+    setRaceStage(null);
+    setActiveTab(tab);
+  }
+
+  function exitCompletedRaceTo(tab: TabKey) {
+    race.resetCompleted();
+    setRaceStage(null);
+    setActiveTab(tab);
+  }
+
+  function requestEndRun(event: MouseEvent<HTMLElement>) {
+    endRunTrigger.current = event.currentTarget;
+    setEndConfirmationOpen(true);
   }
 
   async function startSelectedChallenge() {
@@ -846,23 +870,12 @@ export default function App({
     if (title) race.prewarmLink(title);
   }
 
-  const currentPathTitles = session
-    ? [
-        session.challenge.start.title,
-        ...session.path.map(
-          (entry) => entry.resolvedDestination.canonicalTitle,
-        ),
-      ]
-    : [];
-  const visiblePath = session
-    ? compressPathForStrip(
-        currentPathTitles,
-        session.challenge.target.title,
-      )
-    : [];
   const elapsedMs = race.elapsedMs;
   const visibleError = error ?? race.error;
   const endRunIsBlocked = modeState === "syncing" || Boolean(race.pendingRetry);
+  const showBanners = !authPrompt && !endConfirmationOpen;
+  const bannerError = showBanners ? visibleError : null;
+  const bannerNotice = showBanners ? runNotice : null;
   const visibleTab: TabKey = activeTab === "admin" && canManageDailies !== true
     ? "play"
     : activeTab;
@@ -873,196 +886,155 @@ export default function App({
 
   return (
     <main
-      className={`app-shell header-${headerState}`}
+      className="app-shell header-expanded"
       aria-busy={isBusy}
     >
-      <header className="game-header">
-        <div className="brand-lockup" aria-label="VWiki Race">
-          <span className="viota-mark">VWiki</span>
-          <h1>VWiki Race</h1>
-        </div>
+      {raceEngaged ? (
+        <RaceFlow
+          phase={race.phase}
+          recoveryRun={race.recoveryRun}
+          showPreview={raceStage === "preview"}
+          previewChallenge={selectedChallenge}
+          targetPreview={targetPreview}
+          session={session}
+          article={article}
+          elapsedMs={elapsedMs}
+          pendingNavigationTitle={pendingNavigationTitle}
+          pendingRetry={race.pendingRetry}
+          leaderboardContext={race.leaderboardContext}
+          error={bannerError}
+          authBusy={authBusy}
+          endRunIsBlocked={endRunIsBlocked}
+          onRetryPending={() => void retryPendingClick()}
+          onRetryRecovery={() => void retryRecovery()}
+          onRequestEndRun={requestEndRun}
+          onBackFromPreview={() => exitRaceFlow("play")}
+          onSeeOtherChallengesFromPreview={() => exitRaceFlow("challenges")}
+          onStartFromPreview={() => void startSelectedChallenge()}
+          onPlayAgain={() => void startSelectedChallenge()}
+          onShowLeaderboard={() => exitCompletedRaceTo("leaderboard")}
+          onShowChallenges={() => exitCompletedRaceTo("challenges")}
+          handleArticleClick={handleArticleClick}
+          handleArticlePrewarm={handleArticlePrewarm}
+        />
+      ) : (
+        <>
+          <header className="game-header">
+            <div className="brand-lockup" aria-label="VWiki Race">
+              <span className="viota-mark">VWiki</span>
+              <h1>VWiki Race</h1>
+            </div>
 
-        <div className="challenge-route" aria-label="Current challenge">
-          <div className="challenge-meta">
-            <span>{selectedChallenge?.label ?? "Challenge"}</span>
-            {selectedChallenge && dailyBadgeLabel(selectedChallenge, currentCentralDate) ? (
-              <span className="daily-badge">
-                {dailyBadgeLabel(selectedChallenge, currentCentralDate)}
-              </span>
+            <div className="challenge-route" aria-label="Current challenge">
+              <div className="challenge-meta">
+                <span>{selectedChallenge?.label ?? "Challenge"}</span>
+                {selectedChallenge && dailyBadgeLabel(selectedChallenge, currentCentralDate) ? (
+                  <span className="daily-badge">
+                    {dailyBadgeLabel(selectedChallenge, currentCentralDate)}
+                  </span>
+                ) : null}
+              </div>
+              <strong>
+                {selectedChallenge
+                  ? `${selectedChallenge.start.title} -> ${selectedChallenge.target.title}`
+                  : "Loading"}
+              </strong>
+            </div>
+
+            <div className="player-gate">
+              <button
+                type="button"
+                disabled={!selectedChallenge || authBusy}
+                onClick={openRacePreview}
+              >
+                {`Start ${selectedChallenge?.label ?? "Challenge"}`}
+              </button>
+            </div>
+
+            <div className="account-chip" role="status" aria-label="Current player">
+              {identitySession?.displayName ?? "Guest"}
+            </div>
+          </header>
+
+          <nav className={`tabbar${canManageDailies ? " has-admin" : ""}`} aria-label="VWiki Race views">
+            {availableTabs.map(
+              (tab) => (
+                <button
+                  aria-pressed={visibleTab === tab}
+                  className={visibleTab === tab ? "active" : undefined}
+                  disabled={tab !== "play" && challengeIsLocked}
+                  key={tab}
+                  onClick={() => selectView(tab)}
+                  type="button"
+                >
+                  {tab === "admin" ? "Admin" : tab}
+                </button>
+              ),
+            )}
+          </nav>
+
+          {bannerError ? (
+            <p className="error-banner" role="alert">{bannerError}</p>
+          ) : null}
+          {bannerNotice ? (
+            <p className="run-notice" role="status">{bannerNotice}</p>
+          ) : null}
+          {showAdminAccessNotice ? (
+            <p aria-label="Authorization notice" className="run-notice" role="status">
+              This page is not available.
+            </p>
+          ) : null}
+
+          <section className="content-shell">
+            {visibleTab === "play" ? (
+              <PlayPanel
+                challenges={challenges}
+                onCreateChallenge={createChallenge}
+                onSelectChallenge={(challengeId) => void selectChallenge(challengeId)}
+                selectedChallenge={selectedChallenge}
+                selectionLocked={challengeIsLocked}
+                targetPreview={targetPreview}
+                todayCentral={currentCentralDate}
+                canNominateForDaily={identitySession?.status === "claimed"}
+              />
             ) : null}
-          </div>
-          {pendingNavigationTitle ? (
-            <strong className="header-navigation-status" role="status">
-              Opening {pendingNavigationTitle}...
-            </strong>
-          ) : (
-            <strong>
-              {selectedChallenge
-                ? `${selectedChallenge.start.title} -> ${selectedChallenge.target.title}`
-                : "Loading"}
-            </strong>
-          )}
-        </div>
 
-        {session ? (
-          <dl className="run-metrics" aria-label="Current run">
-            <div>
-              <dt>Clicks</dt>
-              <dd>{session.clicks}</dd>
-            </div>
-            <div>
-              <dt>Timer</dt>
-              <dd>{formatElapsed(elapsedMs)}</dd>
-            </div>
-            <div>
-              <dt>Target</dt>
-              <dd>{session.challenge.target.title}</dd>
-            </div>
-          </dl>
-        ) : null}
+            {visibleTab === "leaderboard" ? (
+              <LeaderboardPanel
+                leaderboard={leaderboard}
+                onDisclosePath={(runId) => void loadRunPath(runId)}
+                runPaths={runPaths}
+              />
+            ) : null}
 
-        <div className="player-gate">
-          {!race.recoveryRun && (!session || modeState === "completed") ? (
-            <button
-              type="button"
-              disabled={!selectedChallenge || authBusy || startIsLocked}
-              onClick={() => void startSelectedChallenge()}
-            >
-              {modeState === "completed" && session?.challenge.id === selectedChallenge?.id
-                ? "Play Again"
-                : `Start ${selectedChallenge?.label ?? "Challenge"}`}
-            </button>
-          ) : null}
-          {race.recoveryRun?.protocolVersion === 2 ? (
-            <button
-              disabled={modeState !== "idle"}
-              type="button"
-              onClick={() => void retryRecovery()}
-            >
-              Retry Resume
-            </button>
-          ) : null}
-          {modeState === "active" || modeState === "syncing" || race.recoveryRun ? (
-            <button
-              className="end-run-button"
-              disabled={endRunIsBlocked || modeState === "preparing" || modeState === "abandoning"}
-              type="button"
-              onClick={(event) => {
-              endRunTrigger.current = event.currentTarget;
-              setEndConfirmationOpen(true);
-              }}
-            >
-              {race.recoveryRun ? "End Old Run" : "End Run"}
-            </button>
-          ) : null}
-        </div>
+            {visibleTab === "challenges" ? (
+              <ChallengeBrowser
+                challenges={challenges}
+                canNominateForDaily={identitySession?.status === "claimed"}
+                onCreateChallenge={createChallenge}
+                onSelectChallenge={(challengeId) => void selectChallenge(challengeId)}
+                selectedChallengeId={selectedChallenge?.id ?? null}
+                selectionLocked={challengeIsLocked}
+                todayCentral={currentCentralDate}
+              />
+            ) : null}
 
-        <div className="account-chip" role="status" aria-label="Current player">
-          {identitySession?.displayName ?? "Guest"}
-        </div>
-      </header>
+            {visibleTab === "stats" ? (
+              <StatsPanel
+                stats={accountStats}
+              />
+            ) : null}
 
-      {session ? (
-        <PathStrip targetPreview={targetPreview} titles={visiblePath} />
-      ) : null}
+            {visibleTab === "admin" && identitySession ? (
+              <AdminDailies
+                apiClient={apiClient}
+                challenges={challenges}
+                previewGateway={previewWikipediaGateway}
+                token={identitySession.token}
+              />
+            ) : null}
+          </section>
 
-      <nav className={`tabbar${canManageDailies ? " has-admin" : ""}`} aria-label="VWiki Race views">
-        {availableTabs.map(
-          (tab) => (
-            <button
-              aria-pressed={visibleTab === tab}
-              className={visibleTab === tab ? "active" : undefined}
-              disabled={tab !== "play" && challengeIsLocked}
-              key={tab}
-              onClick={() => selectView(tab)}
-              type="button"
-            >
-              {tab === "admin" ? "Admin" : tab}
-            </button>
-          ),
-        )}
-      </nav>
-
-      {visibleError && !authPrompt && !endConfirmationOpen ? (
-        <p className="error-banner" role="alert">{visibleError}</p>
-      ) : null}
-      {runNotice && !authPrompt && !endConfirmationOpen ? (
-        <p className="run-notice" role="status">{runNotice}</p>
-      ) : null}
-      {showAdminAccessNotice ? (
-        <p aria-label="Authorization notice" className="run-notice" role="status">
-          This page is not available.
-        </p>
-      ) : null}
-      {modeState === "preparing" && !pendingNavigationTitle ? (
-        <p className="loading-text">Loading article...</p>
-      ) : null}
-
-      <section className="content-shell">
-        {visibleTab === "play" ? (
-          <PlayPanel
-            article={article}
-            challenges={challenges}
-            elapsedMs={elapsedMs}
-            handleArticleClick={handleArticleClick}
-            handleArticlePrewarm={handleArticlePrewarm}
-            modeState={modeState}
-            onCreateChallenge={createChallenge}
-            onSelectChallenge={(challengeId) => void selectChallenge(challengeId)}
-            onShowChallenges={() => setActiveTab("challenges")}
-            onShowLeaderboard={() => setActiveTab("leaderboard")}
-            pendingNavigationTitle={pendingNavigationTitle}
-            pendingRetry={race.pendingRetry}
-            leaderboardContext={race.leaderboardContext}
-            onRetryPending={() => void retryPendingClick()}
-            selectedChallenge={selectedChallenge}
-            session={session}
-            selectionLocked={challengeIsLocked}
-            targetPreview={targetPreview}
-            todayCentral={currentCentralDate}
-            canNominateForDaily={identitySession?.status === "claimed"}
-          />
-        ) : null}
-
-        {visibleTab === "leaderboard" ? (
-          <LeaderboardPanel
-            leaderboard={leaderboard}
-            onDisclosePath={(runId) => void loadRunPath(runId)}
-            runPaths={runPaths}
-          />
-        ) : null}
-
-        {visibleTab === "challenges" ? (
-          <ChallengeBrowser
-            challenges={challenges}
-            canNominateForDaily={identitySession?.status === "claimed"}
-            onCreateChallenge={createChallenge}
-            onSelectChallenge={(challengeId) => void selectChallenge(challengeId)}
-            selectedChallengeId={selectedChallenge?.id ?? null}
-            selectionLocked={challengeIsLocked}
-            todayCentral={currentCentralDate}
-          />
-        ) : null}
-
-        {visibleTab === "stats" ? (
-          <StatsPanel
-            stats={accountStats}
-          />
-        ) : null}
-
-        {visibleTab === "admin" && identitySession ? (
-          <AdminDailies
-            apiClient={apiClient}
-            challenges={challenges}
-            previewGateway={previewWikipediaGateway}
-            token={identitySession.token}
-          />
-        ) : null}
-      </section>
-
-      {visibleTab === "play" && (session !== null || modeState !== "idle")
-        ? null
-        : (
           <footer className="site-footer">
             <p>
               Have{" "}
@@ -1083,7 +1055,8 @@ export default function App({
               </a>.
             </p>
           </footer>
-        )}
+        </>
+      )}
 
       {authPrompt ? (
         <IdentityPrompt
@@ -1485,144 +1458,42 @@ function focusableElements(container: HTMLElement | null): HTMLElement[] {
 }
 
 function PlayPanel({
-  article,
   canNominateForDaily,
   challenges,
-  elapsedMs,
-  handleArticleClick,
-  handleArticlePrewarm,
-  modeState,
   onCreateChallenge,
-  onRetryPending,
   onSelectChallenge,
-  onShowChallenges,
-  onShowLeaderboard,
-  pendingNavigationTitle,
-  pendingRetry,
-  leaderboardContext,
   selectedChallenge,
-  session,
   selectionLocked,
   targetPreview,
   todayCentral,
 }: {
-  article: Article | null;
   canNominateForDaily: boolean;
   challenges: Challenge[];
-  elapsedMs: number;
-  handleArticleClick: (event: MouseEvent<HTMLElement>) => void;
-  handleArticlePrewarm: (target: EventTarget | null) => void;
-  modeState: ModeState;
   onCreateChallenge: (input: CreateChallengeInput) => Promise<void>;
-  onRetryPending: () => void;
   onSelectChallenge: (challengeId: string) => void;
-  onShowChallenges: () => void;
-  onShowLeaderboard: () => void;
-  pendingNavigationTitle: string | null;
-  pendingRetry: { title: string; anchorText: string } | null;
-  leaderboardContext: LeaderboardContext | null;
   selectedChallenge: Challenge | null;
-  session: GameSession | null;
   selectionLocked: boolean;
   targetPreview: TargetPreviewState;
   todayCentral: string;
 }) {
-  const articleClickRef = useRef(handleArticleClick);
-  articleClickRef.current = handleArticleClick;
-  const stableArticleClick = useCallback((event: MouseEvent<HTMLElement>) => {
-    articleClickRef.current(event);
-  }, []);
-  const articlePrewarmRef = useRef(handleArticlePrewarm);
-  articlePrewarmRef.current = handleArticlePrewarm;
-  const stableArticlePrewarm = useCallback((target: EventTarget | null) => {
-    articlePrewarmRef.current(target);
-  }, []);
-  const stableArticleFocus = useCallback((event: FocusEvent<HTMLElement>) => {
-    stableArticlePrewarm(event.target);
-  }, [stableArticlePrewarm]);
-  const stableArticlePointerDown = useCallback((event: PointerEvent<HTMLElement>) => {
-    stableArticlePrewarm(event.target);
-  }, [stableArticlePrewarm]);
-
-  if (session && article) {
-    return (
-      <section className="game-layout">
-        {session.status === "completed" ? (
-          <aside aria-live="polite" className="result-panel">
-            <span className="result-kicker">Finished</span>
-            <h2>Target reached</h2>
-            <p className="result-score">
-              {session.clicks} {session.clicks === 1 ? "click" : "clicks"} in{" "}
-              {formatElapsed(elapsedMs)}
-            </p>
-            {leaderboardContext === null ? (
-              <p className="result-standing">Run already completed on the server</p>
-            ) : leaderboardContext.isPersonalBest ? (
-              <p className="result-standing">
-                Personal best
-                {leaderboardContext.rank !== null ? ` / Rank #${leaderboardContext.rank}` : ""}
-              </p>
-            ) : (
-              <p className="result-standing">Not a personal best</p>
-            )}
-            {session.challenge.origin === "daily" ? (
-              <p className="result-standing">Next daily arrives at 5:00 AM Central.</p>
-            ) : null}
-            <div className="result-actions">
-              <button type="button" onClick={onShowLeaderboard}>
-                View leaderboard
-              </button>
-              <ChallengeShareButton challengeId={session.challenge.id} />
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={onShowChallenges}
-              >
-                Choose another challenge
-              </button>
-            </div>
-          </aside>
-        ) : null}
-        {pendingRetry ? (
-          <aside className="sync-retry-panel" role="status">
-            <p>{pendingRetry.anchorText || pendingRetry.title} is ready to retry.</p>
-            <button type="button" onClick={onRetryPending}>Retry click</button>
-          </aside>
-        ) : null}
-
-        <WikipediaArticlePanel
-          article={article}
-          challengeLabel={session.challenge.label ?? session.challenge.mode}
-          acceptedPageId={session.currentPage.pageId}
-          onClick={stableArticleClick}
-          onFocus={stableArticleFocus}
-          onPointerDown={stableArticlePointerDown}
-          pendingNavigationTitle={pendingNavigationTitle}
-        />
-
-      </section>
-    );
-  }
-
+  // The race flow (preview -> active -> results) is a full-screen takeover
+  // rendered by RaceFlow once engaged (see raceEngaged in App.tsx); this
+  // panel therefore only ever renders the idle "pick a challenge" view.
   return (
     <section className="home-layout">
       <p className="how-to-play muted">
         Race from the start article to the target using only links inside the page. Fastest time wins.
       </p>
-      {modeState === "idle" && selectedChallenge ? (
+      {selectedChallenge ? (
         <TargetPreviewPanel
           challenge={selectedChallenge}
           targetPreview={targetPreview}
         />
       ) : (
         <section className="empty-state">
-          <span>{selectedChallenge?.label ?? "Challenge"}</span>
-          <h2>
-            {selectedChallenge
-              ? `${selectedChallenge.start.title} -> ${selectedChallenge.target.title}`
-              : "Loading challenge catalog"}
-          </h2>
-          <p>{modeState === "preparing" ? "Preparing run..." : "Pick a challenge."}</p>
+          <span>Challenge</span>
+          <h2>Loading challenge catalog</h2>
+          <p>Pick a challenge.</p>
         </section>
       )}
 
@@ -1690,180 +1561,6 @@ function TargetPreviewPanel({
         <ChallengeShareButton challengeId={challenge.id} />
       </div>
     </section>
-  );
-}
-
-function ChallengeShareButton({ challengeId }: { challengeId: string }) {
-  const [status, setStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");
-  const activeChallengeId = useRef(challengeId);
-  const copyGeneration = useRef(0);
-  const shareUrl = challengeShareUrl(challengeId);
-  activeChallengeId.current = challengeId;
-
-  useEffect(() => {
-    copyGeneration.current += 1;
-    setStatus("idle");
-  }, [challengeId]);
-
-  async function copyChallengeLink() {
-    const generation = ++copyGeneration.current;
-    const requestIsCurrent = () =>
-      generation === copyGeneration.current && activeChallengeId.current === challengeId;
-    setStatus("copying");
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("Clipboard API unavailable.");
-      }
-      await writeTextWithTimeout(
-        (text) => navigator.clipboard.writeText(text),
-        shareUrl,
-        1_200,
-      );
-      if (!requestIsCurrent()) return;
-      setStatus("copied");
-    } catch {
-      if (!requestIsCurrent()) return;
-      const fallbackCopied = copyTextFallback(shareUrl);
-      if (!requestIsCurrent()) return;
-      setStatus(fallbackCopied ? "copied" : "failed");
-    }
-  }
-
-  return (
-    <div className="challenge-share">
-      <button
-        className="secondary-button"
-        disabled={status === "copying"}
-        onClick={() => void copyChallengeLink()}
-        type="button"
-      >
-        Copy challenge link
-      </button>
-      {status !== "idle" ? (
-        <span aria-live="polite" role="status">
-          {status === "copying"
-            ? "Copying challenge link..."
-            : status === "copied"
-              ? "Challenge link copied."
-              : "Automatic copy was blocked. Select the link below."}
-        </span>
-      ) : null}
-      {status === "failed" ? (
-        <input
-          aria-label="Challenge link"
-          onFocus={(event) => event.currentTarget.select()}
-          readOnly
-          value={shareUrl}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-const WikipediaArticlePanel = memo(function WikipediaArticlePanel({
-  article,
-  acceptedPageId,
-  challengeLabel,
-  onClick,
-  onFocus,
-  onPointerDown,
-  pendingNavigationTitle,
-}: {
-  article: Article;
-  acceptedPageId: number | undefined;
-  challengeLabel: string;
-  onClick: (event: MouseEvent<HTMLElement>) => void;
-  onFocus: (event: FocusEvent<HTMLElement>) => void;
-  onPointerDown: (event: PointerEvent<HTMLElement>) => void;
-  pendingNavigationTitle: string | null;
-}) {
-  const articleHeadingRef = useRef<HTMLHeadingElement>(null);
-
-  useEffect(() => {
-    const heading = articleHeadingRef.current;
-    heading?.scrollIntoView?.({ behavior: "auto", block: "start" });
-    heading?.focus({ preventScroll: true });
-  }, [acceptedPageId]);
-
-  return (
-    <article
-      aria-busy={Boolean(pendingNavigationTitle)}
-      className="article-panel"
-      onClick={onClick}
-      onFocus={onFocus}
-      onPointerDown={onPointerDown}
-    >
-      {pendingNavigationTitle ? (
-        <div className="article-navigation-pending" role="status">
-          Loading next article...
-        </div>
-      ) : null}
-      <div aria-live="polite" className="article-heading">
-        <span>{challengeLabel}</span>
-        <h2 ref={articleHeadingRef} tabIndex={-1}>{article.canonicalTitle}</h2>
-      </div>
-      <div
-        aria-label="Wikipedia article"
-        className="article-content"
-        dangerouslySetInnerHTML={{ __html: article.sanitizedHtml }}
-        inert={Boolean(pendingNavigationTitle)}
-        role="region"
-        tabIndex={0}
-      />
-      <p className="attribution">
-        <a
-          href={article.attributionUrl}
-          rel="noreferrer noopener"
-          target="_blank"
-        >
-          Source revision
-        </a>{" "}
-        ·{" "}
-        <a
-          href="https://creativecommons.org/licenses/by-sa/4.0/"
-          rel="noreferrer noopener"
-          target="_blank"
-        >
-          CC BY-SA 4.0
-        </a>
-      </p>
-    </article>
-  );
-});
-
-function PathStrip({
-  targetPreview,
-  titles,
-}: {
-  targetPreview: TargetPreviewState;
-  titles: string[];
-}) {
-  const targetTitle = titles.at(-1) ?? "Target";
-  const visitedTitles = titles.slice(0, -1);
-  const readyPreview = targetPreview.status === "ready" ? targetPreview : null;
-  return (
-    <nav className="path-strip" aria-label="Run path">
-      <div className="path-history">
-        {visitedTitles.map((title, index) => (
-          <span
-            className={title === "..." ? "path-ellipsis" : undefined}
-            key={`${title}-${index}`}
-          >
-            {title}
-          </span>
-        ))}
-      </div>
-      <details aria-label="Target reference" className="target-reference">
-        <summary>
-          <small>Target</small>
-          <strong>{targetTitle}</strong>
-        </summary>
-        <p>
-          {readyPreview?.preview.blurb ??
-            "The target preview was not ready when this run began."}
-        </p>
-      </details>
-    </nav>
   );
 }
 
@@ -2207,33 +1904,6 @@ function syncChallengeUrl(
   }
 
   window.history.pushState({}, "", nextUrl);
-}
-
-function challengeShareUrl(challengeId: string): string {
-  const url = new URL("/", window.location.origin);
-  url.searchParams.set("challenge", challengeId);
-  return url.toString();
-}
-
-function copyTextFallback(text: string): boolean {
-  const field = document.createElement("textarea");
-  field.value = text;
-  field.setAttribute("readonly", "");
-  field.style.position = "fixed";
-  field.style.opacity = "0";
-  document.body.appendChild(field);
-  field.select();
-  try {
-    return document.execCommand?.("copy") === true;
-  } catch {
-    return false;
-  } finally {
-    field.remove();
-  }
-}
-
-function formatElapsed(ms: number): string {
-  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function errorMessage(caught: unknown, fallback: string): string {
