@@ -209,6 +209,10 @@ export interface RunProtocolRepository extends TrackingRepository {
   declineDailyNomination(input: DeclineDailyNominationInput): Promise<DailyNomination>;
   queueDailyChallenge(input: QueueDailyChallengeInput): Promise<DailyQueueEntry>;
   removeDailyQueueEntry(input: RemoveDailyQueueEntryInput): Promise<DailyQueueEntry>;
+  setRunBoardExclusion(
+    runId: string,
+    excluded: boolean,
+  ): Promise<{ runId: string; boardExcluded: boolean } | null>;
   findQueuedDailyCandidate(flavor: DailyFlavor): Promise<DailyQueuedCandidate | null>;
   acceptDailyFeature(job: DailyChallengeJob, selection: DailyFeatureSelection): Promise<Challenge>;
   findChallengeCreationReplay(

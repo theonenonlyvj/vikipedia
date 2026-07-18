@@ -3353,6 +3353,70 @@ describe("board exclusion (migration 0006)", () => {
   });
 });
 
+describe("setRunBoardExclusion", () => {
+  it("sets and clears the flag, returning the new state", async () => {
+    const runId = "exclusion-target";
+    await insertCompletedV2({
+      id: runId,
+      accountId: "exclusion-account",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    const { repository } = fixture();
+
+    const set = await repository.setRunBoardExclusion(runId, true);
+    expect(set).toEqual({ runId, boardExcluded: true });
+    const excludedRow = await env.VWIKI_RACE_DB.prepare(
+      "SELECT board_excluded FROM runs WHERE id = ?",
+    ).bind(runId).first<{ board_excluded: number }>();
+    expect(excludedRow?.board_excluded).toBe(1);
+
+    const cleared = await repository.setRunBoardExclusion(runId, false);
+    expect(cleared).toEqual({ runId, boardExcluded: false });
+    const clearedRow = await env.VWIKI_RACE_DB.prepare(
+      "SELECT board_excluded FROM runs WHERE id = ?",
+    ).bind(runId).first<{ board_excluded: number }>();
+    expect(clearedRow?.board_excluded).toBe(0);
+  });
+
+  it("is idempotent when re-applying the same state", async () => {
+    const runId = "exclusion-idempotent";
+    await insertCompletedV2({
+      id: runId,
+      accountId: "exclusion-account-2",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    const { repository } = fixture();
+
+    const first = await repository.setRunBoardExclusion(runId, true);
+    const second = await repository.setRunBoardExclusion(runId, true);
+    expect(first).toEqual({ runId, boardExcluded: true });
+    expect(second).toEqual({ runId, boardExcluded: true });
+  });
+
+  it("returns null for an unknown run", async () => {
+    const { repository } = fixture();
+    expect(await repository.setRunBoardExclusion("run-nope", true)).toBeNull();
+  });
+
+  it("excludes the run from listLeaderboard once set", async () => {
+    const runId = "exclusion-leaderboard";
+    await insertCompletedV2({
+      id: runId,
+      accountId: "exclusion-lb-account",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    const { repository } = fixture();
+
+    await repository.setRunBoardExclusion(runId, true);
+
+    const leaderboard = await repository.listLeaderboard("challenge-0001");
+    expect(leaderboard.map((r) => r.runId)).not.toContain(runId);
+  });
+});
+
 function fixture(
   clock: { now: string } = { now: "2026-07-14T01:00:00.000Z" },
   firstId = "run-1",

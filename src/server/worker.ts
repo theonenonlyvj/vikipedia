@@ -391,6 +391,24 @@ async function dispatchV2(
       corsHeaders,
     );
   }
+  const runExclusionMatch = url.pathname.match(
+    /^\/api\/v2\/admin\/runs\/([^/]+)\/exclusion$/,
+  );
+  if (request.method === "POST" && runExclusionMatch?.[1]) {
+    const admin = await authorizeDailyAdministrator(request, tracking, env, "run-exclusion");
+    const input = runExclusionInput(await readJson(request));
+    const runId = decodeDailyAdminPathId(runExclusionMatch[1], "invalid_run_id");
+    const outcome = await tracking.handlers.setRunBoardExclusion(runId, input.excluded);
+    if (!outcome) {
+      throw new ApiError("run_not_found", "Run not found.", 404);
+    }
+    console.info("run_board_exclusion", JSON.stringify({
+      runId: outcome.runId,
+      boardExcluded: outcome.boardExcluded,
+      actorAccountId: admin.accountId,
+    }));
+    return json(outcome, undefined, corsHeaders);
+  }
   if (request.method === "POST" && url.pathname === "/api/v2/identity/guest") {
     return json(
       await tracking.identity.quick(guestIdentityInput(await readJson(request))),
@@ -857,6 +875,15 @@ function requireEmptyObject(value: unknown): void {
   requireOnlyFields(body, []);
 }
 
+function runExclusionInput(value: unknown): { excluded: boolean } {
+  const body = requireObject(value);
+  requireOnlyFields(body, ["excluded"]);
+  if (typeof body.excluded !== "boolean") {
+    throw new ApiError("invalid_excluded", "Request field is invalid.", 400);
+  }
+  return { excluded: body.excluded };
+}
+
 function requireOnlyFields(body: Record<string, unknown>, allowed: readonly string[]): void {
   if (Object.keys(body).some((key) => !allowed.includes(key))) {
     throw new ApiError("invalid_request", "Request body contains unsupported fields.", 400);
@@ -1263,6 +1290,10 @@ function requestLogRoute(pathname: string): string {
   const queuePrefix = "/api/v2/admin/daily-queue/";
   if (pathname.startsWith(queuePrefix)) {
     return `${queuePrefix}:queueEntryId`;
+  }
+  const runExclusionPrefix = "/api/v2/admin/runs/";
+  if (pathname.startsWith(runExclusionPrefix) && pathname.endsWith("/exclusion")) {
+    return `${runExclusionPrefix}:runId/exclusion`;
   }
   return pathname;
 }

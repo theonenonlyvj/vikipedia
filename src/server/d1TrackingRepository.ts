@@ -2311,6 +2311,19 @@ export function createD1TrackingRepository(options: {
       }));
     },
 
+    async setRunBoardExclusion(runId, excluded) {
+      const row = await db
+        .prepare(
+          `UPDATE runs SET board_excluded = ?
+           WHERE id = ?
+           RETURNING id`,
+        )
+        .bind(excluded ? 1 : 0, runId)
+        .first<{ id: string }>();
+      if (!row) return null;
+      return { runId: row.id, boardExcluded: excluded };
+    },
+
     async getRunPath(runId) {
       const { results } = await db
         .prepare(

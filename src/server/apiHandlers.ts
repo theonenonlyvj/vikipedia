@@ -83,6 +83,10 @@ export interface ApiHandlers {
     queueEntryId: string,
     idempotencyKey: string,
   ): Promise<DailyQueueEntry>;
+  setRunBoardExclusion(
+    runId: string,
+    excluded: boolean,
+  ): Promise<{ runId: string; boardExcluded: boolean } | null>;
 }
 
 export interface ApiHandlerOptions {
@@ -465,6 +469,13 @@ export function createApiHandlers(
           "An idempotency key is required.",
         ),
       });
+    },
+
+    async setRunBoardExclusion(runId, excluded) {
+      return dailyProtocol(repository).setRunBoardExclusion(
+        dailyRequiredString(runId, "invalid_run_id", "A run id is required."),
+        excluded,
+      );
     },
   };
 }

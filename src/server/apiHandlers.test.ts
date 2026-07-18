@@ -1219,6 +1219,7 @@ describe("editorial daily administration routes", () => {
       ["POST", "/api/v2/admin/daily-nominations/nomination-1/decline"],
       ["POST", "/api/v2/admin/daily-queue"],
       ["DELETE", "/api/v2/admin/daily-queue/queue-1"],
+      ["POST", "/api/v2/admin/runs/run-1/exclusion"],
     ] as const;
 
     for (const [method, pathname] of requests) {
@@ -1382,6 +1383,8 @@ describe("editorial daily administration routes", () => {
     ["queue challenge", "POST", "/api/v2/admin/daily-queue", { challengeId: 1, flavor: "hard" }, "invalid_challenge_id"],
     ["queue extra field", "POST", "/api/v2/admin/daily-queue", { challengeId: "challenge-1", flavor: "hard", extra: true }, "invalid_request"],
     ["deletion body", "DELETE", "/api/v2/admin/daily-queue/queue-1", { extra: true }, "invalid_request"],
+    ["exclusion extra field", "POST", "/api/v2/admin/runs/run-1/exclusion", { excluded: true, extra: true }, "invalid_request"],
+    ["exclusion type", "POST", "/api/v2/admin/runs/run-1/exclusion", { excluded: "yes" }, "invalid_excluded"],
   ] as const)("rejects a strict or wrong daily moderation %s", async (
     _case,
     method,
@@ -1396,6 +1399,7 @@ describe("editorial daily administration routes", () => {
       declineDailyNomination: mutation,
       queueDailyChallenge: mutation,
       removeDailyQueueEntry: mutation,
+      setRunBoardExclusion: mutation,
     });
     tracking.authorize = vi.fn(async () => claimedAdmin());
     const worker = createWorker({ createTracking: () => tracking });
@@ -1584,6 +1588,124 @@ describe("editorial daily administration routes", () => {
     expect(approveDailyNomination).toHaveBeenCalledWith(
       "canonical-admin", "nomination-1", "hard", "approve-1",
     );
+  });
+
+  it("returns 404 run_not_found when the admin excludes an unknown run", async () => {
+    const tracking = fakeWorkerTracking();
+    const setRunBoardExclusion = vi.fn(async () => null);
+    Object.assign(tracking.handlers, { setRunBoardExclusion });
+    tracking.authorize = vi.fn(async () => claimedAdmin());
+    const worker = createWorker({ createTracking: () => tracking });
+
+    const response = await worker.fetch(new Request(
+      "https://worker.example/api/v2/admin/runs/run-nope/exclusion",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+        body: JSON.stringify({ excluded: true }),
+      },
+    ), editorialWorkerEnv("canonical-admin"));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: "run_not_found", message: "Run not found." },
+    });
+    expect(setRunBoardExclusion).toHaveBeenCalledWith("run-nope", true);
+  });
+
+  it("flips the board-exclusion flag for an admin and emits an audit log line", async () => {
+    const tracking = fakeWorkerTracking();
+    const setRunBoardExclusion = vi.fn(async (runId: string, excluded: boolean) => ({
+      runId,
+      boardExcluded: excluded,
+    }));
+    Object.assign(tracking.handlers, { setRunBoardExclusion });
+    tracking.authorize = vi.fn(async () => claimedAdmin());
+    const worker = createWorker({ createTracking: () => tracking });
+    const env = editorialWorkerEnv("canonical-admin");
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    try {
+      const response = await worker.fetch(new Request(
+        "https://worker.example/api/v2/admin/runs/run%2D1/exclusion",
+        {
+          method: "POST",
+          headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+          body: JSON.stringify({ excluded: true }),
+        },
+      ), env);
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        runId: "run-1",
+        boardExcluded: true,
+      });
+      expect(setRunBoardExclusion).toHaveBeenCalledWith("run-1", true);
+
+      const auditLine = consoleInfo.mock.calls.find(([event]) => event === "run_board_exclusion");
+      expect(auditLine).toBeDefined();
+      const [, payload] = auditLine as [string, string];
+      expect(JSON.parse(payload)).toEqual({
+        runId: "run-1",
+        boardExcluded: true,
+        actorAccountId: "canonical-admin",
+      });
+
+      const cleared = await worker.fetch(new Request(
+        "https://worker.example/api/v2/admin/runs/run%2D1/exclusion",
+        {
+          method: "POST",
+          headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+          body: JSON.stringify({ excluded: true }),
+        },
+      ), env);
+      expect(cleared.status).toBe(200);
+      await expect(cleared.json()).resolves.toEqual({ runId: "run-1", boardExcluded: true });
+    } finally {
+      consoleInfo.mockRestore();
+    }
+  });
+
+  it("does not require an idempotency key for run exclusion", async () => {
+    const tracking = fakeWorkerTracking();
+    const setRunBoardExclusion = vi.fn(async () => ({ runId: "run-1", boardExcluded: false }));
+    Object.assign(tracking.handlers, { setRunBoardExclusion });
+    tracking.authorize = vi.fn(async () => claimedAdmin());
+    const worker = createWorker({ createTracking: () => tracking });
+
+    const response = await worker.fetch(new Request(
+      "https://worker.example/api/v2/admin/runs/run-1/exclusion",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+        body: JSON.stringify({ excluded: false }),
+      },
+    ), editorialWorkerEnv("canonical-admin"));
+
+    expect(response.status).toBe(200);
+  });
+
+  it("rejects malformed run IDs before dispatching the mutation", async () => {
+    const tracking = fakeWorkerTracking();
+    const setRunBoardExclusion = vi.fn();
+    Object.assign(tracking.handlers, { setRunBoardExclusion });
+    tracking.authorize = vi.fn(async () => claimedAdmin());
+    const worker = createWorker({ createTracking: () => tracking });
+
+    const response = await worker.fetch(new Request(
+      "https://worker.example/api/v2/admin/runs/%E0%A4%A/exclusion",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer test", "Content-Type": "application/json" },
+        body: JSON.stringify({ excluded: true }),
+      },
+    ), editorialWorkerEnv("canonical-admin"));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "invalid_run_id" },
+    });
+    expect(setRunBoardExclusion).not.toHaveBeenCalled();
   });
 });
 
