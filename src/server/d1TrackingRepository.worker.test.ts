@@ -3306,6 +3306,53 @@ describe("Task 4 D1 projections", () => {
   });
 });
 
+describe("board exclusion (migration 0006)", () => {
+  it("omits excluded runs from listLeaderboard", async () => {
+    const fasterRunId = "faster-excluded";
+    await insertCompletedV2({
+      id: fasterRunId,
+      accountId: "faster-account",
+      elapsedMs: 3_000,
+      completedAt: "2026-07-14T01:00:03.000Z",
+    });
+    await insertCompletedV2({
+      id: "slower-kept",
+      accountId: "slower-account",
+      elapsedMs: 5_000,
+      completedAt: "2026-07-14T01:00:05.000Z",
+    });
+
+    const { repository } = fixture();
+    const before = await repository.listLeaderboard("challenge-0001");
+    expect(before.map((r) => r.runId)).toContain(fasterRunId);
+
+    await env.VWIKI_RACE_DB.prepare(
+      "UPDATE runs SET board_excluded = 1 WHERE id = ?",
+    ).bind(fasterRunId).run();
+
+    const after = await repository.listLeaderboard("challenge-0001");
+    expect(after.map((r) => r.runId)).not.toContain(fasterRunId);
+    expect(after[0]?.runId).toBe("slower-kept");
+    // remaining rows re-rank from 1 with no gap
+    expect(after[0]?.rank).toBe(1);
+  });
+
+  it("defaults to included (board_excluded = 0) for new runs", async () => {
+    const anyRunId = "default-included";
+    await insertCompletedV2({
+      id: anyRunId,
+      accountId: "default-account",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+
+    const row = await env.VWIKI_RACE_DB.prepare(
+      "SELECT board_excluded FROM runs WHERE id = ?",
+    ).bind(anyRunId).first<{ board_excluded: number }>();
+    expect(row?.board_excluded).toBe(0);
+  });
+});
+
 function fixture(
   clock: { now: string } = { now: "2026-07-14T01:00:00.000Z" },
   firstId = "run-1",

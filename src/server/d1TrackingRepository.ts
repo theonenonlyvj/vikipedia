@@ -2249,7 +2249,7 @@ export function createD1TrackingRepository(options: {
              FROM runs r
              LEFT JOIN account_aliases a
                ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
-             WHERE r.challenge_id = ?
+             WHERE r.challenge_id = ? AND r.board_excluded = 0
            ), attempted AS (
              SELECT *, row_number() over (
                PARTITION BY challenge_id, account_id
