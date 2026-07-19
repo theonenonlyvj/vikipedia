@@ -1173,21 +1173,27 @@ h1 {
   left: 0;
 }
 
+/* PKG-08 (council 2026-07-19 owner-proxy ruling): this card used to carry
+   raw Wikipedia chrome (#f8f9fa/#202122, Georgia serif blurb, #36c links) -
+   a stark white card floating in the otherwise all-dark app. Reskinned to
+   the same --ink-raised/--line/UI-font treatment `.recovery-notice` already
+   uses; the in-race article body (not this card) is the one place raw
+   Wikipedia styling is spec-approved to remain. */
 .pre-race-copy {
   display: flex;
   width: 100%;
   min-width: 0;
   flex-direction: column;
-  border: 1px solid #a2a9b1;
-  background: #f8f9fa;
-  color: #202122;
+  border: 1px solid var(--line);
+  background: var(--ink-raised);
+  color: var(--text);
   padding: clamp(20px, 4vw, 42px);
   clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  font-family: var(--viota-ui-font);
 }
 
 .pre-race-copy h2 {
   margin-top: 8px;
-  color: #101418;
   font-family: var(--viota-display-font);
   font-size: 3.4rem;
   font-weight: 400;
@@ -1197,7 +1203,7 @@ h1 {
 
 .pre-race-start-article {
   margin-top: 18px;
-  color: #54595d;
+  color: var(--muted);
   font-weight: 700;
 }
 
@@ -1277,7 +1283,7 @@ h1 {
 }
 
 .target-preview-kicker {
-  color: #b32417;
+  color: var(--muted);
   font-family: var(--viota-ui-font);
   font-size: 0.72rem;
   font-weight: 900;
@@ -1287,8 +1293,7 @@ h1 {
 .target-preview-blurb {
   max-width: 68ch;
   margin-top: 18px;
-  color: #3a4248;
-  font-family: Georgia, "Times New Roman", serif;
+  color: #b9d4d8;
   font-size: 1.08rem;
   line-height: 1.55;
 }
@@ -1296,12 +1301,12 @@ h1 {
 .target-preview-attribution {
   margin-top: auto;
   padding-top: 22px;
-  color: #54595d;
+  color: var(--muted);
   font-size: 0.76rem;
 }
 
 .target-preview-attribution a {
-  color: #36c;
+  color: var(--cyan);
 }
 
 .challenge-share {
@@ -2823,6 +2828,25 @@ h1 {
 
   .daily-hero .player-gate {
     align-items: center;
+  }
+
+  /* PKG-08: at this width the preview card is vertically centered in a much
+     taller, shorter-content viewport than mobile, so the top-pinned back
+     button (still `position: absolute; top: 0; left: 0` at narrower widths)
+     ended up orphaned ~190px above the card with no compositional
+     relationship to it. Folding it into the same flex column as the card -
+     both sharing the card's own max-width and left edge - ties it to the
+     card instead of the viewport corner. */
+  .pre-race-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 14px;
+  }
+
+  .pre-race-back {
+    position: static;
   }
 }
 
