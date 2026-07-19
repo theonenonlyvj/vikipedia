@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ChallengeBrowser from "./Browse";
+import type { HomeHeroSelection } from "../../domain/challengeSelection";
 import type { Challenge } from "../../domain/types";
 import type { VWikiRaceApiClient } from "../../services/vwikiRaceApiClient";
 
@@ -58,14 +59,20 @@ function mockApiClient(overrides: Partial<VWikiRaceApiClient> = {}): VWikiRaceAp
 function renderBrowse(overrides: Partial<Parameters<typeof ChallengeBrowser>[0]> = {}) {
   const onCreateChallenge = vi.fn(async () => undefined);
   const onCreateRandomChallenge = vi.fn();
+  const onGoHome = vi.fn();
   const onOpenChallenge = vi.fn();
   const props = {
     apiClient: mockApiClient(),
     canNominateForDaily: false,
     challenges: [challengeOne, challengeTwo],
+    // PKG-01: no pin by default - most of this suite doesn't care about the
+    // daily pin, so it stays absent (`null` heroSelection) unless a test
+    // opts in.
+    heroSelection: null as HomeHeroSelection | null,
     identityToken: null as string | null,
     onCreateChallenge,
     onCreateRandomChallenge,
+    onGoHome,
     onOpenChallenge,
     randomChallengeBusy: false,
     randomChallengeError: null as string | null,
@@ -74,7 +81,7 @@ function renderBrowse(overrides: Partial<Parameters<typeof ChallengeBrowser>[0]>
     ...overrides,
   };
   render(<ChallengeBrowser {...props} />);
-  return { onCreateChallenge, onCreateRandomChallenge, onOpenChallenge };
+  return { onCreateChallenge, onCreateRandomChallenge, onGoHome, onOpenChallenge };
 }
 
 describe("Browse: full card spec (Increment 5)", () => {
@@ -230,5 +237,84 @@ describe("Browse: full card spec (Increment 5)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Wikipedia wasn't cooperating — try again.",
     );
+  });
+});
+
+describe("Browse: pinned daily row (PKG-01 - one source of truth for 'today's daily')", () => {
+  const pinnedChallenge: Challenge = {
+    id: "challenge-daily-01",
+    label: "Daily 2026-07-18",
+    mode: "daily",
+    start: { title: "Coffee" },
+    target: { title: "Great Molasses Flood" },
+    ruleset: "ranked_classic",
+    source: "curated",
+    origin: "daily",
+    dailyDate: "2026-07-18",
+  };
+
+  it("pins the shared hero selection above the catalog, routing to Home (not Detail)", async () => {
+    const user = userEvent.setup();
+    const { onGoHome, onOpenChallenge } = renderBrowse({
+      heroSelection: { challenge: pinnedChallenge, kind: "today-daily" },
+    });
+
+    const pinned = await screen.findByRole("button", { name: /coffee.*great molasses flood/i });
+    expect(pinned.querySelector(".daily-badge")?.textContent).toBe("⭐ Today");
+
+    await user.click(pinned);
+    expect(onGoHome).toHaveBeenCalledTimes(1);
+    expect(onOpenChallenge).not.toHaveBeenCalled();
+  });
+
+  it("labels a pre-drop yesterday's-daily pin honestly (never 'Today'), still routing Home", async () => {
+    const user = userEvent.setup();
+    const { onGoHome } = renderBrowse({
+      heroSelection: { challenge: pinnedChallenge, kind: "yesterday-daily" },
+      todayCentral: "2026-07-19",
+    });
+
+    const pinned = await screen.findByRole("button", { name: /coffee.*great molasses flood/i });
+    expect(pinned.querySelector(".daily-badge")?.textContent).toBe("⭐ Daily 7/18");
+
+    await user.click(pinned);
+    expect(onGoHome).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the pin's state chip from the same outcomes source as ordinary cards", async () => {
+    const apiClient = mockApiClient({
+      getAccountChallengeOutcomes: vi.fn(async () => [
+        {
+          challengeId: pinnedChallenge.id,
+          outcome: "completed" as const,
+          best: { elapsedMs: 42_000, clickCount: 6 },
+        },
+      ]),
+    });
+    renderBrowse({
+      apiClient,
+      heroSelection: { challenge: pinnedChallenge, kind: "today-daily" },
+      identityToken: "jwt-claimed",
+    });
+
+    const pinned = await screen.findByRole("button", { name: /coffee.*great molasses flood/i });
+    expect(within(pinned).getByText("✓ 0:42 · 6 clk")).toBeVisible();
+  });
+
+  it("shows no pinned row while the hero selection hasn't resolved yet", () => {
+    renderBrowse({ heroSelection: null });
+    expect(screen.queryByLabelText("Today's daily")).toBeNull();
+  });
+
+  it("shows no pinned row for the 'default' fallback kind - never disguises a random challenge as the daily", async () => {
+    renderBrowse({
+      heroSelection: { challenge: challengeOne, kind: "default" },
+    });
+
+    // challengeOne is a real catalog card (no daily fields at all), so it
+    // still renders as an ordinary card below - just never a second time,
+    // starred, as if it were the daily.
+    await screen.findByRole("button", { name: /challenge #1/i });
+    expect(screen.queryByLabelText("Today's daily")).toBeNull();
   });
 });

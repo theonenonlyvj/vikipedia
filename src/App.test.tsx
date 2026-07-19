@@ -1050,16 +1050,18 @@ describe("VWiki Race app", () => {
     // "View leaderboard" exits the full-screen results takeover back to the
     // normal shell - now Boards (Increment 3 rebuild), not a "Leaderboard"
     // tab (Results itself stays unchanged this increment - see the
-    // race-flow spec's Results beat). This fixture challenge isn't a real
-    // daily, so Boards' Today segment falls back to it (same fallback Home's
-    // hero uses), and fetches its own deduped board exactly once - the
-    // second /board call overall, after Home's own hero board read on
-    // initial mount (desktop-pass FIX 3: Home reads the deduped board now,
-    // not the per-attempt leaderboard).
+    // race-flow spec's Results beat). PKG-01: this fixture challenge isn't a
+    // real daily (no dailyFeature/origin), so `selectHomeHeroChallenge`
+    // resolves it as kind "default" - Boards' Today segment now shows its
+    // own honest empty state for that kind rather than re-fetching this
+    // challenge's board a second time under a "TODAY" label (the pre-PKG-01
+    // fallback this test used to exercise). Home's own hero board read on
+    // initial mount is still the only /board call.
     await user.click(screen.getByRole("button", { name: /view leaderboard/i }));
     expect(screen.getByRole("heading", { name: "Boards" })).toBeVisible();
     expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
-    await waitFor(() => expect(boardCalls(fetchImpl, "challenge-0001")).toBe(2));
+    expect(await screen.findByText(/no daily challenge right now/i)).toBeVisible();
+    await waitFor(() => expect(boardCalls(fetchImpl, "challenge-0001")).toBe(1));
     expect(completeRunCalls(fetchImpl)).toBe(0);
   });
 
@@ -3795,8 +3797,12 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
   });
 
   it("shows today's deduped board - rank, name, time·clicks - and highlights the viewer's own row", async () => {
+    // PKG-01: a genuine today's daily, not `twoChallenges()`'s plain fixture
+    // (no dailyFeature/origin) - Boards' Today segment now shows its own
+    // honest empty state for a non-daily "default" selection instead of
+    // silently falling back to an arbitrary challenge.
     const fetchImpl = createFetchMock({
-      challenges: [twoChallenges()[0]],
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-07-17" })],
       boardByChallenge: {
         "challenge-0001": {
           placements: [
@@ -3808,7 +3814,14 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       },
     });
     const user = userEvent.setup();
-    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
 
     await user.click(await screen.findByRole("button", { name: "Boards" }));
     const board = screen.getByRole("region", { name: "Boards" });
@@ -3821,8 +3834,10 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
   });
 
   it("shows a muted DNF section below finishers, with no path disclosure anywhere in Boards", async () => {
+    // PKG-01: see the "shows today's deduped board" test above for why this
+    // is a real daily fixture now, not `twoChallenges()`.
     const fetchImpl = createFetchMock({
-      challenges: [twoChallenges()[0]],
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-07-17" })],
       boardByChallenge: {
         "challenge-0001": {
           placements: [
@@ -3835,7 +3850,14 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       },
     });
     const user = userEvent.setup();
-    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
 
     await user.click(await screen.findByRole("button", { name: "Boards" }));
     const board = screen.getByRole("region", { name: "Boards" });
@@ -3851,12 +3873,21 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
   });
 
   it("shows a Race CTA on Today when the viewer hasn't finished, wired to the pre-race preview", async () => {
+    // PKG-01: see the "shows today's deduped board" test above for why this
+    // is a real daily fixture now, not `twoChallenges()`.
     const fetchImpl = createFetchMock({
-      challenges: [twoChallenges()[0]],
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-07-17" })],
       boardByChallenge: { "challenge-0001": { placements: [], dnfs: [] } },
     });
     const user = userEvent.setup();
-    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
 
     await user.click(await screen.findByRole("button", { name: "Boards" }));
     const board = await screen.findByRole("region", { name: "Boards" });

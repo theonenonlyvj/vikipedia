@@ -1884,6 +1884,24 @@ h1 {
   width: 100%;
 }
 
+/* PKG-01: the pinned daily row (spec: "The daily pinned at top but pointing
+   to Home") - reuses `.challenge-list`'s existing card styling (state-chip
+   colors, `.daily-badge` pill, title-row layout) via the shared class, plus
+   a cyan accent border that marks it "visually distinct from the catalog."
+   Never coral (PKG-04: coral is reserved for clock-commit race actions -
+   this button routes to Home, it doesn't start a run). */
+.browse-pinned-card {
+  border-left: 4px solid var(--cyan);
+}
+
+.browse-catalog-heading {
+  margin: 14px 0 0;
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .browse-random-challenge {
   margin-top: 14px;
   display: grid;

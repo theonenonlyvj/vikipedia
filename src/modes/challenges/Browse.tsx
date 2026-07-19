@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import StateChip from "../../components/StateChip";
 import { formatChallengeCardMeta } from "../../domain/challengeCard";
-import { dailyBadgeLabel } from "../../domain/challengeSelection";
+import { dailyBadgeLabel, type HomeHeroSelection } from "../../domain/challengeSelection";
 import { filterChallengesByQuery, resolveChallengeIdFromSearchInput } from "../../domain/challengeSearch";
 import { RANDOM_CHALLENGE_LOADING_COPY } from "../../domain/playAnother";
 import type { Challenge, ChallengeOutcomeEntry, ChallengeSummaryEntry } from "../../domain/types";
@@ -27,14 +27,28 @@ export interface CreateChallengeInput {
  * sharing App.tsx's single random-challenge busy/error state with Home's and
  * Results' Play-another card so the two surfaces can never double-fire
  * against each other.
+ *
+ * PKG-01: a pinned daily row sits above the catalog ("⭐ <daily badge> ·
+ * pair", state chip), sourced from `heroSelection` - the SAME
+ * `selectHomeHeroChallenge` pick AppShell hands to Home's hero and Boards'
+ * Today segment, so Browse can never pin a different "today's daily" than
+ * either of those. It routes to Home (`onGoHome`), not Challenge Detail
+ * (spec: "The daily pinned at top but pointing to Home") - Home, not
+ * Browse, owns the actual race/board UI for it. Mirrors the same honesty
+ * rule as Boards/Home: the pin only ever shows for `today-daily`/
+ * `yesterday-daily` kinds; the "default" kind (no daily anywhere in the
+ * catalog) renders no pin at all rather than disguising an arbitrary
+ * fallback challenge as the daily.
  */
 export default function ChallengeBrowser({
   apiClient,
   canNominateForDaily,
   challenges,
+  heroSelection,
   identityToken,
   onCreateChallenge,
   onCreateRandomChallenge,
+  onGoHome,
   onOpenChallenge,
   randomChallengeBusy,
   randomChallengeError,
@@ -45,12 +59,18 @@ export default function ChallengeBrowser({
   apiClient: VWikiRaceApiClient;
   canNominateForDaily: boolean;
   challenges: Challenge[];
+  // PKG-01: AppShell's `homeHero` - see this file's doc comment above.
+  // `null` while the catalog is still loading (or is genuinely empty).
+  heroSelection: HomeHeroSelection | null;
   // `null` for an anonymous/no-session visitor (spec: "Anonymous/no-session:
   // no chips (no outcomes call)") - browsing itself never requires identity
   // (invariant 4).
   identityToken: string | null;
   onCreateChallenge: (input: CreateChallengeInput) => Promise<void>;
   onCreateRandomChallenge: () => void;
+  // The pinned daily row's route (spec: "pinned at top but pointing to
+  // Home") - distinct from `onOpenChallenge`, which every other card uses.
+  onGoHome: () => void;
   onOpenChallenge: (challengeId: string) => void;
   randomChallengeBusy: boolean;
   randomChallengeError: string | null;
@@ -127,6 +147,15 @@ export default function ChallengeBrowser({
     () => filterChallengesByQuery(challenges, searchQuery),
     [challenges, searchQuery],
   );
+  // PKG-01: the pin only shows for a real daily (today's or yesterday's,
+  // still-playable) - the "default" kind means no daily exists anywhere in
+  // the catalog, and pinning its arbitrary fallback challenge would repeat
+  // the exact "random challenge disguised as the daily" bug this package
+  // fixes in Boards. Independent of `searchQuery` - it's standing chrome,
+  // not a catalog row, so it doesn't filter away as the user types.
+  const pinnedDaily = heroSelection && heroSelection.kind !== "default"
+    ? heroSelection.challenge
+    : null;
 
   function handleSearchChange(value: string) {
     setSearchQuery(value);
@@ -189,44 +218,79 @@ export default function ChallengeBrowser({
         </label>
       </div>
 
-      {visibleChallenges.length ? (
-        <ol className="challenge-list">
-          {visibleChallenges.map((challenge) => {
-            const meta = formatChallengeCardMeta(summaryByChallengeId?.get(challenge.id));
-            return (
-              <li key={challenge.id}>
-                <button
-                  aria-pressed={selectedChallengeId === challenge.id}
-                  className="browse-card"
-                  disabled={selectionLocked}
-                  onClick={() => onOpenChallenge(challenge.id)}
-                  type="button"
-                >
-                  <span className="challenge-meta">
-                    <span>{challenge.label ?? challenge.id}</span>
-                    {dailyBadgeLabel(challenge, todayCentral) ? (
-                      <span className="daily-badge">
-                        {dailyBadgeLabel(challenge, todayCentral)}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="browse-card-title-row">
-                    <strong>
-                      {challenge.start.title} {"->"} {challenge.target.title}
-                    </strong>
-                    {hasSession ? (
-                      <StateChip outcome={outcomesByChallengeId?.get(challenge.id)} />
-                    ) : null}
-                  </span>
-                  {meta ? <span className="browse-card-meta muted">{meta}</span> : null}
-                  {challenge.createdBy ? (
-                    <em>Created by {challenge.createdBy.displayName}</em>
-                  ) : null}
-                </button>
-              </li>
-            );
-          })}
+      {pinnedDaily ? (
+        // PKG-01/spec ("The daily pinned at top but pointing to Home"):
+        // wrapped in its own `.challenge-list`-classed list (reusing that
+        // class's existing card styling, incl. state-chip/daily-badge
+        // colors) so it needs no bespoke CSS beyond the accent that marks
+        // it "visually distinct from the catalog" below.
+        <ol className="challenge-list browse-pinned-list" aria-label="Today's daily">
+          <li>
+            <button
+              className="browse-card browse-pinned-card"
+              disabled={selectionLocked}
+              onClick={onGoHome}
+              type="button"
+            >
+              <span className="challenge-meta">
+                <span className="daily-badge">
+                  {"⭐"} {dailyBadgeLabel(pinnedDaily, todayCentral) ?? "Daily"}
+                </span>
+              </span>
+              <span className="browse-card-title-row">
+                <strong>
+                  {pinnedDaily.start.title} {"->"} {pinnedDaily.target.title}
+                </strong>
+                {hasSession ? (
+                  <StateChip outcome={outcomesByChallengeId?.get(pinnedDaily.id)} />
+                ) : null}
+              </span>
+            </button>
+          </li>
         </ol>
+      ) : null}
+
+      {visibleChallenges.length ? (
+        <>
+          <p className="browse-catalog-heading muted">All challenges</p>
+          <ol className="challenge-list">
+            {visibleChallenges.map((challenge) => {
+              const meta = formatChallengeCardMeta(summaryByChallengeId?.get(challenge.id));
+              return (
+                <li key={challenge.id}>
+                  <button
+                    aria-pressed={selectedChallengeId === challenge.id}
+                    className="browse-card"
+                    disabled={selectionLocked}
+                    onClick={() => onOpenChallenge(challenge.id)}
+                    type="button"
+                  >
+                    <span className="challenge-meta">
+                      <span>{challenge.label ?? challenge.id}</span>
+                      {dailyBadgeLabel(challenge, todayCentral) ? (
+                        <span className="daily-badge">
+                          {dailyBadgeLabel(challenge, todayCentral)}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="browse-card-title-row">
+                      <strong>
+                        {challenge.start.title} {"->"} {challenge.target.title}
+                      </strong>
+                      {hasSession ? (
+                        <StateChip outcome={outcomesByChallengeId?.get(challenge.id)} />
+                      ) : null}
+                    </span>
+                    {meta ? <span className="browse-card-meta muted">{meta}</span> : null}
+                    {challenge.createdBy ? (
+                      <em>Created by {challenge.createdBy.displayName}</em>
+                    ) : null}
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        </>
       ) : (
         <p className="muted">
           {challenges.length ? "No challenges match your search." : "No challenges loaded."}

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import AdminDailies from "../components/AdminDailies";
 import TeachingGate from "../components/TeachingGate";
-import { selectDefaultChallenge, selectHomeHeroChallenge } from "../domain/challengeSelection";
+import { selectHomeHeroChallenge } from "../domain/challengeSelection";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import { shouldShowTeachingGate } from "../domain/teachingGate";
 import type { CreateChallengeInput } from "./challenges/Browse";
@@ -40,8 +40,10 @@ const MODE_ITEMS: { key: ModeKey; label: string }[] = [
  *
  * Also owns the first-visit teaching gate (spec: "app-shell level, not
  * Home-specific... must fire on Challenge Detail too") and the single
- * "today's playable challenge" derivation shared by Home's hero and the
- * gate's popup example, so the two can never show a different pair.
+ * "today's playable challenge" derivation (PKG-01: `homeHero`) shared by
+ * Home's hero, the gate's popup example, Boards' Today segment, and
+ * Browse's pinned daily row, so none of them can ever show a different pair
+ * or disagree about whether it's really today's daily.
  */
 export default function AppShell({
   accountStats,
@@ -112,18 +114,21 @@ export default function AppShell({
   sessionDnfChallengeIds: ReadonlySet<string>;
   todayCentral: string;
 }) {
-  // Boards' Today segment keeps the pre-redesign selectDefaultChallenge
-  // derivation (desktop-pass FIX 4 deliberately leaves non-Home consumers
-  // untouched).
-  const todaysHeroChallenge = useMemo(
-    () => selectDefaultChallenge(challenges, { todayUtc: todayCentral }),
-    [challenges, todayCentral],
-  );
-  // The one challenge Home's hero races and the teaching-gate popup uses as
-  // its worked example, so the two can never show a different pair. FIX 4:
-  // today's real daily post-drop; yesterday's still-playable daily pre-drop
-  // (Home badges it as such); the default fallback only when the catalog
-  // has no daily at all.
+  // PKG-01: the ONE "today's playable challenge" derivation, shared by
+  // Home's hero, the teaching-gate popup's worked example, Boards' Today
+  // segment, and Browse's pinned daily row - so none of the four can ever
+  // show a different pair or a different honesty framing. Before this fix,
+  // Boards kept its own `selectDefaultChallenge` call, whose fallback chain
+  // ends at `activeChallenges[0]` - an arbitrary catalog entry - so a
+  // pre-drop or broken-generation day had Boards badging a random challenge
+  // "TODAY" with a "Race today's daily" CTA while Home correctly showed
+  // yesterday's still-playable daily. `selectHomeHeroChallenge` is the
+  // honest version: today's real daily post-drop ("today-daily"); else
+  // yesterday's still-playable daily pre-drop ("yesterday-daily", badged as
+  // such); else the pre-redesign default-challenge fallback only when the
+  // catalog has no daily at all ("default" - Boards and Browse now both
+  // treat this kind as "no daily to show," never disguising the fallback
+  // challenge as a daily).
   const homeHero = useMemo(
     () => selectHomeHeroChallenge(challenges, todayCentral),
     [challenges, todayCentral],
@@ -234,11 +239,11 @@ export default function AppShell({
           <Boards
             apiClient={apiClient}
             challenges={challenges}
+            heroSelection={homeHero}
             identityAccountId={identitySession?.accountId ?? null}
             initialSegment={boardsInitialSegment}
             onRaceChallenge={onRaceChallenge}
             raceBusy={authBusy}
-            todaysHeroChallenge={todaysHeroChallenge}
             todayCentral={todayCentral}
           />
         ) : null}
@@ -261,9 +266,11 @@ export default function AppShell({
               apiClient={apiClient}
               canNominateForDaily={canNominateForDaily}
               challenges={challenges}
+              heroSelection={homeHero}
               identityToken={identitySession?.token ?? null}
               onCreateChallenge={onCreateChallenge}
               onCreateRandomChallenge={onCreateRandomChallenge}
+              onGoHome={() => onSelectMode("home")}
               onOpenChallenge={onOpenChallengeDetail}
               randomChallengeBusy={randomChallengeBusy}
               randomChallengeError={randomChallengeError}
