@@ -293,6 +293,7 @@ export default function AppShell({
           <You
             identitySession={identitySession}
             onClaimIdentity={onClaimIdentity}
+            onGoHome={() => onSelectMode("home")}
             stats={accountStats}
           />
         ) : null}

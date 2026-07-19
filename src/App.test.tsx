@@ -3027,7 +3027,10 @@ describe("VWiki Race app", () => {
 
       await user.click(within(nav).getByRole("button", { name: "You" }));
       expect(within(nav).getByRole("button", { name: "You" })).toHaveAttribute("aria-pressed", "true");
-      expect(screen.getByRole("heading", { name: "Stats" })).toBeVisible();
+      // QF-09: You's own heading is "Your stats", not "Stats" - the nav
+      // tab literally labeled "Stats" points at Boards (PKG-14), one tap
+      // away from here.
+      expect(screen.getByRole("heading", { name: "Your stats" })).toBeVisible();
 
       await user.click(within(nav).getByRole("button", { name: "Home" }));
       expect(within(nav).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
@@ -3081,7 +3084,7 @@ describe("VWiki Race app", () => {
 
       await user.click(await screen.findByRole("button", { name: "You" }));
 
-      expect(screen.getByRole("heading", { name: "Stats" })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "Your stats" })).toBeVisible();
       expect(await screen.findByText("9")).toBeVisible();
     });
 
@@ -3151,6 +3154,48 @@ describe("VWiki Race app", () => {
       await user.click(await screen.findByRole("button", { name: "You" }));
 
       expect(screen.queryByRole("region", { name: /claim your stats/i })).toBeNull();
+    });
+
+    it("QF-09: collapses a never-played guest's You tab into one message + a Home CTA, not ten repeated placeholders", async () => {
+      const user = userEvent.setup();
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+
+      await user.click(await screen.findByRole("button", { name: "You" }));
+
+      expect(screen.getByText(/play your first race to start building stats/i)).toBeVisible();
+      // Zero repeated "No data yet." strings - not the old 7-tile grid +
+      // 3 list sections' placeholder-times-ten.
+      expect(screen.queryByText(/no data yet/i)).toBeNull();
+      expect(screen.queryByRole("heading", { name: /your stats/i })).toBeNull();
+      // Scoped to the true never-played-guest case only: no identitySession
+      // at all, so there's nothing yet to "claim" either.
+      expect(screen.queryByRole("region", { name: /claim your stats/i })).toBeNull();
+
+      // Scoped to the empty state itself - the bottom-nav's own "Home" tab
+      // is also on screen and shares the accessible name.
+      const emptyState = document.querySelector(".you-empty-state") as HTMLElement;
+      await user.click(within(emptyState).getByRole("button", { name: /^home$/i }));
+      expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    });
+
+    it("QF-09: a played account's You tab shows Avg speed/Avg clicks tiles alongside the existing grid", async () => {
+      const fetchImpl = createFetchMock({
+        accountAttempts: 9,
+        accountAverages: { averageClicks: 4.5, averageElapsedMs: 12300 },
+      });
+      const user = userEvent.setup();
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      await screen.findByText("Attempts");
+
+      const grid = document.querySelector(".stat-grid") as HTMLElement;
+      const valueFor = (label: string) =>
+        within(grid).getByText(label).nextElementSibling?.textContent;
+
+      await waitFor(() => expect(valueFor("Attempts")).toBe("9"));
+      expect(valueFor("Avg speed")).toBe("12.3s");
+      expect(valueFor("Avg clicks")).toBe("4.5");
     });
   });
 });
@@ -4511,7 +4556,7 @@ describe("PKG-07 (council 2026-07-19, owner-proxy ruling): daily ritual identity
 
     await user.click(await screen.findByRole("button", { name: "You" }));
 
-    expect(screen.getByRole("heading", { name: "Stats" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Your stats" })).toBeVisible();
     expect(await screen.findByText("Streak")).toBeVisible();
     expect(screen.getByText("9 days")).toBeVisible();
   });
@@ -5363,6 +5408,10 @@ function createFetchMock(options?: {
   runOldPath?: ServerPathStep[];
   accountAttempts?: number;
   accountCompleted?: number;
+  // QF-09: totals.averageClicks/averageElapsedMs, for the You tab's "Avg
+  // clicks"/"Avg speed" tiles - defaults to {0, 0} like the rest of
+  // totals' zeroed fixture fields.
+  accountAverages?: { averageClicks: number; averageElapsedMs: number };
   // Models totals.completed changing across successive /accounts/me/stats
   // reads (e.g. pre-race fetch vs. post-race refresh) - index N-1 for the
   // Nth call, holding the last entry once exhausted. Takes precedence over
@@ -5591,7 +5640,17 @@ function createFetchMock(options?: {
         : options?.accountCompleted ?? 0;
       return jsonResponse({
         stats: {
-          totals: { attempts: options?.accountAttempts ?? 0, completed, abandoned: 0, timedCompleted: 0, totalClicks: 0, bestClicks: null, bestElapsedMs: null, averageClicks: 0, averageElapsedMs: 0 },
+          totals: {
+            attempts: options?.accountAttempts ?? 0,
+            completed,
+            abandoned: 0,
+            timedCompleted: 0,
+            totalClicks: 0,
+            bestClicks: null,
+            bestElapsedMs: null,
+            averageClicks: options?.accountAverages?.averageClicks ?? 0,
+            averageElapsedMs: options?.accountAverages?.averageElapsedMs ?? 0,
+          },
           topStarts: [], topTargets: [], mostVisited: [],
           dailyStreak: options?.accountDailyStreak ?? 0,
           trend30: options?.accountTrend30 ?? { avgPlacement: null, playedCount: 0, ranked: false, guard: 10 },

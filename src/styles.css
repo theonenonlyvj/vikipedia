@@ -1171,6 +1171,17 @@ h1 {
   padding: 14px;
 }
 
+/* QF-09: a never-played guest's single-message empty state, reusing the
+   shared `.empty-state` panel chrome (border/background/clip-path -
+   Home.tsx's loading state uses the same class) with its own gap/alignment
+   so the "Home" CTA doesn't stretch full-width or sit flush under the
+   copy. */
+.you-empty-state {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
 /*
  * Race flow: full-screen, zero-chrome takeover (preview -> race -> results).
  * Rendered by RaceFlow in place of the app header/tabbar whenever engaged
