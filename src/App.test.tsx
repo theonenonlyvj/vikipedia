@@ -271,6 +271,58 @@ describe("VWiki Race app", () => {
     await waitFor(() => expect(challengeCatalogCalls(fetchImpl)).toBe(2));
   });
 
+  it("QF-06: self-heals across the 5:00 AM Central daily-drop boundary for a tab left foregrounded through it, with no focus/blur needed", async () => {
+    // Deliberately no `screen.findByRole`/`waitFor` anywhere in this test -
+    // both poll via real timers under the hood, which never fire while
+    // `vi.useFakeTimers()` is active. The catalog-fetch call itself is
+    // synchronous (only its Promise resolves later), so a plain call-count
+    // check right after `render()`/`advanceTimersByTimeAsync` is both
+    // sufficient and hang-proof.
+    vi.useFakeTimers();
+    try {
+      // 4:59:58 AM Central (CDT) - 2s before the drop, mirrors
+      // useDailyCountdown.test.ts's own boundary fixture.
+      vi.setSystemTime(new Date("2026-07-17T09:59:58.000Z"));
+      const fetchImpl = createFetchMock();
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+      expect(challengeCatalogCalls(fetchImpl)).toBe(1);
+
+      // Cross the boundary purely via the clock - no focus/visibilitychange
+      // event dispatched at all.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+
+      expect(challengeCatalogCalls(fetchImpl)).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("QF-06: the 5:00 AM self-heal keeps re-arming for the following day's drop too (not a one-shot)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-17T09:59:58.000Z"));
+      const fetchImpl = createFetchMock();
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+      expect(challengeCatalogCalls(fetchImpl)).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(challengeCatalogCalls(fetchImpl)).toBe(2);
+
+      // A full day later (the next 5:00 AM Central drop) - proves the timer
+      // rescheduled itself rather than firing once and going silent.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+      });
+      expect(challengeCatalogCalls(fetchImpl)).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a plain load on Home through a focus/visibilitychange catalog refresh (regression: B1 - was force-navigating to Challenges -> Detail)", async () => {
     // A plain load of today's daily replace-syncs the URL to
     // /?challenge=<daily-id> (unrelated to this bug, already covered by
@@ -3589,7 +3641,13 @@ describe("Race flow: full-screen takeover", () => {
     // whatever accountStats live-reads whenever Results happens to render -
     // model the real server sequence explicitly (0 before this race, 1
     // after) rather than relying on a single static value.
-    const fetchImpl = createFetchMock({ accountCompletedSequence: [0, 1] });
+    // QF-06: raced challenge must be a genuine daily (dailyDateForChallenge
+    // !== null) - the ritual hook is now gated on daily-ness, not just
+    // first-finish.
+    const fetchImpl = createFetchMock({
+      accountCompletedSequence: [0, 1],
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-01-01" })],
+    });
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -3598,21 +3656,31 @@ describe("Race flow: full-screen takeover", () => {
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
     expect(await screen.findByText(/you reached it/i)).toBeVisible();
+    // QF-06: "come defend your spot" replaced with "come back tomorrow" -
+    // nonsensical wording once this same screen is reachable from a DNF or
+    // a non-first finish too.
     expect(
-      await screen.findByText(/🔥 day 1 · new daily drops 5:00 am — come defend your spot/i),
+      await screen.findByText(
+        /🔥 day 1 · new daily drops 5:00 am central — come back tomorrow for the next one/i,
+      ),
     ).toBeVisible();
   });
 
-  it("regression: M2 - does not show the ritual hook for a veteran's second finish even if the post-race stats refetch never advances past the stale pre-race reading", async () => {
+  it("regression: M2 - does not show the Day-1 ritual hook for a veteran's second finish even if the post-race stats refetch never advances past the stale pre-race reading, but still shows the generic drop-time cue (QF-06)", async () => {
     // Pre-race: this account already has 1 completed race (from a prior
     // session). The stats endpoint keeps reporting "1" after this race too
     // (a stale/unhelpful refetch, e.g. cache or replica lag) - the old
     // "accountStats live-read === 1" check would misread that as "just
     // transitioned 0 -> 1" and wrongly show the Day-1 hook on this account's
     // SECOND finish. The fix must snapshot the pre-race value (1) and key
-    // off that instead, hiding the hook regardless of what the refetch
-    // (eventually, or never) reports.
-    const fetchImpl = createFetchMock({ accountCompletedSequence: [1, 1] });
+    // off that instead, hiding the Day-1 hook regardless of what the
+    // refetch (eventually, or never) reports. QF-06: un-gating means a
+    // later completion still gets the plain drop-time cue, just without the
+    // Day-1 framing.
+    const fetchImpl = createFetchMock({
+      accountCompletedSequence: [1, 1],
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-01-01" })],
+    });
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -3622,7 +3690,8 @@ describe("Race flow: full-screen takeover", () => {
 
     expect(await screen.findByText(/you reached it/i)).toBeVisible();
     await waitFor(() => expect(accountStatsCalls(fetchImpl)).toBeGreaterThanOrEqual(2));
-    expect(screen.queryByText(/come defend your spot/i)).toBeNull();
+    expect(screen.queryByText(/🔥 day 1/i)).toBeNull();
+    expect(screen.getByText(/new daily drops 5:00 am central\./i)).toBeVisible();
   });
 
   it("regression: M2 - shows the first-finish ritual hook immediately for a true first finish, without waiting on a post-race stats refetch that never resolves", async () => {
@@ -3633,7 +3702,11 @@ describe("Race flow: full-screen takeover", () => {
     // it immediately from the pre-race snapshot (0), independent of whether
     // the refetch ever completes.
     const stuckRefetch = new Promise<Response>(() => {});
-    const fetchImpl = createFetchMock({ accountCompleted: 0, delayedStatsAfterFirst: stuckRefetch });
+    const fetchImpl = createFetchMock({
+      accountCompleted: 0,
+      delayedStatsAfterFirst: stuckRefetch,
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-01-01" })],
+    });
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -3643,11 +3716,59 @@ describe("Race flow: full-screen takeover", () => {
 
     expect(await screen.findByText(/you reached it/i)).toBeVisible();
     expect(
-      await screen.findByText(/🔥 day 1 · new daily drops 5:00 am — come defend your spot/i),
+      await screen.findByText(
+        /🔥 day 1 · new daily drops 5:00 am central — come back tomorrow for the next one/i,
+      ),
     ).toBeVisible();
   });
 
-  it("does not show the ritual hook on Results for a later completion (not the account's first)", async () => {
+  it("does not show the Day-1 ritual hook on Results for a later completion (not the account's first), but still shows the generic drop-time cue (QF-06)", async () => {
+    const fetchImpl = createFetchMock({
+      accountCompleted: 4,
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-01-01" })],
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+
+    expect(await screen.findByText(/you reached it/i)).toBeVisible();
+    expect(screen.queryByText(/🔥 day 1/i)).toBeNull();
+    expect(screen.getByText(/new daily drops 5:00 am central\./i)).toBeVisible();
+  });
+
+  it("QF-06: shows the generic drop-time cue on a DNF Results for a daily challenge too, not just a completed race", async () => {
+    const fetchImpl = createFetchMock({
+      clickStaysActive: true,
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-01-01" })],
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await screen.findByRole("heading", { name: "Apple" });
+
+    await user.click(await screen.findByRole("link", { name: /apple tree/i }));
+    await screen.findByRole("heading", { name: "Apple tree" });
+
+    await user.click(screen.getByRole("button", { name: /^end run$/i }));
+    const dialog = await screen.findByRole("dialog", { name: /end this run/i });
+    await user.click(within(dialog).getByRole("button", { name: /confirm end run/i }));
+
+    expect(await screen.findByText(/that one got away/i)).toBeVisible();
+    expect(screen.queryByText(/🔥 day 1/i)).toBeNull();
+    expect(screen.getByText(/new daily drops 5:00 am central\./i)).toBeVisible();
+  });
+
+  it("QF-06: shows no drop-time cadence line at all on Results for a non-daily challenge", async () => {
+    // The default fixture challenge (mode: 'daily' ranked ruleset, but no
+    // dailyFeature/origin/dailyDate) is NOT a real daily per
+    // `dailyDateForChallenge` - confirmed elsewhere in this file by its
+    // header reading "on this board", never "today". The cadence line is
+    // gated on that same signal, so it shouldn't appear here either.
     const fetchImpl = createFetchMock({ accountCompleted: 4 });
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
@@ -3657,7 +3778,8 @@ describe("Race flow: full-screen takeover", () => {
     await user.click(await screen.findByRole("link", { name: /fruit/i }));
 
     expect(await screen.findByText(/you reached it/i)).toBeVisible();
-    expect(screen.queryByText(/come defend your spot/i)).toBeNull();
+    expect(screen.queryByText(/new daily drops/i)).toBeNull();
+    expect(screen.queryByText(/🔥 day 1/i)).toBeNull();
   });
 
   it("shows a top-3 board snippet with the player's own row highlighted", async () => {

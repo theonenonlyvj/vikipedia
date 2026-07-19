@@ -13,6 +13,7 @@ import {
   isDailyToday,
   selectDefaultChallenge,
 } from "./domain/challengeSelection";
+import { msUntilNextCentralDrop } from "./domain/dailyCountdown";
 import type { CreateChallengeOutcome } from "./domain/dailyEditorial";
 import { describeRandomChallengeError, type PlayAnotherSuggestionState } from "./domain/playAnother";
 import type {
@@ -394,9 +395,34 @@ export default function App({
     };
     window.addEventListener("focus", queueCatalogRefresh);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // QF-06 (round-2 quickfix, owner-proxy ruling): self-heal a tab left
+    // foregrounded straight through the 5:00 AM Central daily-drop boundary.
+    // The focus/visibilitychange listeners above only ever refresh on the
+    // NEXT blur/focus cycle - a tab that's simply being read through the
+    // boundary may never trigger either one. This lives here (App-level),
+    // not inside Home's own `useDailyCountdown`, because Home fully
+    // unmounts on every other tab (AppShell.tsx's mode switch) - a timer
+    // owned by Home would silently stop self-healing the moment the player
+    // isn't parked on Home. Reuses `queueCatalogRefresh` (the exact trigger
+    // focus already uses) rather than any new fetch path, and re-derives +
+    // reschedules off the same DST-safe `msUntilNextCentralDrop` Home's
+    // countdown already trusts, so it keeps self-healing across however
+    // many drops the tab happens to survive.
+    let dropTimer: ReturnType<typeof window.setTimeout> | null = null;
+    const scheduleNextDrop = () => {
+      const delay = Math.max(0, msUntilNextCentralDrop(new Date()));
+      dropTimer = window.setTimeout(() => {
+        queueCatalogRefresh();
+        scheduleNextDrop();
+      }, delay);
+    };
+    scheduleNextDrop();
+
     return () => {
       window.removeEventListener("focus", queueCatalogRefresh);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (dropTimer !== null) window.clearTimeout(dropTimer);
     };
   }, []);
 

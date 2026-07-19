@@ -238,6 +238,13 @@ export default function RaceResults({
   // Same helper App.tsx's "View leaderboard" exit routing uses (PKG-05), so
   // the two can't independently drift on the same calculation.
   const isDailyToday = isChallengeDailyToday(challenge, todayCentral);
+  // QF-06 (round-2 quickfix, owner-proxy ruling): daily-ness for the
+  // drop-time cue below, deliberately generic (any daily, not just
+  // literally today's) - NOT `isDailyToday`, which is false for the
+  // pre-drop "racing yesterday's still-playable daily" case this same
+  // council cycle is judging the presentation of. Same signal Boards.tsx/
+  // Home.tsx already read for their own flavor badges.
+  const isDaily = challenge.dailyFeature != null;
   // Ritual hook (spec beat 3): fires only on the account's literal first-ever
   // completed race - i.e. the pre-race snapshot was exactly 0 completions,
   // regardless of how long the post-race stats refetch takes (M2 fix).
@@ -257,10 +264,24 @@ export default function RaceResults({
           />
         )}
 
-        {showFirstFinishRitual ? (
-          <p className="ritual-hook" role="status">
-            🔥 Day 1 · New daily drops 5:00 AM — come defend your spot
-          </p>
+        {/* QF-06 (round-2 quickfix, owner-proxy ruling): un-gated off
+            `showFirstFinishRitual` - EVERY daily result (completed or DNF,
+            Day 1 or Day 100) now ends with a forward-looking drop-time cue,
+            not just the account's literal first-ever finish. The Day-1
+            framing stays as an additive variant on top of that, with
+            "come defend your spot" replaced by "come back tomorrow" - "come
+            defend your spot" made no sense on a screen that, going forward,
+            is also reachable from a DNF or a non-first finish. */}
+        {isDaily ? (
+          showFirstFinishRitual ? (
+            <p className="ritual-hook" role="status">
+              🔥 Day 1 · New daily drops 5:00 AM Central — come back tomorrow for the next one
+            </p>
+          ) : (
+            <p className="ritual-line muted" role="status">
+              New daily drops 5:00 AM Central.
+            </p>
+          )
         ) : null}
 
         {/* PKG-05 (council 2026-07-19): Share and (for a still-unclaimed
