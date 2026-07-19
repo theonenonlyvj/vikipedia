@@ -71,10 +71,17 @@ button {
   font-weight: 700;
   min-height: 38px;
   padding: 9px 14px;
+  /* QF-08 (round-2 quickfix, owner-proxy ruling): color/background-color
+     added to the base transition list - every button-based hover (mode-nav,
+     tab, `.link-button`, `.start-race-button`, `.end-run-button`, etc.)
+     eases its color change the same way box-shadow/transform already do,
+     instead of hard-snapping. */
   transition:
     border-color 140ms ease,
     box-shadow 140ms ease,
-    transform 140ms ease;
+    transform 140ms ease,
+    color 140ms ease,
+    background-color 140ms ease;
   clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
 }
 
@@ -193,6 +200,31 @@ ol {
   padding: 18px;
   backdrop-filter: blur(8px);
   overscroll-behavior: contain;
+  /* QF-08 (round-2 quickfix, owner-proxy ruling): shared entrance for every
+     dialog through this one component (ModalDialog.tsx) - identity, End
+     Run, teaching-gate/how-to all fade+rise in instead of hard-popping.
+     Exit stays a hard unmount this pass (out of scope). */
+  animation: modal-backdrop-fade 140ms ease both;
+}
+
+.modal-backdrop > [role="dialog"] {
+  animation: modal-panel-rise 180ms ease both;
+}
+
+@keyframes modal-backdrop-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-panel-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .identity-dialog {
@@ -834,6 +866,10 @@ h1 {
   border-bottom: 1px solid var(--cyan);
   padding-bottom: 1px;
   white-space: nowrap;
+  /* QF-08: `<a>` tags aren't covered by the base `button{}` transition list
+     above - named explicitly (owner-proxy ruling) so the footer's own hover
+     eases instead of hard-snapping like every button-based hover now does. */
+  transition: color 140ms ease, border-bottom-color 140ms ease;
 }
 
 .site-footer a:hover,
@@ -1278,6 +1314,25 @@ h1 {
   padding-bottom: 44px;
 }
 
+/* QF-08 (round-2 quickfix, owner-proxy ruling): the "YOU REACHED IT" reveal,
+   as its OWN rule rather than folded into the combined `.race-mode,
+   .race-results` layout rule above - `.race-mode` is the live race screen
+   (mounts on every race start) and must NOT replay this entrance too. */
+.race-results {
+  animation: result-reveal 260ms ease both;
+}
+
+@keyframes result-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .race-mode .path-strip {
   position: static;
   top: auto;
@@ -1608,6 +1663,10 @@ h1 {
 
 .article-content a[data-vwiki-race-title] {
   border-radius: 2px;
+  /* QF-08 (owner-proxy ruling): the in-race wiki-link hover - arguably the
+     single most-clicked hover target in the app - named explicitly since
+     it's a plain `<a>`, not covered by the base `button{}` transition. */
+  transition: background-color 140ms ease;
 }
 
 .article-content a[data-vwiki-race-title]:hover {
@@ -3121,6 +3180,14 @@ h1 {
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+    /* QF-08 (round-2 quickfix, owner-proxy ruling, Judge B): a blanket
+       animation neutralizer instead of enumerating every keyframe by name -
+       the enumerate-per-keyframe pattern already had a live miss in this
+       file (`article-loading` below wasn't covered at all until now), so
+       this also closes that pre-existing gap for free, and can't be missed
+       again by the next new @keyframes this file adds. */
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 
   .article-navigation-pending::after {
