@@ -380,8 +380,8 @@ ol {
   min-width: 0;
 }
 
-.viota-mark {
-  color: #ff7d66;
+.vwiki-mark {
+  color: var(--text-bright);
   display: block;
   font-family: var(--viota-display-font);
   font-size: 0.72rem;
@@ -1846,6 +1846,16 @@ h1 {
   font-weight: 850;
 }
 
+/* QF-04: shared across all three DNF-rank renderers (BoardSnippet,
+   Boards' inline Stats DNF section, Challenge Detail's LeaderboardList) -
+   a failed run never shares the CTA-teal rank color. Declared after
+   `.board-snippet .rank` above: both rules match at the same specificity
+   (0,2,0), so source order is what lets this one win when both classes
+   are present on the same span. */
+.board-snippet .rank-dnf {
+  color: #ffad9f;
+}
+
 .play-another-card {
   display: flex;
   flex-direction: column;
@@ -1989,7 +1999,7 @@ h1 {
 }
 
 .challenge-list span {
-  color: #ffad9f;
+  color: var(--muted);
   font-size: 0.78rem;
   font-weight: 850;
 }
@@ -2380,7 +2390,7 @@ h1 {
   line-height: 1;
 }
 
-.daily-admin-heading .viota-mark {
+.daily-admin-heading .vwiki-mark {
   color: var(--coral);
   font-size: 0.68rem;
 }

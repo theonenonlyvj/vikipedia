@@ -45,7 +45,14 @@ export default function BoardSnippet({
       <ol>
         {visibleRows.map((row) => (
           <li className={row.isYou ? "is-you" : undefined} key={row.key}>
-            <span className="rank">{row.rankLabel}</span>
+            {/* QF-04: DNF salmon, never CTA teal - `rankLabel` (not the
+                nullable `rank`) is the correct DNF proxy, since a
+                completed-but-unranked run also carries `rank: null` but
+                reads "—", never "DNF" (invariant: a completion is never
+                demoted to DNF display). */}
+            <span className={row.rankLabel === "DNF" ? "rank rank-dnf" : "rank"}>
+              {row.rankLabel}
+            </span>
             <span>
               {row.displayName}
               {row.isYou ? <span className="muted"> (you)</span> : null}

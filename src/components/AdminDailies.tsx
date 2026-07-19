@@ -165,7 +165,7 @@ export default function AdminDailies({ apiClient, challenges, previewGateway, to
   return (
     <section className="daily-admin-layout" data-testid="daily-admin-layout" aria-labelledby="daily-admin-title">
       <header className="daily-admin-heading">
-        <span className="viota-mark">VWiki</span>
+        <span className="vwiki-mark">VWiki</span>
         <h2 id="daily-admin-title">Daily moderation</h2>
       </header>
 

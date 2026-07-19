@@ -1460,7 +1460,16 @@ export default function App({
               confirm button and its recovery variant stay Title Case too,
               as the same naming family, rather than reading as a mismatched
               "Confirm end run" beside RaceMode's "End Run" trigger. */}
-          <button disabled={modeState === "abandoning"} type="button" onClick={() => void confirmEndRun()}>
+          {/* QF-04: coral (`.end-run-button`, matching the HUD's own
+              trigger) is reserved for the commit action - "Continue run"
+              stays a bare neutral button so the two are visually distinct
+              at a glance instead of both defaulting to the same fill. */}
+          <button
+            className="end-run-button"
+            disabled={modeState === "abandoning"}
+            type="button"
+            onClick={() => void confirmEndRun()}
+          >
             {race.recoveryRun ? "Confirm End Old Run" : "Confirm End Run"}
           </button>
         </ModalDialog>
@@ -1522,7 +1531,7 @@ function IdentityPrompt({
     >
         <div className="identity-dialog-heading">
           <div>
-            <span className="viota-mark">VWiki</span>
+            <span className="vwiki-mark">VWiki Race</span>
             <h2 id="identity-prompt-title">Save your stats</h2>
           </div>
           <button

@@ -1025,7 +1025,17 @@ describe("VWiki Race app", () => {
     expect(screen.queryByRole("navigation", { name: /vwiki race views/i })).toBeNull();
 
     await user.click(endRun);
-    expect(screen.getByRole("dialog", { name: /end this run/i })).toBeVisible();
+    const dialog = screen.getByRole("dialog", { name: /end this run/i });
+    expect(dialog).toBeVisible();
+    // QF-04: coral (`.end-run-button`, same hook as the HUD trigger above)
+    // is reserved for the commit action - "Continue run" stays neutral so
+    // the two aren't identically styled on an irreversible choice.
+    expect(within(dialog).getByRole("button", { name: /confirm end run/i })).toHaveClass(
+      "end-run-button",
+    );
+    expect(within(dialog).getByRole("button", { name: /continue run/i })).not.toHaveClass(
+      "end-run-button",
+    );
   });
 
   it("shows the always-visible time+clicks HUD row and freezes it throughout syncing and completion", async () => {

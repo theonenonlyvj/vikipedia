@@ -648,7 +648,11 @@ export default function Boards({
                   const isYou = row.accountId === identityAccountId;
                   return (
                     <li className={isYou ? "is-you" : undefined} key={row.accountId}>
-                      <span className="rank">{"—"}</span>
+                      {/* QF-04: every row in this section is a genuine DNF
+                          (sourced from `dnfs`, never merged with completed-
+                          unranked rows), so `.rank-dnf` applies
+                          unconditionally - salmon, never CTA teal. */}
+                      <span className="rank rank-dnf">{"—"}</span>
                       <span>
                         {row.displayName ?? "Unknown"}
                         {isYou ? <span className="muted"> (you)</span> : null}
