@@ -644,6 +644,84 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
   });
 
+  // QF-07: continueAsGuest/createVGamesAccount had no synchronous guard of
+  // their own (only the async `authBusy` state setter, which has a real
+  // window before re-render for a second tap/Enter to fire a second
+  // request) - mirrors the "locks duplicate login submissions" test above,
+  // which already covers `login`'s existing `loginRequestLock`.
+  it("locks duplicate continue-as-guest submissions (no double-fire)", async () => {
+    const pendingGuest = createDeferredResponse({
+      accountId: "acc-guest-1",
+      displayName: "Vijay",
+      token: "jwt-guest-1",
+      status: "ghost",
+    });
+    const baseFetch = createFetchMock();
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl("/api/v2/identity/guest")) {
+        return pendingGuest.promise;
+      }
+      return baseFetch(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(screen.getByRole("button", { name: /^guest$/i }));
+    await user.type(screen.getByLabelText(/display name/i), "Vijay");
+    const form = screen.getByLabelText(/display name/i).closest("form") as HTMLFormElement;
+
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(fetchImpl.mock.calls.filter(
+      ([input]) => String(input) === apiUrl("/api/v2/identity/guest"),
+    )).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /continue as guest/i })).toBeDisabled();
+
+    pendingGuest.resolve();
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+  });
+
+  it("locks duplicate create-account submissions (no double-fire)", async () => {
+    const pendingGuest = createDeferredResponse({
+      accountId: "acc-guest-2",
+      displayName: "vijay",
+      token: "jwt-guest-2",
+      status: "ghost",
+    });
+    const baseFetch = createFetchMock();
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl("/api/v2/identity/guest")) {
+        return pendingGuest.promise;
+      }
+      return baseFetch(input, init);
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    // Fresh visitor: dialog defaults to Create account (QF-01 ratified
+    // default) - no tab click needed.
+    await user.type(screen.getByLabelText(/vgames username/i), "vijay");
+    await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
+    await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
+    const form = screen.getByLabelText(/vgames username/i).closest("form") as HTMLFormElement;
+
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(fetchImpl.mock.calls.filter(
+      ([input]) => String(input) === apiUrl("/api/v2/identity/guest"),
+    )).toHaveLength(1);
+    expect(createAccountSubmitButton()).toBeDisabled();
+
+    pendingGuest.resolve();
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+  });
+
   it("keeps a successful login in memory when browser storage rejects the write", async () => {
     const repository: VGamesIdentityRepository = {
       clearSession: vi.fn(),

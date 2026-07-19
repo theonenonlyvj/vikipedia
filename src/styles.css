@@ -26,6 +26,14 @@
   text-rendering: optimizeLegibility;
 }
 
+/* QF-07: `font-synthesis: none` above means every `font-weight` literal in
+   this file already rendered at Fredoka's real ceiling before this pass -
+   only 300/400/500/600/700 are imported (main.tsx), and the browser's
+   font-weight fallback search for anything at/above 500 looks upward first
+   then downward, landing on 700 for every 750/800/850/900 that used to
+   appear here. Batch-replaced to the literal "700" file-wide: pixel-
+   identical by construction, removes ~40 misleading magic numbers. */
+
 * {
   box-sizing: border-box;
 }
@@ -60,7 +68,7 @@ button {
   background: var(--cyan);
   color: #061214;
   cursor: pointer;
-  font-weight: 850;
+  font-weight: 700;
   min-height: 38px;
   padding: 9px 14px;
   transition:
@@ -334,7 +342,7 @@ ol {
 .identity-current-name span {
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 850;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
@@ -427,7 +435,7 @@ h1 {
   color: var(--muted);
   font-size: 0.64rem;
   font-style: normal;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1;
   padding: 3px 5px;
   text-transform: uppercase;
@@ -439,7 +447,7 @@ h1 {
 .article-heading span,
 .empty-state span {
   font-size: 0.72rem;
-  font-weight: 850;
+  font-weight: 700;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -494,7 +502,7 @@ h1 {
 .run-metrics dd,
 .account-chip {
   color: #ffffff;
-  font-weight: 850;
+  font-weight: 700;
 }
 
 .run-metrics dd {
@@ -503,6 +511,11 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* QF-07: the live HUD's timer/click values (`.race-hud .run-metrics`)
+     re-render on every tick - tabular digit widths stop the value column
+     from shifting tick-to-tick. Covers the Results-screen instance too
+     (same `dd`, no ancestor scoping needed). */
+  font-variant-numeric: tabular-nums;
 }
 
 .player-gate {
@@ -517,7 +530,7 @@ h1 {
   background: var(--coral);
   color: #170908;
   min-height: 44px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .end-run-button:not(:disabled):hover {
@@ -599,7 +612,17 @@ h1 {
 }
 
 .path-history span {
-  flex: 0 0 auto;
+  /* QF-07: was `flex: 0 0 auto` (no-shrink) - with the container's own
+     `overflow: hidden`, a span that didn't fit the strip just got hard
+     clipped wherever the flex line ended, before its own
+     `text-overflow: ellipsis` ever got a chance to engage (a flex item
+     can't shrink below its content's natural width without `min-width: 0`,
+     and `flex-shrink: 0` refused to shrink it at all). `flex: 0 1 auto` +
+     `min-width: 0` let the span actually shrink to fit, so long titles
+     ("Near side of the Moon") now render a real ellipsis instead of a
+     mid-word clip on the one screen (live race) this is the whole game. */
+  flex: 0 1 auto;
+  min-width: 0;
   color: var(--text-bright);
   max-width: 190px;
   overflow: hidden;
@@ -616,7 +639,7 @@ h1 {
 
 .path-history .path-ellipsis {
   color: #ffad9f;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .target-reference {
@@ -651,7 +674,7 @@ h1 {
   content: "+";
   grid-column: 1;
   grid-row: 1;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .target-reference[open] summary::after {
@@ -664,7 +687,7 @@ h1 {
   padding-left: 16px;
   color: #8fb0b5;
   font-size: 0.62rem;
-  font-weight: 800;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
@@ -732,7 +755,7 @@ h1 {
   border-color: transparent;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 700;
   text-transform: none;
 }
 
@@ -751,7 +774,7 @@ h1 {
    Start/End Run) is dropped with no color substitute standing in for it. */
 .mode-nav button.active {
   color: var(--text);
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .error-banner,
@@ -880,7 +903,7 @@ h1 {
 
 .daily-hero-status {
   margin: 8px 0 0;
-  font-weight: 850;
+  font-weight: 700;
 }
 
 .daily-hero-done {
@@ -897,6 +920,11 @@ h1 {
 
 .ritual-line {
   margin: 0;
+  /* QF-07: Home's pre-play countdown ("time left today") re-renders every
+     second (useDailyCountdown) - proportional digit widths made the line's
+     width visibly shift tick-to-tick. Inert on this class's two other
+     digit-free usages (Boards'/Home's static "New daily drops..." lines). */
+  font-variant-numeric: tabular-nums;
 }
 
 /* Home v2 (Increment 4): the guarded streak/30d-avg chip - deliberately
@@ -953,7 +981,7 @@ h1 {
   min-height: 44px;
   background: var(--ink-soft);
   color: var(--muted);
-  font-weight: 850;
+  font-weight: 700;
   white-space: nowrap;
   scroll-snap-align: start;
 }
@@ -1138,7 +1166,7 @@ h1 {
   background: transparent;
   border-color: transparent;
   color: var(--cyan);
-  font-weight: 850;
+  font-weight: 700;
   padding: 6px 0;
   clip-path: none;
 }
@@ -1320,7 +1348,7 @@ h1 {
   min-height: 48px;
   margin-top: 18px;
   font-size: 1.05rem;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .start-race-button:not(:disabled):hover {
@@ -1335,7 +1363,7 @@ h1 {
   min-height: 48px;
   margin-top: 18px;
   font-size: 1.05rem;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .link-button {
@@ -1384,7 +1412,7 @@ h1 {
   color: var(--muted);
   font-family: var(--viota-ui-font);
   font-size: 0.72rem;
-  font-weight: 900;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
@@ -1420,7 +1448,7 @@ h1 {
 .challenge-share span {
   color: #3a5c63;
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 700;
 }
 
 .challenge-share input {
@@ -1696,7 +1724,7 @@ h1 {
   grid-column: 1 / -1;
   color: var(--coral);
   font-size: 0.68rem;
-  font-weight: 900;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
@@ -1711,7 +1739,7 @@ h1 {
   grid-row: 2;
   color: #ffffff;
   font-size: 1.15rem;
-  font-weight: 900;
+  font-weight: 700;
   margin: 0;
   text-align: right;
 }
@@ -1719,14 +1747,14 @@ h1 {
 .result-panel .result-standing {
   grid-column: 1 / -1;
   color: #ffd7cf;
-  font-weight: 850;
+  font-weight: 700;
   margin-top: 2px;
 }
 
 .result-panel .ritual-hook {
   grid-column: 1 / -1;
   color: var(--coral);
-  font-weight: 850;
+  font-weight: 700;
   margin: 4px 0 0;
 }
 
@@ -1770,7 +1798,7 @@ h1 {
   gap: 6px;
   align-items: baseline;
   color: var(--text);
-  font-weight: 750;
+  font-weight: 700;
   list-style: none;
 }
 
@@ -1781,7 +1809,7 @@ h1 {
 .path-recap .link-affordance {
   color: var(--cyan);
   font-size: 0.8rem;
-  font-weight: 850;
+  font-weight: 700;
 }
 
 .path-recap .winning-path {
@@ -1810,9 +1838,33 @@ h1 {
   font-size: 0.88rem;
 }
 
+/* QF-07: the base rank/name/time 3-column shape (BoardSnippet.tsx,
+   LeaderboardList.tsx, Boards' own inline today/yesterday + DNF rows) never
+   got the ellipsis treatment its 2-column siblings already have (see "Bug A
+   fix" below) - an uncapped guest display name can genuinely overflow this
+   row today. `justify-self: end` keeps the time column a clean right-aligned
+   edge regardless of how many digits a given row's time/click count runs to.
+   Scoped off `.board-trend-unranked`/`.board-roster`: that 2-column variant
+   (name/count, no time) already owns the equivalent ellipsis on its own
+   `span:first-child` below - it has no 3rd/time column for the second rule
+   to touch. Both target `:nth-child`, not `:last-child`: LeaderboardList's
+   placement rows conditionally append a 4th child (`.path-disclosure`)
+   after the time span once paths unlock, which would silently make
+   `:last-child` miss the time span entirely on exactly those rows. */
+.board-snippet:not(.board-trend-unranked):not(.board-roster) li > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-snippet:not(.board-trend-unranked):not(.board-roster) li > span:nth-child(3) {
+  justify-self: end;
+}
+
 .board-snippet li.is-you {
   color: var(--cyan);
-  font-weight: 850;
+  font-weight: 700;
 }
 
 /* PKG-03 remainder fix (2026-07-19): Challenge Detail's main Leaderboard
@@ -1832,7 +1884,7 @@ h1 {
   align-items: center;
   color: var(--cyan);
   cursor: pointer;
-  font-weight: 850;
+  font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -1843,7 +1895,7 @@ h1 {
 
 .board-snippet .rank {
   color: var(--cyan);
-  font-weight: 850;
+  font-weight: 700;
 }
 
 /* QF-04: shared across all three DNF-rank renderers (BoardSnippet,
@@ -1882,7 +1934,7 @@ h1 {
 .share-result span {
   color: var(--text-bright);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 700;
 }
 
 .share-result input {
@@ -1967,7 +2019,7 @@ h1 {
   color: #d9f0f2;
   cursor: pointer;
   font-size: 0.82rem;
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1.15;
   padding: 0 4px;
 }
@@ -2001,7 +2053,7 @@ h1 {
 .challenge-list span {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 850;
+  font-weight: 700;
 }
 
 .challenge-list .challenge-meta {
@@ -2045,7 +2097,7 @@ h1 {
   color: var(--muted);
   font-size: 0.76rem;
   font-style: normal;
-  font-weight: 750;
+  font-weight: 700;
 }
 
 /* Browse full card spec (Increment 5): title + state chip share one row and
@@ -2087,7 +2139,7 @@ h1 {
   background: var(--ink);
   color: var(--text-bright);
   font-size: 0.66rem;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: 0.02em;
   line-height: 1;
   padding: 4px 6px;
@@ -2148,7 +2200,7 @@ h1 {
 .browse-catalog-heading {
   margin: 14px 0 0;
   font-size: 0.72rem;
-  font-weight: 850;
+  font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -2178,7 +2230,7 @@ h1 {
 
 .leaderboard .rank {
   color: #0debd7;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .leaderboard li.dnf {
@@ -2209,7 +2261,7 @@ h1 {
 .provenance-badge {
   padding: 1px 5px;
   font-size: 0.64rem;
-  font-weight: 850;
+  font-weight: 700;
   line-height: 1.25;
   text-transform: uppercase;
 }
@@ -2234,7 +2286,7 @@ h1 {
   align-items: center;
   color: var(--cyan);
   cursor: pointer;
-  font-weight: 850;
+  font-weight: 700;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -2327,14 +2379,14 @@ h1 {
 .stat-grid dt {
   color: var(--muted);
   font-size: 0.72rem;
-  font-weight: 850;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
 .stat-grid dd {
   color: #ffffff;
   font-size: 1.28rem;
-  font-weight: 900;
+  font-weight: 700;
   margin-top: 2px;
 }
 
@@ -2442,14 +2494,14 @@ h1 {
   margin: 0;
   color: #ffad9f;
   font-size: 0.86rem;
-  font-weight: 900;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
 .daily-admin-view-heading > span {
   color: var(--cyan);
   font-size: 0.82rem;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .daily-admin-empty {
@@ -2463,7 +2515,7 @@ h1 {
   gap: 5px 10px;
   color: var(--muted);
   font-size: 0.7rem;
-  font-weight: 800;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
@@ -2500,7 +2552,7 @@ h1 {
 .daily-classifier-note {
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 750;
+  font-weight: 700;
 }
 
 .daily-score-grid {
@@ -2518,14 +2570,14 @@ h1 {
 .daily-score-grid dt {
   color: var(--muted);
   font-size: 0.62rem;
-  font-weight: 850;
+  font-weight: 700;
   text-transform: uppercase;
 }
 
 .daily-score-grid dd {
   color: #ffffff;
   font-size: 0.95rem;
-  font-weight: 900;
+  font-weight: 700;
   margin: 2px 0 0;
 }
 

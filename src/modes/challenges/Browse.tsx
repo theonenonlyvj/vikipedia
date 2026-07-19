@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import StateChip from "../../components/StateChip";
 import { formatChallengeCardMeta } from "../../domain/challengeCard";
 import { dailyBadgeLabel, type HomeHeroSelection } from "../../domain/challengeSelection";
@@ -83,6 +83,13 @@ export default function ChallengeBrowser({
   const [targetTitle, setTargetTitle] = useState("");
   const [nominateForDaily, setNominateForDaily] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  // QF-07: `isCreating` alone (an async state setter) has a real window
+  // before re-render where a second tap/Enter fires a second create
+  // request - same synchronous-ref guard App.tsx's `login`/
+  // `continueAsGuest`/`createVGamesAccount` use. Not the same lock as
+  // App.tsx's `challengeLockRef` (that one gates "is a run currently
+  // active," not a same-tick double-click).
+  const submitChallengeLock = useRef(false);
   const [searchQuery, setSearchQuery] = useState("");
   const canCreate =
     startTitle.trim().length > 0 && targetTitle.trim().length > 0;
@@ -175,10 +182,11 @@ export default function ChallengeBrowser({
 
   async function submitChallenge(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (selectionLocked || !canCreate) {
+    if (selectionLocked || !canCreate || submitChallengeLock.current) {
       return;
     }
 
+    submitChallengeLock.current = true;
     setIsCreating(true);
     try {
       await onCreateChallenge({
@@ -190,6 +198,7 @@ export default function ChallengeBrowser({
       setTargetTitle("");
       setNominateForDaily(false);
     } finally {
+      submitChallengeLock.current = false;
       setIsCreating(false);
     }
   }

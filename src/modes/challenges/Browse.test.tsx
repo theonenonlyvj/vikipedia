@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ChallengeBrowser from "./Browse";
@@ -237,6 +237,54 @@ describe("Browse: full card spec (Increment 5)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Wikipedia wasn't cooperating — try again.",
     );
+  });
+
+  // QF-07: `submitChallenge` only gated on `isCreating` (an async state
+  // setter, with a real window before re-render for a second Enter/submit
+  // to fire a second request) - not the same lock as App.tsx's
+  // `challengeLockRef` (that one gates "is a run currently active," not a
+  // same-tick double submit).
+  it("locks duplicate create-challenge submissions (no double-fire)", async () => {
+    let resolveCreate!: () => void;
+    const onCreateChallenge = vi.fn(
+      () => new Promise<void>((resolve) => { resolveCreate = resolve; }),
+    );
+    render(
+      <ChallengeBrowser
+        apiClient={mockApiClient()}
+        canNominateForDaily={false}
+        challenges={[challengeOne, challengeTwo]}
+        heroSelection={null}
+        identityToken={null}
+        onCreateChallenge={onCreateChallenge}
+        onCreateRandomChallenge={vi.fn()}
+        onGoHome={vi.fn()}
+        onOpenChallenge={vi.fn()}
+        randomChallengeBusy={false}
+        randomChallengeError={null}
+        selectedChallengeId={null}
+        todayCentral={todayCentral}
+      />,
+    );
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    const form = screen.getByLabelText(/start article/i).closest("form") as HTMLFormElement;
+
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+
+    expect(onCreateChallenge).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: /create challenge/i })).toBeDisabled();
+
+    // Resolving clears the form fields on success (existing behavior) - the
+    // button staying disabled afterward reflects the now-empty `canCreate`
+    // gate, not a stuck lock, so assert completion via the cleared field
+    // instead of the button's disabled state.
+    resolveCreate();
+    await waitFor(() => expect(screen.getByLabelText(/start article/i)).toHaveValue(""));
+    expect(onCreateChallenge).toHaveBeenCalledTimes(1);
   });
 });
 

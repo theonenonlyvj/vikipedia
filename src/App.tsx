@@ -234,6 +234,12 @@ export default function App({
   const challengeLockRef = useRef(false);
   const startLockRef = useRef(false);
   const loginRequestLock = useRef(false);
+  // QF-07: same synchronous-ref double-fire guard `login` already has
+  // (`authBusy` alone has a real window before re-render where a second
+  // tap/Enter fires a second request) - `continueAsGuest`/
+  // `createVGamesAccount` were missing it.
+  const continueAsGuestLock = useRef(false);
+  const createVGamesAccountLock = useRef(false);
   // One-shot guard for migration note (iv): a challenge share link
   // (?challenge=<id>) routes to Challenges/Detail on the very first catalog
   // load that honors it. Without this, a later focus-triggered catalog
@@ -923,50 +929,55 @@ export default function App({
   }
 
   async function continueAsGuest() {
-    if (!authPrompt) {
+    if (!authPrompt || continueAsGuestLock.current) {
       return;
     }
 
-    const prompt = authPrompt;
-    let nextIdentitySession = identitySession;
-    if (!nextIdentitySession) {
-      const displayName = displayNameDraft.trim();
-      if (!displayName) {
-        setError("Choose a display name before continuing as guest.");
-        return;
+    continueAsGuestLock.current = true;
+    try {
+      const prompt = authPrompt;
+      let nextIdentitySession = identitySession;
+      if (!nextIdentitySession) {
+        const displayName = displayNameDraft.trim();
+        if (!displayName) {
+          setError("Choose a display name before continuing as guest.");
+          return;
+        }
+
+        setAuthBusy(true);
+        try {
+          nextIdentitySession = await identityClient.playAsGuest({
+            deviceCredential: identityRepository.getDeviceCredential(),
+            displayName,
+          });
+          persistIdentitySession(nextIdentitySession);
+        } catch (caught) {
+          setError(vgamesIdentityErrorMessage(caught, "Could not start a guest session."));
+          setAuthBusy(false);
+          return;
+        }
       }
 
-      setAuthBusy(true);
-      try {
-        nextIdentitySession = await identityClient.playAsGuest({
-          deviceCredential: identityRepository.getDeviceCredential(),
-          displayName,
-        });
-        persistIdentitySession(nextIdentitySession);
-      } catch (caught) {
-        setError(vgamesIdentityErrorMessage(caught, "Could not start a guest session."));
+      if (prompt.type === "create" && prompt.input.nominateForDaily && nextIdentitySession.status !== "claimed") {
+        setAuthMode("create");
+        setError("Claim or log in to nominate for a future Daily.");
         setAuthBusy(false);
         return;
       }
-    }
 
-    if (prompt.type === "create" && prompt.input.nominateForDaily && nextIdentitySession.status !== "claimed") {
-      setAuthMode("create");
-      setError("Claim or log in to nominate for a future Daily.");
-      setAuthBusy(false);
-      return;
-    }
-
-    setAuthPrompt(null);
-    try {
-      await resumeAfterIdentity(prompt, nextIdentitySession);
+      setAuthPrompt(null);
+      try {
+        await resumeAfterIdentity(prompt, nextIdentitySession);
+      } finally {
+        setAuthBusy(false);
+      }
     } finally {
-      setAuthBusy(false);
+      continueAsGuestLock.current = false;
     }
   }
 
   async function createVGamesAccount() {
-    if (!authPrompt) {
+    if (!authPrompt || createVGamesAccountLock.current) {
       return;
     }
 
@@ -986,6 +997,7 @@ export default function App({
       return;
     }
 
+    createVGamesAccountLock.current = true;
     setAuthBusy(true);
     try {
       let guestSession = identitySession;
@@ -1008,6 +1020,7 @@ export default function App({
     } catch (caught) {
       setError(vgamesIdentityErrorMessage(caught, "Could not create that VGames account."));
     } finally {
+      createVGamesAccountLock.current = false;
       setAuthBusy(false);
     }
   }
