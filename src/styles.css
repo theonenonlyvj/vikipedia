@@ -967,18 +967,16 @@ h1 {
   color: var(--cyan);
 }
 
-/* PKG-10: an inert, unfocusable spacer after "Lifetime" (Boards.tsx) - pure
-   layout filler, never a tab. Without it, the mobile edge-fade below always
-   overlaps whichever segment is scrolled flush against the container's
-   right edge; when that segment is the real, fully-scrolled-to, actively
-   selected "Lifetime" (nothing further to scroll), that reads as the
-   label itself being cut off. Giving the fade empty space to land on
-   instead - at least as wide as the fade - fixes it for any scroll
-   position, not just Lifetime's, without a scroll-position-aware script
-   (Judge A: keep the codebase's existing static-mask choice, styles.css
-   Bug B below). */
+/* PKG-10 remainder fix (2026-07-19): the spacer's only job (below, Bug B) is
+   an edge-fade landing zone that exists ONLY under the <=640px mask query -
+   at wider widths `.board-segment-control`'s auto grid tracks stretch to
+   fill the panel, so an inert 6th track here shrank every real pill by
+   ~18px and left a ~89px dead gap trailing "Lifetime" (confirmed against
+   live prod desktop screenshots - pills used to sit flush to the panel
+   edge). Zero width by default; the mobile query below is the only place
+   that gives it real width. */
 .board-segment-spacer {
-  width: 28px;
+  width: 0;
 }
 
 .board-segment-header {
@@ -1786,6 +1784,32 @@ h1 {
 .board-snippet li.is-you {
   color: var(--cyan);
   font-weight: 850;
+}
+
+/* PKG-03 remainder fix (2026-07-19): Challenge Detail's main Leaderboard
+   panel reuses `.board-snippet` markup (see LeaderboardList.tsx), but its
+   `li` is a strict 3-column grid (rank/name/time) - a 4th child would either
+   overflow the row or silently claim a phantom 4th column. `grid-column: 1 /
+   -1` puts the disclosure on its own full-width row underneath instead,
+   same visual treatment "Your history"'s `.leaderboard .path-disclosure`
+   already uses (styles.css ~2168). */
+.board-snippet .path-disclosure {
+  grid-column: 1 / -1;
+}
+
+.board-snippet .path-disclosure summary {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  color: var(--cyan);
+  cursor: pointer;
+  font-weight: 850;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.board-snippet .path-disclosure summary:hover {
+  color: var(--text-bright);
 }
 
 .board-snippet .rank {
@@ -2638,6 +2662,15 @@ h1 {
     font-size: 0.72rem;
   }
 
+  /* PKG-10 remainder fix: real width only here, where the edge-fade mask
+     above actually applies (see the base rule's doc comment) - at
+     <=640px the segment row keeps its natural content width (scrolls
+     rather than stretching), so this doesn't compete with real pills for
+     space the way it did as an unconditional 6th grid track. */
+  .board-segment-spacer {
+    width: 28px;
+  }
+
   h1 {
     font-size: 2.15rem;
   }
@@ -2938,8 +2971,27 @@ h1 {
     column-gap: 18px;
   }
 
+  /* PKG-09 remainder fix (2026-07-19): in the 880-980px overlap, the
+     pre-existing `@media (max-width: 980px)` rules above (`.challenge-route`
+     and `.player-gate`, both `grid-column: 1 / -1`) still win for that ONE
+     property - they're real declarations this block never overrode, so
+     `.route-header`'s 2-column layout (title | CTA) collapsed back to
+     single full-width rows, stacking the CTA below the title instead of
+     docking it beside. Both need resetting: `.challenge-route` spanning the
+     full row1 would otherwise push `.player-gate` onto its own row2 even
+     once `.player-gate` itself stops spanning. `.route-header
+     .challenge-route` is a no-op above 980px (nothing to override there)
+     and a no-op for Home's hero (its `.challenge-route` is inert there -
+     `.home-layout`'s single-column grid can't span "more" than one column
+     regardless) - it only matters for Challenge Detail's own
+     `.challenge-route`/`.player-gate` grid-item pair in this one band. */
+  .route-header .challenge-route {
+    grid-column: auto;
+  }
+
   .route-header .player-gate {
     align-items: center;
+    grid-column: auto;
   }
 
   /* PKG-09: at 820px the recentered content column, a full-width search box

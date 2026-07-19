@@ -87,20 +87,39 @@ export interface JustFinishedRow {
 }
 
 /**
- * Results' own board snippet (PKG-03): the deduped board's OTHER rows, plus
- * the account's own row pinned to the run that literally just ended - not
- * the board's (possibly different) canonical placement for that account.
- * Matters when the just-finished run isn't a personal best: a repeat
- * attempt that placed worse than an earlier run would otherwise be absent
- * from a plain account-id lookup against the deduped board (which only ever
- * carries the account's BEST attempt) - Results still needs to show this
- * exact run's own time/rank, one source of truth with the header above it
- * (both read `outcome`/`leaderboardContext`, see RaceResults.tsx). Known
- * open question (owner-proxy ruling, 2026-07-19 council, judge B finding 5):
- * a non-personal-best repeat shows its own true rank/time here, which can
- * therefore read as WORSE than another row also labeled with the account's
- * name if a personal-best row existed on this same board - flagged back to
- * design rather than inventing a "not your best" annotation ad hoc.
+ * Results' own board snippet (PKG-03, rank-universe fix 2026-07-19 remainder
+ * pass): the deduped board's OTHER rows, plus the account's own row pinned
+ * to the run that literally just ended - not the board's (possibly
+ * different) canonical placement for that account. Matters when the
+ * just-finished run isn't a personal best: a repeat attempt that placed
+ * worse than an earlier run would otherwise be absent from a plain
+ * account-id lookup against the deduped board (which only ever carries the
+ * account's BEST attempt) - Results still needs to show this exact run's own
+ * time/rank, one source of truth with the header above it (both read
+ * `outcome`/`leaderboardContext`, see RaceResults.tsx).
+ *
+ * The pinned row's rank is derived from the deduped board itself (count
+ * every placement - across ALL accounts, including this one's own canonical
+ * placement if it differs from the just-finished run - strictly better than
+ * the just-finished run's own elapsed/clicks, +1), NOT from the server's raw
+ * per-attempt `challenge_rank` (`leaderboardContext.rank`, a row_number over
+ * every eligible RUN, not per-account). Those are two different rank
+ * universes: the raw one counts a rival's repeat attempts as separate slots
+ * ("rival's two runs occupy raw #1/#2, so your first-ever run is raw #3"),
+ * while every surrounding row on this same screen (and every row on
+ * Boards/Home/Detail) is per-account. Mixing them let the same numeric label
+ * appear on two different rows and made Results disagree with Boards for
+ * the exact same run. See `dedupedRankForJustFinished` below.
+ *
+ * Known remaining open question (owner-proxy ruling, 2026-07-19 council,
+ * judge B finding 5), narrower now that the rank-universe bug is fixed: a
+ * non-personal-best repeat's pinned row has no REAL counterpart on the
+ * current board (the account's one real slot is held by its better run,
+ * which itself counts against this run when computing its rank) - so what's
+ * shown is "where this exact run's time would have placed," not an entry
+ * that actually exists on the board. Whether that deserves a "not your
+ * best - your best is #X" annotation is still a product call, flagged to
+ * design rather than invented ad hoc.
  */
 export function boardSnippetRowsForResult(
   board: { placements: ChallengeBoardPlacement[]; dnfs: ChallengeBoardDnfRow[] },
@@ -111,16 +130,17 @@ export function boardSnippetRowsForResult(
     .filter((row) => !row.isYou);
   if (identityAccountId === null || !justFinished) return others;
 
+  const dedupedRank = dedupedRankForJustFinished(board.placements, justFinished);
   const yourRow: BoardSnippetRow = {
     key: `you-${identityAccountId}`,
     // "DNF" is reserved for genuinely abandoned runs. A completed run with
     // no rank (excluded from the board's ranked CTE - containment-flagged,
     // ranked_eligible=0, or an older response with no leaderboardContext at
     // all) still reached the target, so it reads "—", never "DNF".
-    rankLabel: justFinished.rank !== null
-      ? `#${justFinished.rank}`
+    rankLabel: dedupedRank !== null
+      ? `#${dedupedRank}`
       : justFinished.status === "completed" ? "—" : "DNF",
-    rank: justFinished.rank,
+    rank: dedupedRank,
     displayName: justFinished.displayName,
     elapsedMs: justFinished.elapsedMs,
     clickCount: justFinished.clickCount,
@@ -131,4 +151,39 @@ export function boardSnippetRowsForResult(
   const merged = [...others];
   merged.splice(insertAt === -1 ? merged.length : insertAt, 0, yourRow);
   return merged;
+}
+
+/**
+ * The just-finished run's rank in the deduped board's own universe: count
+ * every placement (any account, including this one's own canonical
+ * placement if it isn't this exact run) strictly better on the ranking order
+ * (elapsed ASC, then clicks ASC - same tie-break as `listChallengePlacements`
+ * server-side, minus its final `completed_at`/`id` tie-break this function
+ * has no way to see), then +1. `null` in, `null` out for a DNF or a
+ * genuinely unranked completion (containment-flagged etc.) - never invents a
+ * numeric rank for either.
+ *
+ * Exported so RaceResults.tsx can resolve this ONE number once and feed it
+ * to every consumer that displays the just-finished run's rank (the header
+ * kicker, the board snippet's pinned row, the share-text button) - otherwise
+ * the header could keep showing the stale raw `challenge_rank` while only
+ * the board row got the fix, trading a Results-vs-Boards mismatch for a
+ * new Results-header-vs-Results-board-row one. Calling it twice (here and
+ * again inside `boardSnippetRowsForResult`, which also takes a raw
+ * `JustFinishedRow` directly in its own unit tests) is safe: it's a pure
+ * function of `placements`/`justFinished`'s elapsed/clicks, never the
+ * `rank` field's own numeric value, so re-deriving is idempotent.
+ */
+export function dedupedRankForJustFinished(
+  placements: ChallengeBoardPlacement[],
+  justFinished: JustFinishedRow,
+): number | null {
+  if (justFinished.status !== "completed" || justFinished.rank === null) {
+    return justFinished.rank;
+  }
+  const better = placements.filter((row) =>
+    row.elapsedMs < justFinished.elapsedMs ||
+    (row.elapsedMs === justFinished.elapsedMs && row.clickCount < justFinished.clickCount)
+  ).length;
+  return better + 1;
 }

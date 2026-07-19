@@ -411,6 +411,7 @@ export function createApiHandlers(
           placement: placement.placement,
           elapsedMs: placement.elapsedMs,
           clickCount: placement.clickCount,
+          runId: placement.runId,
         })),
         dnfs: dnfs.map((dnf) => ({
           accountId: dnf.accountId,

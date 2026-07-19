@@ -644,7 +644,7 @@ describe("api handlers", () => {
     });
   });
 
-  it("composes the daily board from placements and DNFs, dropping internal-only fields", async () => {
+  it("composes the daily board from placements and DNFs, dropping internal-only fields but keeping runId (PKG-03 remainder fix - path disclosure needs it)", async () => {
     const repository = fakeRepository();
     Object.assign(repository, {
       listChallengePlacements: vi.fn(async () => [
@@ -655,6 +655,7 @@ describe("api handlers", () => {
           elapsedMs: 4_000,
           clickCount: 3,
           completedAt: "2026-07-14T01:00:04.000Z",
+          runId: "run-best",
         },
       ]),
       listChallengeDnfs: vi.fn(async () => [
@@ -671,8 +672,11 @@ describe("api handlers", () => {
 
     await expect(handlers.getChallengeBoard("challenge-0001")).resolves.toEqual({
       challengeId: "challenge-0001",
+      // `completedAt` is dropped (internal-only); `runId` survives - the
+      // main Leaderboard panel needs it to link a placement to its winning
+      // path once the viewer has played (see LeaderboardList.tsx).
       placements: [
-        { accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 4_000, clickCount: 3 },
+        { accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 4_000, clickCount: 3, runId: "run-best" },
       ],
       dnfs: [
         { accountId: "acc-2", displayName: "Casey", clickCount: 2, elapsedMs: 2_000 },

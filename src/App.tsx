@@ -1386,7 +1386,7 @@ export default function App({
           identitySession={identitySession}
           leaderboard={leaderboard}
           mode={mode}
-          onClaimIdentity={() => openAuthPrompt({ type: "claim" })}
+          onClaimIdentity={(mode) => openAuthPrompt({ type: "claim" }, mode)}
           onCloseChallengeDetail={closeChallengeDetail}
           onCreateChallenge={createChallenge}
           onCreateRandomChallenge={() => void createRandomChallenge()}

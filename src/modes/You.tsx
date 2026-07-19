@@ -17,7 +17,12 @@ export default function You({
   stats,
 }: {
   identitySession: VGamesIdentitySession | null;
-  onClaimIdentity: () => void;
+  // PKG-11 remainder fix (2026-07-19): widened from `() => void` to the same
+  // `(mode) => void` shape RaceResults.tsx's `ClaimCta` already uses, so
+  // both entry points can share the one unified "Create account"/"Log in"
+  // pair (brief item 5/acceptance criterion 3) instead of You keeping its
+  // own third account verb ("Claim your stats").
+  onClaimIdentity: (mode: "create" | "login") => void;
   stats: AccountStats | null;
 }) {
   const isUnclaimed = !identitySession || identitySession.status === "ghost";
@@ -35,9 +40,17 @@ export default function You({
               ? `You're on the board as ${identitySession.displayName}. Claim it so it stays yours.`
               : "Playing as a guest. Claim your name so your stats stay yours."}
           </p>
-          <button type="button" onClick={onClaimIdentity}>
-            Claim your stats
-          </button>
+          {/* PKG-11 remainder fix: mirrors RaceResults.tsx's `ClaimCta` -
+              the same "Create account"/"Log in" pair every other account
+              entry point uses, not a third claim-framed verb. */}
+          <div className="claim-cta-actions">
+            <button type="button" onClick={() => onClaimIdentity("create")}>
+              Create account
+            </button>
+            <button className="link-button" type="button" onClick={() => onClaimIdentity("login")}>
+              Log in
+            </button>
+          </div>
         </section>
       ) : null}
 

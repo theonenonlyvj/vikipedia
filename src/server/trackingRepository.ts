@@ -234,6 +234,10 @@ export interface RunProtocolRepository extends TrackingRepository {
       elapsedMs: number;
       clickCount: number;
       completedAt: string;
+      // PKG-03 remainder fix: the surviving best attempt's own run id, so
+      // callers (getChallengeBoard) can wire up a path disclosure - see
+      // ChallengeBoardPlacement's doc comment (domain/types.ts).
+      runId: string;
     }>
   >;
   listChallengeDnfs(challengeId: string): Promise<

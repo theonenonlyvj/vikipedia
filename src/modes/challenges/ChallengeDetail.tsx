@@ -26,6 +26,13 @@ function emptyBoard(challengeId: string): ChallengeBoardResponse {
  * per-attempt `leaderboard` prop the app shell already fetches is kept for
  * "Your history" only, which legitimately needs every attempt (repeat runs
  * included) rather than the account's single best.
+ *
+ * `pathsUnlocked`/`onDisclosePath`/`runPaths` are shared, unmodified, with
+ * BOTH the main Leaderboard panel and "Your history" (PKG-03 remainder fix):
+ * invariant 5 gates path disclosure on the VIEWER having played, not on
+ * whose run it is - once unlocked, the main board's "View winning path"
+ * (any account with a `runId`) and "Your history"'s per-attempt one both
+ * read off the same `onDisclosePath`/`runPaths` App.tsx already wires up.
  */
 export default function ChallengeDetail({
   apiClient,
@@ -126,7 +133,10 @@ export default function ChallengeDetail({
         <LeaderboardList
           dnfs={board.dnfs}
           identityAccountId={identityAccountId}
+          onDisclosePath={onDisclosePath}
+          pathsUnlocked={pathsUnlocked}
           placements={board.placements}
+          runPaths={runPaths}
         />
         {!pathsUnlocked ? (
           <p className="muted board-footnote">Paths hidden until you&apos;ve played.</p>

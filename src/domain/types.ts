@@ -308,9 +308,19 @@ export interface RankedLeaderboardRow extends ServerLeaderboardRow {
  * Boards' daily-view finisher row (Increment 3, UX redesign spec §Boards):
  * one row per canonical account, deduped to their best attempt - the wire
  * shape of `listChallengePlacements`, already invariant-2-correct (unlike
- * `RankedLeaderboardRow`, which is per-attempt). No `runId` - Boards never
- * discloses a per-run path this increment (spec: "paths hidden until
- * you've played"), so there's nothing to key a path disclosure on.
+ * `RankedLeaderboardRow`, which is per-attempt). Boards/Home never disclose
+ * a per-run path (spec invariant 5: "paths hidden until you've played" -
+ * neither surface gates path disclosure on the viewer's own play state, so
+ * they simply never wire `runId` up to anything).
+ *
+ * `runId` (PKG-03 remainder fix, 2026-07-19): the surviving best attempt's
+ * own run id, added so Challenge Detail - which DOES gate on `pathsUnlocked`
+ * - can link ANY placement row (not just the viewer's own "Your history"
+ * rows) to its winning path via the existing public `GET
+ * /runs/{runId}/path` endpoint. Optional so older/cached responses and the
+ * many existing board fixtures across the test suite that predate this
+ * field keep parsing (`isChallengeBoardPlacement` tolerates its absence) -
+ * the real server always populates it.
  */
 export interface ChallengeBoardPlacement {
   accountId: string;
@@ -318,6 +328,7 @@ export interface ChallengeBoardPlacement {
   placement: number;
   elapsedMs: number;
   clickCount: number;
+  runId?: string;
 }
 
 /**

@@ -52,6 +52,18 @@ const TREND_WINDOW_PARAM: Record<TrendSegment, BoardsTrendWindow> = {
 
 const EMPTY_BOARD: ChallengeBoardResponse = { challengeId: "", placements: [], dnfs: [] };
 
+// PKG-10 remainder fix (2026-07-19): completes the ARIA tabs pattern the
+// binding ruling itemized (role=tab/tablist + roving tabindex + arrow keys
+// were already there) - each tab now `aria-controls` this one shared panel
+// id (only one segment's content is ever mounted at a time, so a single
+// swapped panel is the correct single-panel-per-tablist shape, not a gap),
+// and the panel itself carries `role="tabpanel"` + `aria-labelledby` the
+// currently-active tab's own id.
+const BOARDS_SEGMENT_PANEL_ID = "boards-segment-panel";
+function boardsTabId(segment: BoardsSegment): string {
+  return `boards-tab-${segment}`;
+}
+
 type RecentDailyDetail =
   | { challengeId: string; dailyDate: string; status: "loading" }
   | { challengeId: string; dailyDate: string; status: "not-played" }
@@ -398,8 +410,10 @@ export default function Boards({
       >
         {ALL_SEGMENTS.map((key) => (
           <button
+            aria-controls={BOARDS_SEGMENT_PANEL_ID}
             aria-selected={segment === key}
             className={segment === key ? "active" : undefined}
+            id={boardsTabId(key)}
             key={key}
             onClick={() => setSegment(key)}
             ref={(el) => {
@@ -418,6 +432,11 @@ export default function Boards({
         <span aria-hidden="true" className="board-segment-spacer" ref={segmentSpacerRef} />
       </div>
 
+      <div
+        aria-labelledby={boardsTabId(segment)}
+        id={BOARDS_SEGMENT_PANEL_ID}
+        role="tabpanel"
+      >
       {isTrendSegment(segment) ? (
         trendHasError ? (
           // F6: an honest error state + Retry - never the "no one has
@@ -671,6 +690,7 @@ export default function Boards({
           ) : null}
         </>
       )}
+      </div>
     </section>
   );
 }

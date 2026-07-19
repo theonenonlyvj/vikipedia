@@ -9,7 +9,7 @@ import {
   type RefObject,
 } from "react";
 import BoardSnippet from "../components/BoardSnippet";
-import { boardSnippetRowsForResult } from "../domain/boardSnippet";
+import { boardSnippetRowsForResult, dedupedRankForJustFinished } from "../domain/boardSnippet";
 import PlayAnotherCard from "../components/PlayAnotherCard";
 import { isDailyToday as isChallengeDailyToday } from "../domain/challengeSelection";
 import { compressPathForStrip } from "../domain/pathCompression";
@@ -179,7 +179,14 @@ export default function RaceResults({
   // truth"). See that function's doc comment for the known open question
   // (a non-personal-best repeat's own true rank/time vs. the account's
   // canonical placement elsewhere on the same board).
-  const justFinishedRow = outcome.status === "completed"
+  //
+  // PKG-03 remainder fix (2026-07-19): `rank` is resolved through
+  // `dedupedRankForJustFinished` against the just-fetched deduped board, NOT
+  // left as the server's raw per-attempt `leaderboardContext.rank` - the
+  // header (`CompletedResultHeader`, below) and `ShareResultButton` both read
+  // this SAME already-resolved `justFinishedRow.rank`, so the header can
+  // never show a different number than the board row for the identical run.
+  const rawJustFinishedRow = outcome.status === "completed"
     ? {
         status: "completed" as const,
         rank: outcome.leaderboardContext?.rank ?? null,
@@ -194,6 +201,10 @@ export default function RaceResults({
         elapsedMs: outcome.elapsedMs,
         clickCount: outcome.clicks,
       };
+  const justFinishedRow = {
+    ...rawJustFinishedRow,
+    rank: dedupedRankForJustFinished(board.placements, rawJustFinishedRow),
+  };
 
   const isGuest = identityStatus === "ghost";
   // "Today"/"Today's board" is only accurate when the raced challenge is
@@ -212,7 +223,7 @@ export default function RaceResults({
     <section className="race-results">
       <aside aria-live="polite" className="result-panel">
         {outcome.status === "completed" ? (
-          <CompletedResultHeader isDailyToday={isDailyToday} outcome={outcome} />
+          <CompletedResultHeader isDailyToday={isDailyToday} outcome={outcome} rank={justFinishedRow.rank} />
         ) : (
           <DnfResultHeader
             clicks={outcome.clicks}
@@ -318,11 +329,17 @@ export default function RaceResults({
 function CompletedResultHeader({
   isDailyToday,
   outcome,
+  rank,
 }: {
   isDailyToday: boolean;
   outcome: Extract<RaceResultOutcome, { status: "completed" }>;
+  // PKG-03 remainder fix (2026-07-19): the caller's already-resolved,
+  // deduped-board rank (see `justFinishedRow`/`dedupedRankForJustFinished`
+  // in the parent) - NOT re-derived here from `outcome.leaderboardContext`
+  // (the server's raw per-attempt `challenge_rank`), so the header can never
+  // show a different number than the board row below it for this same run.
+  rank: number | null;
 }) {
-  const rank = outcome.leaderboardContext?.rank ?? null;
   const placement = isDailyToday ? "today" : "on this board";
   const resultLine = rank !== null
     ? `#${rank} ${placement} · ${formatTimeAndClicks(outcome.elapsedMs, outcome.session.clicks)}`

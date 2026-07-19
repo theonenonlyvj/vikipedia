@@ -303,17 +303,23 @@ export default function Home({
         </BoardSnippet>
       ) : null}
 
-      {/* No prior daily in the catalog at all (e.g. before the first daily
-          ever ran) - still never a bare hero. Deliberately NOT today's board
-          here even when the hero IS today's real daily: the spec's whole
-          reason for preferring yesterday's board pre-play is "the player has
-          no stake in today's board yet, and it discourages scouting" - this
-          fallback keeps that invariant by pointing at Stats (PKG-14 rename;
-          nav tab formerly labeled "Boards") instead of leaking today's live
-          standings. */}
+      {/* No yesterday's daily in the catalog - still never a bare hero.
+          PKG-06 remainder fix (2026-07-19): this isn't only "before the
+          first daily ever ran" - per this file's own `yesterdaysDaily`
+          comment above (and Boards.tsx's matching one), a real yesterday's
+          daily is often simply absent once its day passes and ages out of
+          the active catalog, which is the ORDINARY post-drop state, not a
+          rare edge case. The old copy ("No prior daily board yet.") reads
+          "yet" as if none ever existed, which is false in that common case
+          and could show to many visitors - so this fallback makes no claim
+          either way, just a plain pointer to Stats (PKG-14 rename; nav tab
+          formerly labeled "Boards"). Deliberately NOT today's board here
+          even when the hero IS today's real daily: the spec's whole reason
+          for preferring yesterday's board pre-play is "the player has no
+          stake in today's board yet, and it discourages scouting" - this
+          fallback keeps that invariant. */}
       {dailyState !== "finished" && !yesterdaysDaily ? (
         <p className="home-boards-fallback muted">
-          No prior daily board yet.{" "}
           <button
             className="link-button"
             onClick={() => onGoToBoards()}

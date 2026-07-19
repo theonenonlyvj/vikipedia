@@ -447,7 +447,11 @@ function isChallengeBoardPlacement(value: unknown): value is ChallengeBoardRespo
     (value.displayName === null || hasString(value, "displayName")) &&
     hasNumber(value, "placement") &&
     hasNumber(value, "elapsedMs") &&
-    hasNumber(value, "clickCount");
+    hasNumber(value, "clickCount") &&
+    // PKG-03 remainder fix: `runId` is optional wire-compatibility (older/
+    // cached responses and pre-existing test fixtures may lack it) - when
+    // present it must be a real string, never tolerated as some other type.
+    (value.runId === undefined || hasString(value, "runId"));
 }
 
 function isChallengeBoardDnfRow(value: unknown): value is ChallengeBoardResponse["dnfs"][number] {

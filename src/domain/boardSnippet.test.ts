@@ -74,26 +74,52 @@ describe("boardSnippetRowsForResult", () => {
     ]);
   });
 
-  it("merge-inserts the just-finished run at its true sorted position, not always last", () => {
+  it("merge-inserts the just-finished run at its true sorted position (deduped rank derived from elapsed/clicks, not the raw per-attempt rank), not always last", () => {
     const rows = boardSnippetRowsForResult(
       { placements: [placement("acc-a", 1), placement("acc-b", 3)], dnfs: [] },
       "acc-you",
-      { status: "completed", rank: 2, displayName: "Vijay", elapsedMs: 2_000, clickCount: 2 },
+      // rank: 5 is a deliberately bogus raw per-attempt value (the server's
+      // challenge_rank universe) - the function must ignore it and derive
+      // #2 from elapsedMs/clickCount against the deduped board instead.
+      { status: "completed", rank: 5, displayName: "Vijay", elapsedMs: 20_000, clickCount: 4 },
     );
     expect(rows.map((row) => row.rankLabel)).toEqual(["#1", "#2", "#3"]);
-    expect(rows[1]).toMatchObject({ isYou: true, displayName: "Vijay" });
+    expect(rows[1]).toMatchObject({ isYou: true, displayName: "Vijay", rank: 2 });
   });
 
-  it("still shows the account's own (better) placement row when the just-finished run was a worse repeat, at the run's own rank", () => {
+  it("derives the pinned rank from the deduped board, not the server's raw per-attempt challenge_rank (PKG-03 remainder fix)", () => {
+    // The rank-universe mixing bug: a rival with two completed attempts
+    // occupies raw challenge_rank #1 and #2 (a row_number over every
+    // eligible RUN); the viewer's own first-ever run is raw challenge_rank
+    // #3 in that same all-runs universe, but the DEDUPED board - one row per
+    // account - only ever has ONE rival row, so the viewer's true placement
+    // is #2. Results must agree with Boards/Home/Detail: #2, not the raw #3.
+    const rows = boardSnippetRowsForResult(
+      { placements: [placement("acc-rival", 1)], dnfs: [] },
+      "acc-you",
+      { status: "completed", rank: 3, displayName: "Vijay", elapsedMs: 15_000, clickCount: 4 },
+    );
+    const yourRow = rows.find((row) => row.isYou);
+    expect(yourRow).toMatchObject({ rankLabel: "#2", rank: 2 });
+  });
+
+  it("still shows the account's own true rank/time when the just-finished run was a worse repeat - but the account's better board row is NOT shown alongside it", () => {
     // A repeat attempt that placed worse than the account's earlier best:
     // the deduped board only ever carries the best attempt, but Results
     // must show THIS run's own true rank/time, one source of truth with
     // the header above it (see the doc comment on `boardSnippetRowsForResult`).
+    // The account's own (better) placement row from the board is dropped
+    // entirely (filtered via `!row.isYou`) - it never appears alongside the
+    // pinned just-finished row (that would be the duplicate-rank bug this
+    // package fixes). The deduped rank (#3) counts BOTH the account's real
+    // better placement (elapsedMs 10_000) and acc-other's (20_000) as
+    // strictly better than this 30_000ms repeat.
     const rows = boardSnippetRowsForResult(
       { placements: [placement("acc-you", 1), placement("acc-other", 2)], dnfs: [] },
       "acc-you",
       { status: "completed", rank: 3, displayName: "Vijay", elapsedMs: 30_000, clickCount: 6 },
     );
+    expect(rows.filter((row) => row.isYou)).toHaveLength(1);
     expect(rows.map((row) => [row.rankLabel, row.displayName])).toEqual([
       ["#2", "acc-other"],
       ["#3", "Vijay"],

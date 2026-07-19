@@ -2345,7 +2345,7 @@ export function createD1TrackingRepository(options: {
              FROM resolved
            )
            SELECT best.account_id, best.elapsed_ms, best.click_count,
-                  best.completed_at,
+                  best.completed_at, best.id AS run_id,
                   row_number() OVER (
                     ORDER BY best.elapsed_ms ASC, best.click_count ASC,
                              best.completed_at ASC, best.id
@@ -2366,6 +2366,7 @@ export function createD1TrackingRepository(options: {
         elapsedMs: Number(row.elapsed_ms),
         clickCount: Number(row.click_count),
         completedAt: row.completed_at,
+        runId: row.run_id,
       }));
     },
 
@@ -5149,6 +5150,7 @@ interface ChallengePlacementQueryRow {
   elapsed_ms: number;
   click_count: number;
   completed_at: string;
+  run_id: string;
   placement: number;
   display_name?: string | null;
 }

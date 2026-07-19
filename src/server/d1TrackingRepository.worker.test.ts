@@ -3600,8 +3600,14 @@ describe("listChallengePlacements", () => {
     expect(placements[0].accountId).toBe(accountA);
     expect(placements[0].placement).toBe(1);
     expect(placements[0].elapsedMs).toBe(4_000); // best, not latest
+    // PKG-03 remainder fix: `runId` must point at the SURVIVING best attempt
+    // ("a-better") - not the worse one ("a-worse") the account also has on
+    // this challenge - so a path disclosure keyed on it always resolves to
+    // the run that actually earned this placement.
+    expect(placements[0].runId).toBe("a-better");
     expect(placements[1].accountId).toBe(accountB);
     expect(placements[1].placement).toBe(2); // no gaps
+    expect(placements[1].runId).toBe("b-only");
   });
 
   it("respects board exclusion", async () => {
@@ -3628,6 +3634,8 @@ describe("listChallengePlacements", () => {
     const a = placements.find((p) => p.accountId === accountA);
     // A's best is excluded → A's placement falls back to their other run.
     expect(a?.elapsedMs).toBe(7_000);
+    // ...and `runId` must follow the same fallback, never the excluded run.
+    expect(a?.runId).toBe("a-second-best");
   });
 
   it("resolves canonical accounts through account_aliases", async () => {
@@ -4956,6 +4964,11 @@ describe("GET /api/v2/challenges/:id/board", () => {
           placement: 1,
           elapsedMs: 4_000,
           clickCount: 1,
+          // PKG-03 remainder fix: the surviving best attempt's own run id,
+          // so Challenge Detail can link this row to its winning path once
+          // the viewer has played (invariant 5) - see ChallengeBoardPlacement's
+          // doc comment (domain/types.ts).
+          runId: "board-route-completed",
         },
       ],
       dnfs: [

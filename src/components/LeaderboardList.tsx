@@ -1,5 +1,5 @@
 import { formatTimeAndClicks } from "../domain/formatting";
-import type { ChallengeBoardDnfRow, ChallengeBoardPlacement } from "../domain/types";
+import type { ChallengeBoardDnfRow, ChallengeBoardPlacement, ServerPathStep } from "../domain/types";
 
 /**
  * Challenge Detail's own leaderboard (Invariant 1: "Time AND clicks,
@@ -13,25 +13,38 @@ import type { ChallengeBoardDnfRow, ChallengeBoardPlacement } from "../domain/ty
  * Challenge Detail's own "Your history" strip (see ChallengeDetail.tsx),
  * which keeps every attempt on purpose.
  *
- * The old per-row "SERVER TRACKED"/"Repeat run" provenance pills and the
- * unconditional "View winning path" link are both gone: the deduped board
- * shape carries no `runId`/`protocolVersion` to hang either on (there is
- * nothing to disclose a path FOR, and "server tracked" was the undifferentiated
- * default, not information) - and neither ever appeared in the ratified
- * design mockup (`mockup-browse-detail`: plain "1  FranTheGreat  1:02 · 8
- * clk" rows). Your own runs' provenance/path disclosure moved to "Your
- * history" instead, where a real per-run `runId`/`protocolVersion` still
- * exists. This mirrors Boards' own inline board markup (`.board-snippet`/
- * `.board-dnf-section`) exactly, so the two screens can't visually drift.
+ * The old per-row "SERVER TRACKED"/"Repeat run" provenance pills are gone
+ * for good: "server tracked" was the undifferentiated default, not
+ * information, and neither ever appeared in the ratified design mockup
+ * (`mockup-browse-detail`: plain "1  FranTheGreat  1:02 · 8 clk" rows).
+ *
+ * "View winning path" (PKG-03 remainder fix, 2026-07-19): spec invariant 5
+ * is "paths stay hidden until YOU'VE played," not "until each row's own
+ * player has played" - once `pathsUnlocked` (the viewer has a completed run
+ * on this challenge), every placement row's winning path becomes
+ * disclosable, not just the viewer's own. `ChallengeBoardPlacement.runId`
+ * (added this fix) carries the surviving best attempt's run id so this can
+ * hang off the same public `GET /runs/{runId}/path` endpoint "Your history"
+ * already uses - `row.runId` is optional (older/cached responses may lack
+ * it), so the disclosure simply doesn't render for a row that has none
+ * rather than erroring. This mirrors Boards' own inline board markup
+ * (`.board-snippet`/`.board-dnf-section`) exactly, so the two screens can't
+ * visually drift.
  */
 export default function LeaderboardList({
   dnfs,
   identityAccountId,
+  onDisclosePath,
+  pathsUnlocked,
   placements,
+  runPaths,
 }: {
   dnfs: ChallengeBoardDnfRow[];
   identityAccountId: string | null;
+  onDisclosePath: (runId: string) => void;
+  pathsUnlocked: boolean;
   placements: ChallengeBoardPlacement[];
+  runPaths: Record<string, ServerPathStep[]>;
 }) {
   return (
     <>
@@ -48,6 +61,23 @@ export default function LeaderboardList({
                     {isYou ? <span className="muted"> (you)</span> : null}
                   </span>
                   <span>{formatTimeAndClicks(row.elapsedMs, row.clickCount)}</span>
+                  {pathsUnlocked && row.runId ? (
+                    <details
+                      className="path-disclosure"
+                      onToggle={(event) => {
+                        if (event.currentTarget.open) onDisclosePath(row.runId!);
+                      }}
+                    >
+                      <summary>View winning path</summary>
+                      {runPaths[row.runId] ? (
+                        <ol className="winning-path">
+                          {runPaths[row.runId].map((step) => (
+                            <li key={step.stepNumber}>{step.sourceTitle} {"→"} {step.destinationTitle}</li>
+                          ))}
+                        </ol>
+                      ) : <p>Loading path...</p>}
+                    </details>
+                  ) : null}
                 </li>
               );
             })}

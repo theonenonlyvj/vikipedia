@@ -96,7 +96,10 @@ export default function AppShell({
   identitySession: VGamesIdentitySession | null;
   leaderboard: RankedLeaderboardRow[];
   mode: ModeKey;
-  onClaimIdentity: () => void;
+  // PKG-11 remainder fix: widened to match You.tsx's own widened signature
+  // (see that file's doc comment) - the app-wide "Create account"/"Log in"
+  // pair, not a bare `() => void`.
+  onClaimIdentity: (mode: "create" | "login") => void;
   onCloseChallengeDetail: () => void;
   onCreateChallenge: (input: CreateChallengeInput) => Promise<void>;
   onCreateRandomChallenge: () => void;
