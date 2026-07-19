@@ -940,17 +940,18 @@ export default function App({
     setConfirmPasswordDraft("");
     if (preferredMode) {
       setAuthMode(preferredMode);
-    } else if (identitySession?.status === "ghost") {
-      // QF-01 (owner-proxy ruling, 2026-07-19): a returning ghost already
-      // has a name to play under, so the fallback lands on the Guest tab -
-      // one tap ("Continue as guest") to keep racing under it, no typing.
-      // A brand-new visitor (no identitySession at all) keeps the Create
-      // default below, matching the ratified onboarding mockup.
-      setAuthMode("guest");
-      setUsernameDraft(suggestUsername(identitySession.displayName));
     } else {
-      setAuthMode("create");
-      setUsernameDraft("");
+      // FB-2 (owner decision 1b, 2026-07-19): guest-first for everyone,
+      // not just returning ghosts - QF-01 had already flipped the fallback
+      // to Guest for a returning ghost (a name to play under, one tap to
+      // keep racing under it); this finishes the job so a brand-new
+      // visitor also lands on Guest instead of the Create form. Still
+      // pre-fill the username draft for a returning ghost in case they
+      // tab over to Create/Log in.
+      setAuthMode("guest");
+      if (identitySession) {
+        setUsernameDraft(suggestUsername(identitySession.displayName));
+      }
     }
   }
 

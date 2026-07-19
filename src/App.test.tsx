@@ -451,7 +451,7 @@ describe("VWiki Race app", () => {
     expect(screen.queryByText(/one account works across every vgames title/i)).toBeNull();
   });
 
-  it("defaults the start gate to a VGames Create account flow", async () => {
+  it("defaults the start gate to a VGames Guest flow (owner decision 1b: guest-first for everyone)", async () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 
@@ -465,15 +465,15 @@ describe("VWiki Race app", () => {
       "Create account",
       "Log in",
     ]);
-    expect(within(options).getByRole("button", { name: /create account/i })).toHaveAttribute(
+    expect(within(options).getByRole("button", { name: /^guest$/i })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    expect(within(dialog).getByText(/one account works across every vgames title/i)).toBeVisible();
-    expect(within(dialog).getByLabelText(/vgames username/i)).toBeVisible();
-    expect(within(dialog).getByLabelText(/confirm password/i)).toBeVisible();
-    expect(within(dialog).queryByLabelText(/^display name$/i)).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: /continue as guest/i })).toBeNull();
+    expect(within(dialog).getByLabelText(/display name/i)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: /continue as guest/i })).toBeVisible();
+    expect(within(dialog).queryByLabelText(/vgames username/i)).toBeNull();
+    expect(within(dialog).queryByLabelText(/^password$/i)).toBeNull();
+    expect(within(dialog).queryByLabelText(/confirm password/i)).toBeNull();
   });
 
   it("creates a VGames account with the username as its display name", async () => {
@@ -484,6 +484,9 @@ describe("VWiki Race app", () => {
 
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
     await user.click(await screen.findByRole("button", { name: /start race/i }));
+    // FB-2: fresh visitor now defaults to the Guest tab, so Create is one
+    // explicit tap away.
+    await user.click(screen.getByRole("button", { name: /^create account$/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
@@ -509,6 +512,7 @@ describe("VWiki Race app", () => {
 
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
     await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(screen.getByRole("button", { name: /^create account$/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "different-pass");
@@ -536,6 +540,7 @@ describe("VWiki Race app", () => {
 
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
     await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(screen.getByRole("button", { name: /^create account$/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "Mike Smith");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
@@ -564,6 +569,7 @@ describe("VWiki Race app", () => {
 
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
     await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(screen.getByRole("button", { name: /^create account$/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "abc");
     await user.type(screen.getByLabelText(/confirm password/i), "abc");
@@ -595,6 +601,7 @@ describe("VWiki Race app", () => {
 
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
     await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(screen.getByRole("button", { name: /^create account$/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
@@ -755,8 +762,9 @@ describe("VWiki Race app", () => {
 
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
     await user.click(await screen.findByRole("button", { name: /start race/i }));
-    // Fresh visitor: dialog defaults to Create account (QF-01 ratified
-    // default) - no tab click needed.
+    // FB-2: fresh visitor now defaults to the Guest tab - one explicit tap
+    // over to Create.
+    await user.click(screen.getByRole("button", { name: /^create account$/i }));
     await user.type(screen.getByLabelText(/vgames username/i), "vijay");
     await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
     await user.type(screen.getByLabelText(/confirm password/i), "secret-pass");
@@ -865,12 +873,12 @@ describe("VWiki Race app", () => {
   });
 
   it("defaults a returning ghost to the one-tap guest continue path before each challenge start, with Create still one tap away", async () => {
-    // QF-01 (owner-proxy ruling, 2026-07-19): a returning ghost already has
-    // a name to play under, so the identity gate now defaults to the Guest
-    // tab - "Continue as guest" with zero typing - instead of the
-    // Create-account tab. A brand-new visitor (no prior session) still
-    // defaults to Create; see "defaults the start gate to a VGames Create
-    // account flow" above.
+    // QF-01 (owner-proxy ruling, 2026-07-19) + FB-2 (owner decision 1b):
+    // a returning ghost already has a name to play under, so the identity
+    // gate defaults to the Guest tab - "Continue as guest" with zero
+    // typing - instead of the Create-account tab. FB-2 extended this
+    // guest-first default to brand-new visitors too; see "defaults the
+    // start gate to a VGames Guest flow" above.
     const storage = memoryStorage();
     storage.setItem(
       "vwiki-race:vgames-session",
