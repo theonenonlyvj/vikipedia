@@ -908,13 +908,17 @@ export default function App({
     setConfirmPasswordDraft("");
     if (preferredMode) {
       setAuthMode(preferredMode);
+    } else if (identitySession?.status === "ghost") {
+      // QF-01 (owner-proxy ruling, 2026-07-19): a returning ghost already
+      // has a name to play under, so the fallback lands on the Guest tab -
+      // one tap ("Continue as guest") to keep racing under it, no typing.
+      // A brand-new visitor (no identitySession at all) keeps the Create
+      // default below, matching the ratified onboarding mockup.
+      setAuthMode("guest");
+      setUsernameDraft(suggestUsername(identitySession.displayName));
     } else {
       setAuthMode("create");
-      setUsernameDraft(
-        identitySession?.status === "ghost"
-          ? suggestUsername(identitySession.displayName)
-          : "",
-      );
+      setUsernameDraft("");
     }
   }
 
@@ -1533,11 +1537,17 @@ function IdentityPrompt({
         </div>
 
         <p className="identity-copy">
-          {isGhost
-            ? "Turn this guest into a VGames account without losing any runs. "
-            : "Create a VGames account before the timer starts. "}
-          Free, no email - keeps your name and stats on every device. One
-          account works across every VGames title.
+          {authMode === "guest" ? (
+            "Pick a name and go - claim it later. No email, no password."
+          ) : (
+            <>
+              {isGhost
+                ? "Turn this guest into a VGames account without losing any runs. "
+                : "Create a VGames account before the timer starts. "}
+              Free, no email - keeps your name and stats on every device. One
+              account works across every VGames title.
+            </>
+          )}
         </p>
 
         {error ? <p role="alert">{error}</p> : null}

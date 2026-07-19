@@ -391,6 +391,12 @@ describe("VWiki Race app", () => {
     expect(
       screen.getByText(/appear on the public leaderboard/i),
     ).toBeVisible();
+
+    // QF-01: the Guest tab's copy no longer instructs account creation -
+    // that pitch stays on Create/Log-in only.
+    expect(screen.getByText(/pick a name and go/i)).toBeVisible();
+    expect(screen.queryByText(/create a vgames account before the timer starts/i)).toBeNull();
+    expect(screen.queryByText(/one account works across every vgames title/i)).toBeNull();
   });
 
   it("defaults the start gate to a VGames Create account flow", async () => {
@@ -728,7 +734,13 @@ describe("VWiki Race app", () => {
     });
   });
 
-  it("prompts ghost sessions to create an account or continue before each challenge start", async () => {
+  it("defaults a returning ghost to the one-tap guest continue path before each challenge start, with Create still one tap away", async () => {
+    // QF-01 (owner-proxy ruling, 2026-07-19): a returning ghost already has
+    // a name to play under, so the identity gate now defaults to the Guest
+    // tab - "Continue as guest" with zero typing - instead of the
+    // Create-account tab. A brand-new visitor (no prior session) still
+    // defaults to Create; see "defaults the start gate to a VGames Create
+    // account flow" above.
     const storage = memoryStorage();
     storage.setItem(
       "vwiki-race:vgames-session",
@@ -747,12 +759,23 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
     await user.click(await screen.findByRole("button", { name: /start race/i }));
 
-    expect(await screen.findByRole("dialog", { name: /save your stats/i })).toBeVisible();
-    expect(createAccountSubmitButton()).toBeVisible();
+    const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    const options = within(dialog).getByRole("group", { name: /identity options/i });
+    expect(within(options).getByRole("button", { name: /^guest$/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(dialog).queryByLabelText(/vgames username/i)).toBeNull();
+    expect(within(dialog).getByText("Playing as")).toBeVisible();
+    expect(within(dialog).getByText("Vijay")).toBeVisible();
+
+    // Create account is still one tap away, prefilled with a suggested
+    // username derived from the ghost's display name.
+    await user.click(within(options).getByRole("button", { name: /create account/i }));
     expect(screen.getByLabelText(/vgames username/i)).toHaveValue("vijay");
-    expect(screen.queryByRole("button", { name: /continue as guest/i })).toBeNull();
-    await user.click(screen.getByRole("button", { name: /^guest$/i }));
-    await user.click(screen.getByRole("button", { name: /continue as guest/i }));
+    await user.click(within(options).getByRole("button", { name: /^guest$/i }));
+
+    await user.click(within(dialog).getByRole("button", { name: /continue as guest/i }));
 
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     expect(fetchImpl).not.toHaveBeenCalledWith(
