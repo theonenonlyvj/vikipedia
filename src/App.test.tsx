@@ -3923,6 +3923,30 @@ describe("Race flow: full-screen takeover", () => {
     expect(screen.queryByText(/🔥 day 1/i)).toBeNull();
   });
 
+  it("review fix (QF-06): shows the Day-1 ritual hook on Results even when the account's first-ever finish is a NON-daily challenge", async () => {
+    // Design spec (Race flow beat 3): the Day-1 hook fires on "the account's
+    // first finish of any kind - not daily-specific" - a friend-link arrival
+    // who races a user-created/non-daily challenge first still gets pointed
+    // at tomorrow's daily. Uses the same non-daily default fixture challenge
+    // as the "no drop-time cadence line" test above (no dailyFeature), but
+    // with accountCompleted: 0 so this is a genuine first finish - the Day-1
+    // hook must NOT be gated on daily-ness the way the plain cadence line is.
+    const fetchImpl = createFetchMock({ accountCompleted: 0 });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(await screen.findByRole("link", { name: /fruit/i }));
+
+    expect(await screen.findByText(/you reached it/i)).toBeVisible();
+    expect(
+      await screen.findByText(
+        /🔥 day 1 · new daily drops 5:00 am central — come back tomorrow for the next one/i,
+      ),
+    ).toBeVisible();
+  });
+
   it("shows a top-3 board snippet with the player's own row highlighted", async () => {
     const fetchImpl = createFetchMock({
       // PKG-03: Results' snippet now reads the deduped `/board` endpoint for

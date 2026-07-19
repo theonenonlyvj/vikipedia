@@ -264,24 +264,28 @@ export default function RaceResults({
           />
         )}
 
-        {/* QF-06 (round-2 quickfix, owner-proxy ruling): un-gated off
-            `showFirstFinishRitual` - EVERY daily result (completed or DNF,
-            Day 1 or Day 100) now ends with a forward-looking drop-time cue,
-            not just the account's literal first-ever finish. The Day-1
-            framing stays as an additive variant on top of that, with
-            "come defend your spot" replaced by "come back tomorrow" - "come
-            defend your spot" made no sense on a screen that, going forward,
-            is also reachable from a DNF or a non-first finish. */}
-        {isDaily ? (
-          showFirstFinishRitual ? (
-            <p className="ritual-hook" role="status">
-              🔥 Day 1 · New daily drops 5:00 AM Central — come back tomorrow for the next one
-            </p>
-          ) : (
-            <p className="ritual-line muted" role="status">
-              New daily drops 5:00 AM Central.
-            </p>
-          )
+        {/* QF-06 (round-2 quickfix, owner-proxy ruling + review fix): two
+            independent gates, not one nested on the other.
+            - Day-1 hook (`showFirstFinishRitual`): per the design spec
+              (Race flow beat 3), fires on the account's first finish of ANY
+              kind - not daily-specific - so a friend-link arrival whose
+              first-ever completed race is a non-daily/user-created
+              challenge still gets pointed at tomorrow's daily. Must NOT be
+              gated on `isDaily`.
+            - Cadence line (`isDaily`, non-first-finish): the ruling's actual
+              order - un-gate the drop-time cue off `showFirstFinishRitual`
+              so EVERY daily result (completed or DNF, Day 1 or Day 100), not
+              just the account's literal first-ever finish, ends with a
+              forward-looking drop-time cue. Daily-only, since a non-daily
+              result has no "new daily drops" to announce. */}
+        {showFirstFinishRitual ? (
+          <p className="ritual-hook" role="status">
+            🔥 Day 1 · New daily drops 5:00 AM Central — come back tomorrow for the next one
+          </p>
+        ) : isDaily ? (
+          <p className="ritual-line muted" role="status">
+            New daily drops 5:00 AM Central.
+          </p>
         ) : null}
 
         {/* PKG-05 (council 2026-07-19): Share and (for a still-unclaimed
