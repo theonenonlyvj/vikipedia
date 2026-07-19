@@ -689,22 +689,28 @@ describe("api handlers", () => {
     });
   });
 
-  it("composes Boards' rolling-trend response, echoing the validated window/guard and each ranked row's prevAvgPlacement", async () => {
+  it("composes Boards' rolling-trend response, echoing the validated window and the repository's own guard/prevAvgPlacement for each ranked row", async () => {
     const repository = fakeRepository();
     // F3: apiHandlers derives `prevAvgPlacement` from a *second*
     // `listDailyTrends` call over the immediately-preceding same-length
     // window - this mock returns a different fixture keyed off which
-    // window it was asked for.
+    // window it was asked for. PKG-14: `guard` now comes from THIS call's
+    // own return (not a window->guard mapping apiHandlers computes), so the
+    // fixture supplies it directly, and a deliberately different guard on
+    // the previous-window branch proves apiHandlers never reads it from
+    // there.
     const listDailyTrends = vi.fn(async (_windowDays: 7 | 30 | null, todayCentral: string) => {
       if (todayCentral === "2026-07-18") {
         return {
           ranked: [{ accountId: "acc-1", displayName: "Vijay", avgPlacement: 1.3, playedCount: 3 }],
           unranked: [{ accountId: "acc-2", displayName: null, playedCount: 1 }],
+          guard: 3,
         };
       }
       return {
         ranked: [{ accountId: "acc-1", displayName: "Vijay", avgPlacement: 2.1, playedCount: 4 }],
         unranked: [],
+        guard: 99,
       };
     });
     Object.assign(repository, { listDailyTrends });
@@ -715,6 +721,7 @@ describe("api handlers", () => {
       guard: 3,
       ranked: [{ accountId: "acc-1", displayName: "Vijay", avgPlacement: 1.3, playedCount: 3, prevAvgPlacement: 2.1 }],
       unranked: [{ accountId: "acc-2", displayName: null, playedCount: 1 }],
+      roster: undefined,
     });
     // 7d's previous window ends at t-7 (dailyTrendPreviousWindowEnd) -
     // [t-13,t-7], per spec.
@@ -730,9 +737,10 @@ describe("api handlers", () => {
         return {
           ranked: [{ accountId: "acc-1", displayName: "Vijay", avgPlacement: 1.3, playedCount: 3 }],
           unranked: [],
+          guard: 3,
         };
       }
-      return { ranked: [], unranked: [{ accountId: "acc-1", displayName: "Vijay", playedCount: 1 }] };
+      return { ranked: [], unranked: [{ accountId: "acc-1", displayName: "Vijay", playedCount: 1 }], guard: 3 };
     });
     Object.assign(repository, { listDailyTrends });
     const handlers = createApiHandlers(repository);
@@ -747,8 +755,10 @@ describe("api handlers", () => {
     const listDailyTrends = vi.fn(async () => ({
       ranked: [{ accountId: "acc-1", displayName: "Vijay", avgPlacement: 1.3, playedCount: 12 }],
       unranked: [],
+      guard: 10,
     }));
-    Object.assign(repository, { listDailyTrends });
+    const listAllPlayersRoster = vi.fn(async () => []);
+    Object.assign(repository, { listDailyTrends, listAllPlayersRoster });
     const handlers = createApiHandlers(repository);
 
     await expect(handlers.getBoardsTrends("lifetime", "2026-07-18")).resolves.toMatchObject({
@@ -758,16 +768,24 @@ describe("api handlers", () => {
     expect(listDailyTrends).toHaveBeenCalledWith(null, "2026-07-18");
   });
 
-  it("maps window=30 to a guard of 10 and window=lifetime to a null windowDays", async () => {
+  it("PKG-14: forwards window=30 as windowDays 30 and window=lifetime as null, echoing whatever guard the repository computes for each (no fixed window->guard mapping)", async () => {
     const repository = fakeRepository();
-    const listDailyTrends = vi.fn(async () => ({ ranked: [], unranked: [] }));
-    Object.assign(repository, { listDailyTrends });
+    // Deliberately NOT the pre-PKG-14 fixed 3/10/10 mapping - proves guard
+    // is a pure echo of the repository's own return, not re-derived from
+    // `windowDays` here.
+    const listDailyTrends = vi.fn(async (windowDays: 7 | 30 | null) => ({
+      ranked: [],
+      unranked: [],
+      guard: windowDays === 30 ? 6 : 2,
+    }));
+    const listAllPlayersRoster = vi.fn(async () => []);
+    Object.assign(repository, { listDailyTrends, listAllPlayersRoster });
     const handlers = createApiHandlers(repository);
 
-    await expect(handlers.getBoardsTrends("30", "2026-07-18")).resolves.toMatchObject({ window: "30", guard: 10 });
+    await expect(handlers.getBoardsTrends("30", "2026-07-18")).resolves.toMatchObject({ window: "30", guard: 6 });
     expect(listDailyTrends).toHaveBeenCalledWith(30, "2026-07-18");
 
-    await expect(handlers.getBoardsTrends("lifetime", "2026-07-18")).resolves.toMatchObject({ window: "lifetime", guard: 10 });
+    await expect(handlers.getBoardsTrends("lifetime", "2026-07-18")).resolves.toMatchObject({ window: "lifetime", guard: 2 });
     expect(listDailyTrends).toHaveBeenCalledWith(null, "2026-07-18");
   });
 
@@ -782,6 +800,32 @@ describe("api handlers", () => {
       code: "invalid_window",
       status: 400,
     });
+  });
+
+  it("PKG-14: includes the all-players roster only for window=lifetime - 7d/30d never call listAllPlayersRoster at all", async () => {
+    const repository = fakeRepository();
+    const listDailyTrends = vi.fn(async () => ({ ranked: [], unranked: [], guard: 2 }));
+    const listAllPlayersRoster = vi.fn(async () => [
+      { accountId: "acc-fran", displayName: "FranTheGreat", racesStarted: 1, finishes: 0, wins: 0 },
+      { accountId: "acc-loller", displayName: "lollerskates", racesStarted: 2, finishes: 2, wins: 1 },
+    ]);
+    Object.assign(repository, { listDailyTrends, listAllPlayersRoster });
+    const handlers = createApiHandlers(repository);
+
+    const sevenDay = await handlers.getBoardsTrends("7", "2026-07-18");
+    expect(sevenDay.roster).toBeUndefined();
+    expect(listAllPlayersRoster).not.toHaveBeenCalled();
+
+    const thirtyDay = await handlers.getBoardsTrends("30", "2026-07-18");
+    expect(thirtyDay.roster).toBeUndefined();
+    expect(listAllPlayersRoster).not.toHaveBeenCalled();
+
+    const lifetime = await handlers.getBoardsTrends("lifetime", "2026-07-18");
+    expect(lifetime.roster).toEqual([
+      { accountId: "acc-fran", displayName: "FranTheGreat", racesStarted: 1, finishes: 0, wins: 0 },
+      { accountId: "acc-loller", displayName: "lollerskates", racesStarted: 2, finishes: 2, wins: 1 },
+    ]);
+    expect(listAllPlayersRoster).toHaveBeenCalledTimes(1);
   });
 });
 

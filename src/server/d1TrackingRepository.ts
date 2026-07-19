@@ -13,6 +13,7 @@ import type {
   AccountStatus,
   AccountStats,
   AbandonRunTransition,
+  AllPlayersRosterEntry,
   AuthorizedAccount,
   Challenge,
   DailyTrendRankedEntry,
@@ -2446,6 +2447,17 @@ export function createD1TrackingRepository(options: {
       // only (finished dailies) - `played_days` is a distinct UNION of
       // finished-challenge and DNF-challenge per account so a day that's
       // both (unusual, but harmless) doesn't double-count.
+      // PKG-14: the participation guard is reality-scaled off how many
+      // dailies actually exist in this exact window (lifetime = ever) -
+      // this is the same `daily_features` row set `windowed_dailies` below
+      // draws from, counted with the identical filter/bindings so the two
+      // queries can never disagree about what "this window" means.
+      const dailiesAvailableRow = await db
+        .prepare(`SELECT count(*) available FROM daily_features ${dateFilter}`)
+        .bind(...dateBindings)
+        .first<{ available: number }>();
+      const guard = dailyTrendGuard(windowDays, Number(dailiesAvailableRow?.available ?? 0));
+
       const { results } = await db
         .prepare(
           `WITH windowed_dailies AS (
@@ -2510,7 +2522,6 @@ export function createD1TrackingRepository(options: {
         .bind(...dateBindings)
         .all<DailyTrendQueryRow>();
 
-      const guard = dailyTrendGuard(windowDays);
       const ranked: DailyTrendRankedEntry[] = [];
       const unranked: DailyTrendUnrankedEntry[] = [];
       for (const row of results) {
@@ -2540,7 +2551,89 @@ export function createD1TrackingRepository(options: {
         right.playedCount - left.playedCount ||
         (left.displayName ?? "").localeCompare(right.displayName ?? ""));
 
-      return { ranked, unranked };
+      return { ranked, unranked, guard };
+    },
+
+    async listAllPlayersRoster() {
+      // PKG-14 (direct owner feedback): unlike `listDailyTrends`, this never
+      // joins through `daily_features` at all - every board-visible run
+      // across every challenge counts, daily or custom, which is exactly
+      // the gap the owner hit (lollerskates/FranTheGreat only ever raced
+      // custom challenges, so `listDailyTrends`'s daily-only join could
+      // never surface them, not even as "not yet ranked").
+      const { results } = await db
+        .prepare(
+          `WITH resolved AS (
+             SELECT r.id, r.challenge_id,
+                    coalesce(a.canonical_account_id, r.canonical_account_id, r.account_id) account_id,
+                    r.status, r.elapsed_ms, r.click_count, r.completed_at,
+                    r.protocol_version, r.ranked_eligible
+             FROM runs r
+             LEFT JOIN account_aliases a
+               ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
+             WHERE r.board_excluded = 0
+           ), started AS (
+             SELECT account_id, count(*) races_started
+             FROM resolved
+             GROUP BY account_id
+           ), finishes AS (
+             -- Raw completed count (AccountStats.totals.completed's own
+             -- definition) - a friendly census, not a strict ranking, so no
+             -- ranked-eligibility filter here.
+             SELECT account_id, count(*) finish_count
+             FROM resolved
+             WHERE status = 'completed'
+             GROUP BY account_id
+           ), eligible AS (
+             SELECT * FROM resolved
+             WHERE status = 'completed'
+               AND elapsed_ms IS NOT NULL
+               AND completed_at IS NOT NULL
+               AND ((protocol_version = 2 AND ranked_eligible = 1)
+                    OR protocol_version = 1)
+           ), best AS (
+             SELECT *, row_number() OVER (
+               PARTITION BY challenge_id, account_id
+               ORDER BY elapsed_ms ASC, click_count ASC, completed_at ASC, id
+             ) attempt_rank
+             FROM eligible
+           ), placements AS (
+             SELECT challenge_id, account_id,
+                    row_number() OVER (
+                      PARTITION BY challenge_id
+                      ORDER BY elapsed_ms ASC, click_count ASC, completed_at ASC, id
+                    ) placement
+             FROM best
+             WHERE attempt_rank = 1
+           ), wins AS (
+             SELECT account_id, count(*) win_count
+             FROM placements
+             WHERE placement = 1
+             GROUP BY account_id
+           )
+           SELECT started.account_id, started.races_started,
+                  coalesce(finishes.finish_count, 0) finish_count,
+                  coalesce(wins.win_count, 0) win_count,
+                  p.public_name AS display_name
+           FROM started
+           LEFT JOIN finishes ON finishes.account_id = started.account_id
+           LEFT JOIN wins ON wins.account_id = started.account_id
+           LEFT JOIN account_profiles p ON p.account_id = started.account_id`,
+        )
+        .all<AllPlayersRosterQueryRow>();
+
+      const roster: AllPlayersRosterEntry[] = results.map((row) => ({
+        accountId: row.account_id,
+        displayName: row.display_name ?? null,
+        racesStarted: Number(row.races_started),
+        finishes: Number(row.finish_count),
+        wins: Number(row.win_count),
+      }));
+      roster.sort((left, right) =>
+        right.racesStarted - left.racesStarted ||
+        right.wins - left.wins ||
+        (left.displayName ?? "").localeCompare(right.displayName ?? ""));
+      return roster;
     },
 
     async getAccountDailyStreak(accountId, todayCentral) {
@@ -2744,9 +2837,13 @@ export function createD1TrackingRepository(options: {
       ]);
       const selfRanked = trend.ranked.find((entry) => entry.accountId === account.accountId);
       const selfUnranked = trend.unranked.find((entry) => entry.accountId === account.accountId);
+      // PKG-14: `guard` comes straight off this same `listDailyTrends` call
+      // (reality-scaled, not a fixed constant) - Home reads it the same way
+      // Boards reads `BoardsTrendsResponse.guard` (F5: never re-derived
+      // client-side).
       const trend30 = selfRanked
-        ? { avgPlacement: selfRanked.avgPlacement, playedCount: selfRanked.playedCount, ranked: true }
-        : { avgPlacement: null, playedCount: selfUnranked?.playedCount ?? 0, ranked: false };
+        ? { avgPlacement: selfRanked.avgPlacement, playedCount: selfRanked.playedCount, ranked: true, guard: trend.guard }
+        : { avgPlacement: null, playedCount: selfUnranked?.playedCount ?? 0, ranked: false, guard: trend.guard };
 
       return {
         totals: {
@@ -5084,6 +5181,14 @@ interface DailyTrendQueryRow {
   // finishes at all) - `avgs` is a LEFT JOIN against `played`.
   avg_placement: number | null;
   played_count: number;
+  display_name?: string | null;
+}
+
+interface AllPlayersRosterQueryRow {
+  account_id: string;
+  races_started: number;
+  finish_count: number;
+  win_count: number;
   display_name?: string | null;
 }
 

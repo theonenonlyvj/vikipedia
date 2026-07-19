@@ -12,7 +12,7 @@ import {
 } from "../domain/challengeSelection";
 import { dailyFlavorBadgeText } from "../domain/dailyEditorial";
 import { formatTimeAndClicks } from "../domain/formatting";
-import type { Challenge } from "../domain/types";
+import type { AllPlayersRosterEntry, Challenge } from "../domain/types";
 import type {
   BoardsTrendRankedEntry,
   BoardsTrendsResponse,
@@ -359,6 +359,11 @@ export default function Boards({
   // loaded (or errored) yet, so guard-dependent copy just doesn't render
   // rather than showing a guessed number.
   const guard = trendMatchesSegment ? trends!.guard : null;
+  // PKG-14 (direct owner feedback): Lifetime-only "Everyone who's played"
+  // roster - the server never populates `roster` for 7d/30d at all, but the
+  // `segment === "lifetime"` check below is the belt-and-suspenders
+  // Lifetime-only guard the spec calls for, independent of that.
+  const roster = trendMatchesSegment ? trends!.roster : undefined;
 
   /**
    * PKG-10 (owner-proxy ruling: keep role=tab/tablist, complete the
@@ -379,8 +384,11 @@ export default function Boards({
   }
 
   return (
-    <section className="boards-mode leaderboard-panel" aria-label="Boards">
-      <h2>Boards</h2>
+    // PKG-14 (direct owner feedback): user-visible "Boards" -> "Stats"
+    // rename only - the mode key, file, and every internal identifier
+    // (BoardsSegment, getBoardsTrends, .boards-mode, etc.) stay "boards".
+    <section className="boards-mode leaderboard-panel" aria-label="Stats">
+      <h2>Stats</h2>
 
       <div
         aria-label="Board period"
@@ -506,6 +514,43 @@ export default function Boards({
                 </ol>
               </section>
             ) : null}
+
+            {/* PKG-14 (direct owner feedback, 2026-07-19: "lifetime/board
+                stats isn't thorough - doesn't include other (fran,
+                lollerskates) that have played"): Lifetime-only census of
+                EVERY board-visible account across ANY challenge, daily or
+                custom - independent of the ranked-trends participation
+                guard entirely, so a custom-only racer (invisible to
+                `listDailyTrends`) still shows up here. Counts, not a
+                leaderboard (owner-proxy ruling: the time+clicks invariant
+                governs ranked board rows, not this roster) - no time is
+                ever shown, only races/finishes/wins. */}
+            {segment === "lifetime" && roster ? (
+              <section className="board-snippet board-roster muted" aria-label="Everyone who's played">
+                <h3>Everyone who&apos;s played</h3>
+                <p className="board-roster-explainer muted">
+                  Daily rankings need {guard} played dailies — every racer counts here.
+                </p>
+                {roster.length ? (
+                  <ol>
+                    {roster.map((row) => {
+                      const isYou = row.accountId === identityAccountId;
+                      return (
+                        <li key={row.accountId}>
+                          <span>
+                            {row.displayName ?? "Unknown"}
+                            {isYou ? <span className="muted"> (you)</span> : null}
+                          </span>
+                          <span>{rosterCountsText(row)}</span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                ) : (
+                  <p className="muted">Nobody has raced yet.</p>
+                )}
+              </section>
+            ) : null}
           </>
         )
       ) : segment === "today" && todayHeroKind === "default" ? (
@@ -628,6 +673,17 @@ export default function Boards({
       )}
     </section>
   );
+}
+
+/**
+ * PKG-14: the roster row's count summary - "races started / finishes /
+ * wins", never a time (owner-proxy ruling: this is a census, not a
+ * leaderboard - the time+clicks invariant doesn't apply to it).
+ */
+function rosterCountsText(row: AllPlayersRosterEntry): string {
+  return `${row.racesStarted} ${row.racesStarted === 1 ? "race" : "races"} · ` +
+    `${row.finishes} ${row.finishes === 1 ? "finish" : "finishes"} · ` +
+    `${row.wins} ${row.wins === 1 ? "win" : "wins"}`;
 }
 
 function recentDailyDetailText(detail: RecentDailyDetail): string {

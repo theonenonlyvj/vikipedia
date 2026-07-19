@@ -232,11 +232,16 @@ export interface AccountStats {
    * trend segments are. `avgPlacement` is only meaningful when `ranked` is
    * true; a below-guard account still gets `playedCount` so Home/You can
    * render "N/{guard} dailies" progress copy instead of a bare rejection.
+   * PKG-14: `guard` is this response's own server-computed threshold (reality
+   * -scaled off how many dailies actually exist, not a fixed constant) - Home
+   * reads it off this field the same way Boards reads `BoardsTrendsResponse.
+   * guard` (F5 invariant: never re-derived client-side).
    */
   trend30: {
     avgPlacement: number | null;
     playedCount: number;
     ranked: boolean;
+    guard: number;
   };
 }
 
@@ -264,6 +269,35 @@ export interface DailyTrendUnrankedEntry {
   accountId: string;
   displayName: string | null;
   playedCount: number;
+}
+
+/**
+ * PKG-14 (direct owner feedback, 2026-07-19: "lifetime/board stats isn't
+ * thorough - doesn't include other (fran, lollerskates) that have played"):
+ * Lifetime's "Everyone who's played" roster row - EVERY canonical account
+ * with ≥1 `board_excluded = 0` run across ANY challenge (daily or custom),
+ * not just the ones who've cleared the ranked-trends participation guard.
+ * Diagnosis: `listDailyTrends` only ever counts daily-featured challenges,
+ * so an account that solely races custom (non-daily) challenges can never
+ * appear on 7d/30d/Lifetime, even as "not yet ranked" - this roster is the
+ * fix, and it is Lifetime-only (no 7d/30d roster - spec scope). Counts, not
+ * a leaderboard: the time+clicks-on-board-rows invariant governs ranked
+ * board rows, not this roster (owner-proxy ruling) - `racesStarted`/
+ * `finishes`/`wins` are plain counts, never a time. `wins` uses the exact
+ * same best-rank-per-account-per-challenge dedup as `DailyTrendRankedEntry`/
+ * `ChallengeBoardPlacement` ("the deduped placement rule"), generalized
+ * across every challenge instead of one window's dailies; `finishes` is the
+ * simpler raw completed-run count `AccountStats.totals.completed` already
+ * uses (no ranked-eligibility filter) - this roster is a friendly census,
+ * not a ranking. Alias-resolved through `account_aliases` like every other
+ * board/roster query, so a re-linked account can't double-count.
+ */
+export interface AllPlayersRosterEntry {
+  accountId: string;
+  displayName: string | null;
+  racesStarted: number;
+  finishes: number;
+  wins: number;
 }
 
 export interface RankedLeaderboardRow extends ServerLeaderboardRow {

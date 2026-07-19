@@ -1,5 +1,5 @@
 import { getSortedChallenges } from "../domain/challenges";
-import { dailyTrendGuard, dailyTrendPreviousWindowEnd } from "../domain/dailyTrends";
+import { dailyTrendPreviousWindowEnd } from "../domain/dailyTrends";
 import { optionalNumber, requiredString } from "./http";
 import { ApiError } from "./http";
 import type {
@@ -424,10 +424,19 @@ export function createApiHandlers(
     async getBoardsTrends(windowParam, todayCentral) {
       const window = parseBoardsTrendWindow(windowParam);
       const windowDays = window === "lifetime" ? null : (Number(window) as 7 | 30);
-      const guard = dailyTrendGuard(windowDays);
       const cleanToday = requiredString(todayCentral, "invalid_today_central", "A Central date is required.");
       const protocol = dailyProtocol(repository);
-      const { ranked, unranked } = await protocol.listDailyTrends(windowDays, cleanToday);
+
+      // PKG-14: `guard` is no longer derived here from `windowDays` alone -
+      // it comes straight off `listDailyTrends`'s own return, reality-scaled
+      // against however many dailies actually exist in this window (see
+      // `dailyTrendGuard`'s doc comment). The lifetime roster fetch is
+      // independent of both this and the previous-window fetch below, so it
+      // runs in parallel rather than serially tacked on.
+      const [{ ranked, unranked, guard }, roster] = await Promise.all([
+        protocol.listDailyTrends(windowDays, cleanToday),
+        window === "lifetime" ? protocol.listAllPlayersRoster() : Promise.resolve(undefined),
+      ]);
 
       // F3 (trend arrows): a second `listDailyTrends` call over the
       // immediately-preceding same-length window, reusing the exact same
@@ -454,6 +463,7 @@ export function createApiHandlers(
           prevAvgPlacement: previousAvgByAccount.get(entry.accountId) ?? null,
         })),
         unranked,
+        roster,
       };
     },
 

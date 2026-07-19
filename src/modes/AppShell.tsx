@@ -19,9 +19,13 @@ import You from "./You";
 export type ModeKey = "home" | "boards" | "challenges" | "you";
 export type ChallengesView = "browse" | "detail";
 
+// PKG-14 (direct owner feedback, 2026-07-19: "Boards - rename to stats"):
+// user-visible label only - the mode key stays "boards" (internal
+// identifiers/routes/files are unchanged; renaming those would be churn
+// without benefit, per the owner-proxy ruling).
 const MODE_ITEMS: { key: ModeKey; label: string }[] = [
   { key: "home", label: "Home" },
-  { key: "boards", label: "Boards" },
+  { key: "boards", label: "Stats" },
   { key: "challenges", label: "Challenges" },
   { key: "you", label: "You" },
 ];

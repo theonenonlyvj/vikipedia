@@ -169,7 +169,7 @@ describe("VWiki Race app", () => {
     expect(portfolio.getAttribute("rel")).toContain("noopener");
 
     const tabbar = screen.getByRole("navigation", { name: /vwiki race views/i });
-    for (const tab of ["Boards", "Challenges", "You"]) {
+    for (const tab of ["Stats", "Challenges", "You"]) {
       await userEvent.click(within(tabbar).getByRole("button", { name: tab }));
       expect(screen.getByRole("link", { name: "Tell us" })).toBeVisible();
       expect(screen.getByRole("link", { name: "More VGames" })).toBeVisible();
@@ -1137,7 +1137,7 @@ describe("VWiki Race app", () => {
     await user.click(viewLeaderboard);
     expect(await screen.findByRole("region", { name: "Challenge detail" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "Boards" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Stats" })).toBeNull();
     // Home's own hero board read on initial mount, plus Results' own
     // deduped-board self-fetch for its snippet (PKG-03), plus Challenge
     // Detail's own board-fetch effect on landing here (PKG-05).
@@ -1168,7 +1168,7 @@ describe("VWiki Race app", () => {
     expect(await screen.findByText(/#1 today · 0:01 · 1 clk/)).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: /view leaderboard/i }));
-    expect(screen.getByRole("heading", { name: "Boards" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Stats" })).toBeVisible();
     expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
     expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
   });
@@ -2803,7 +2803,7 @@ describe("VWiki Race app", () => {
 
       const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
       const items = within(nav).getAllByRole("button");
-      expect(items.map((item) => item.textContent)).toEqual(["Home", "Boards", "Challenges", "You"]);
+      expect(items.map((item) => item.textContent)).toEqual(["Home", "Stats", "Challenges", "You"]);
 
       // Home is the default landing mode.
       expect(within(nav).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
@@ -2815,9 +2815,9 @@ describe("VWiki Race app", () => {
       expect(heroRace).toHaveClass("race-preview-button");
       expect(heroRace).not.toHaveClass("start-race-button");
 
-      await user.click(within(nav).getByRole("button", { name: "Boards" }));
-      expect(within(nav).getByRole("button", { name: "Boards" })).toHaveAttribute("aria-pressed", "true");
-      expect(screen.getByRole("heading", { name: "Boards" })).toBeVisible();
+      await user.click(within(nav).getByRole("button", { name: "Stats" }));
+      expect(within(nav).getByRole("button", { name: "Stats" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("heading", { name: "Stats" })).toBeVisible();
 
       await user.click(within(nav).getByRole("button", { name: "Challenges" }));
       expect(within(nav).getByRole("button", { name: "Challenges" })).toHaveAttribute("aria-pressed", "true");
@@ -3557,7 +3557,7 @@ describe("Home v2: stateful daily hub + teaching gate (Increment 2 Task 2)", () 
     // catalog now, rather than syncing a shared challenge-selection URL
     // param the old v0 selector needed.
     await user.click(within(yesterdayCard).getByRole("button", { name: /see full board/i }));
-    expect(screen.getByRole("heading", { name: "Boards" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Stats" })).toBeVisible();
     expect(await screen.findByText(/ari/i)).toBeVisible();
     expect(screen.getByText(/vijay/i)).toBeVisible();
     expect(screen.getByText(/\(you\)/i)).toBeVisible();
@@ -4028,11 +4028,11 @@ describe("Home board dedup + pre-drop hero (desktop pass, FIX 3/FIX 4)", () => {
     // would be scouting (spec: "the player has no stake in today's board
     // yet, and it discourages scouting").
     expect(screen.queryByRole("region", { name: /yesterday's results/i })).toBeNull();
-    const seeBoards = screen.getByRole("button", { name: /see boards/i });
+    const seeBoards = screen.getByRole("button", { name: /see stats/i });
     expect(seeBoards).toBeVisible();
 
     await user.click(seeBoards);
-    expect(await screen.findByRole("heading", { name: "Boards" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Stats" })).toBeVisible();
   });
 
   it("post-drop: today's daily heroes with its plain flavor badge, unchanged, but now also carries a live countdown to tomorrow's drop (PKG-07)", async () => {
@@ -4083,7 +4083,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
     const fetchImpl = createFetchMock({
       challenges: [twoChallenges()[0]],
       accountDailyStreak: 5,
-      accountTrend30: { avgPlacement: null, playedCount: 4, ranked: false },
+      accountTrend30: { avgPlacement: null, playedCount: 4, ranked: false, guard: 10 },
     });
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -4098,7 +4098,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
     const fetchImpl = createFetchMock({
       challenges: [twoChallenges()[0]],
       accountDailyStreak: 0,
-      accountTrend30: { avgPlacement: null, playedCount: 4, ranked: false },
+      accountTrend30: { avgPlacement: null, playedCount: 4, ranked: false, guard: 10 },
     });
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -4114,7 +4114,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
         leaderboardRow({ rank: 2, runId: "run-1", accountId: "acc-1", displayName: "Vijay", elapsedMs: 42_000, clickCount: 6 }),
       ],
       accountDailyStreak: 12,
-      accountTrend30: { avgPlacement: 2.4, playedCount: 26, ranked: true },
+      accountTrend30: { avgPlacement: 2.4, playedCount: 26, ranked: true, guard: 10 },
     });
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -4130,7 +4130,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
     const fetchImpl = createFetchMock({
       challenges: [twoChallenges()[0]],
       accountDailyStreak: 0,
-      accountTrend30: { avgPlacement: 3.1, playedCount: 15, ranked: true },
+      accountTrend30: { avgPlacement: 3.1, playedCount: 15, ranked: true, guard: 10 },
     });
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -4143,7 +4143,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
     const fetchImpl = createFetchMock({
       challenges: [twoChallenges()[0]],
       accountDailyStreak: 0,
-      accountTrend30: { avgPlacement: null, playedCount: 0, ranked: false },
+      accountTrend30: { avgPlacement: null, playedCount: 0, ranked: false, guard: 10 },
     });
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
@@ -4205,7 +4205,7 @@ describe("PKG-07 (council 2026-07-19, owner-proxy ruling): daily ritual identity
 
     // Boards' Today segment.
     const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
-    await user.click(within(nav).getByRole("button", { name: "Boards" }));
+    await user.click(within(nav).getByRole("button", { name: "Stats" }));
     expect(await screen.findByText(/weird · daily #7/i)).toBeVisible();
 
     // The pre-race preview, reached from Home's Race button.
@@ -4486,8 +4486,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     const segments = within(board).getAllByRole("tab");
     expect(segments.map((tab) => tab.textContent)).toEqual(["Today", "Yesterday", "7d", "30d", "Lifetime"]);
     expect(within(board).getByRole("tab", { name: "Today" })).toHaveAttribute("aria-selected", "true");
@@ -4501,8 +4501,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       const user = userEvent.setup();
       render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
 
-      await user.click(await screen.findByRole("button", { name: "Boards" }));
-      const board = screen.getByRole("region", { name: "Boards" });
+      await user.click(await screen.findByRole("button", { name: "Stats" }));
+      const board = screen.getByRole("region", { name: "Stats" });
       scrollIntoViewSpy.mockClear(); // drop the mount-time call for the default "Today" segment
 
       await user.click(within(board).getByRole("tab", { name: "Lifetime" }));
@@ -4523,8 +4523,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     const [today, yesterday, sevenDay, thirtyDay, lifetime] = within(board).getAllByRole("tab");
 
     // Roving tabindex: only the selected tab is in the Tab order.
@@ -4583,8 +4583,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     expect(await within(board).findByText("Ari")).toBeVisible();
     expect(within(board).getByText("#1")).toBeVisible();
     expect(within(board).getByText("0:20 · 3 clk")).toBeVisible();
@@ -4619,8 +4619,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     const dnfSection = await within(board).findByRole("region", { name: "DNF" });
     expect(within(dnfSection).getByText("Vijay")).toBeVisible();
     expect(within(dnfSection).getByText("0:08 · 2 clk")).toBeVisible();
@@ -4649,8 +4649,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = await screen.findByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = await screen.findByRole("region", { name: "Stats" });
     const raceCta = await within(board).findByRole("button", { name: /race today's daily/i });
     // PKG-04 (owner-proxy ruling): non-committal preview CTA - teal
     // `.race-preview-button`, not the coral `.start-race-button`.
@@ -4680,8 +4680,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     const dnfSection = await within(board).findByRole("region", { name: "DNF" });
     const footnote = within(board).getByText(/paths hidden until you.ve played/i);
     const raceCta = within(board).getByRole("button", { name: /race today's daily/i });
@@ -4723,8 +4723,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     await within(board).findByText("Vijay");
     expect(within(board).queryByRole("button", { name: /race today's daily/i })).toBeNull();
 
@@ -4768,8 +4768,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     expect(await within(board).findByText("Today Runner")).toBeVisible();
     expect(within(board).queryByText("Yesterday Runner")).toBeNull();
 
@@ -4783,8 +4783,8 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "Yesterday" }));
     expect(within(board).getByText(/yesterday's daily isn't available/i)).toBeVisible();
   });
@@ -4809,8 +4809,8 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "7d" }));
 
     expect(await within(board).findByText(/rolling 7 days · ranked by average placement · play ≥3 dailies to rank/i)).toBeVisible();
@@ -4838,8 +4838,8 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "30d" }));
 
     expect(await within(board).findByText(/rolling 30 days · ranked by average placement · play ≥10 dailies to rank/i)).toBeVisible();
@@ -4877,8 +4877,8 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
       <App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} todayUtc={() => "2026-07-18"} />,
     );
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "7d" }));
     await user.click(await within(board).findByRole("button", { name: /vijay.*avg #1\.3/i }));
 
@@ -4911,8 +4911,8 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "7d" }));
 
     await within(board).findByText(/vijay/i);
@@ -4938,8 +4938,8 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "7d" }));
 
     expect(await within(board).findByText(/play ≥5 dailies to rank/i)).toBeVisible();
@@ -4961,8 +4961,8 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: "Boards" }));
-    const board = screen.getByRole("region", { name: "Boards" });
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "7d" }));
 
     expect(await within(board).findByRole("alert")).toHaveTextContent(/couldn.t load this trend/i);
@@ -4972,6 +4972,50 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
 
     expect(await within(board).findByText(/vijay/i)).toBeVisible();
     expect(within(board).queryByRole("alert")).toBeNull();
+  });
+
+  it("PKG-14 (direct owner feedback): Lifetime shows an 'Everyone who's played' roster covering custom-only racers - absent from 7d", async () => {
+    const fetchImpl = createFetchMock({
+      boardsTrendsByWindow: {
+        "7": {
+          window: "7",
+          guard: 1,
+          ranked: [],
+          unranked: [],
+        },
+        lifetime: {
+          window: "lifetime",
+          guard: 2,
+          ranked: [{ accountId: "acc-1", displayName: "Vijay", avgPlacement: 1.3, playedCount: 4 }],
+          unranked: [],
+          roster: [
+            { accountId: "acc-1", displayName: "Vijay", racesStarted: 4, finishes: 4, wins: 3 },
+            // Custom-only racers `listDailyTrends` can never surface -
+            // exactly the owner's reported gap ("fran, lollerskates").
+            { accountId: "acc-fran", displayName: "FranTheGreat", racesStarted: 1, finishes: 0, wins: 0 },
+            { accountId: "acc-loller", displayName: "lollerskates", racesStarted: 2, finishes: 2, wins: 1 },
+          ],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Stats" }));
+    const board = screen.getByRole("region", { name: "Stats" });
+
+    await user.click(within(board).getByRole("tab", { name: "7d" }));
+    await within(board).findByText(/rolling 7 days/i);
+    expect(within(board).queryByText(/everyone who.s played/i)).toBeNull();
+
+    await user.click(within(board).getByRole("tab", { name: "Lifetime" }));
+    const roster = await within(board).findByRole("region", { name: "Everyone who's played" });
+
+    expect(within(roster).getByText(/franthegreat/i)).toBeVisible();
+    expect(within(roster).getByText(/1 race · 0 finishes · 0 wins/i)).toBeVisible();
+    expect(within(roster).getByText(/lollerskates/i)).toBeVisible();
+    expect(within(roster).getByText(/2 races · 2 finishes · 1 win/i)).toBeVisible();
+    expect(within(roster).getByText(/daily rankings need 2 played dailies/i)).toBeVisible();
   });
 });
 
@@ -5065,7 +5109,7 @@ function createFetchMock(options?: {
   // Increment 4: Home's guarded streak/trend chip and Boards' trend
   // segments.
   accountDailyStreak?: number;
-  accountTrend30?: { avgPlacement: number | null; playedCount: number; ranked: boolean };
+  accountTrend30?: { avgPlacement: number | null; playedCount: number; ranked: boolean; guard: number };
   boardsTrendsByWindow?: Record<string, {
     window: string;
     guard: number;
@@ -5077,6 +5121,9 @@ function createFetchMock(options?: {
       prevAvgPlacement?: number | null;
     }>;
     unranked: Array<{ accountId: string; displayName: string | null; playedCount: number }>;
+    // PKG-14: Lifetime-only "Everyone who's played" roster - absent on
+    // 7d/30d fixtures, same as the real server response.
+    roster?: Array<{ accountId: string; displayName: string | null; racesStarted: number; finishes: number; wins: number }>;
   }>;
   // F6: fails the very next `/api/v2/boards/trends` fetch once, then
   // succeeds normally (including on a manual Retry).
@@ -5274,7 +5321,7 @@ function createFetchMock(options?: {
           totals: { attempts: options?.accountAttempts ?? 0, completed, abandoned: 0, timedCompleted: 0, totalClicks: 0, bestClicks: null, bestElapsedMs: null, averageClicks: 0, averageElapsedMs: 0 },
           topStarts: [], topTargets: [], mostVisited: [],
           dailyStreak: options?.accountDailyStreak ?? 0,
-          trend30: options?.accountTrend30 ?? { avgPlacement: null, playedCount: 0, ranked: false },
+          trend30: options?.accountTrend30 ?? { avgPlacement: null, playedCount: 0, ranked: false, guard: 10 },
         },
       });
     }
@@ -5679,7 +5726,7 @@ function accountStatsFixture(attempts: number) {
     topTargets: [],
     mostVisited: [],
     dailyStreak: 0,
-    trend30: { avgPlacement: null, playedCount: 0, ranked: false },
+    trend30: { avgPlacement: null, playedCount: 0, ranked: false, guard: 10 },
   };
 }
 

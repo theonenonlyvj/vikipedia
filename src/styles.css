@@ -1081,7 +1081,8 @@ h1 {
    rule always wins here regardless of source order, and `minmax(0, 1fr)`
    lets the name column actually shrink so its ellipsis can engage instead
    of overflowing onto the sibling. */
-.board-snippet.board-trend-unranked li {
+.board-snippet.board-trend-unranked li,
+.board-snippet.board-roster li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -1089,10 +1090,24 @@ h1 {
   font-size: 0.85rem;
 }
 
-.board-snippet.board-trend-unranked li > span:first-child {
+.board-snippet.board-trend-unranked li > span:first-child,
+.board-snippet.board-roster li > span:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* PKG-14: the Lifetime-only "Everyone who's played" roster - same visual
+   separation as `.board-dnf-section`/`.board-trend-subheader` above it. */
+.board-roster {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.board-roster-explainer {
+  margin-bottom: 12px;
+  font-size: 0.82rem;
 }
 
 /* F3: the ▲/▼/– trend arrow next to a ranked row's avg placement - stays
@@ -2902,7 +2917,8 @@ h1 {
     column-gap: 16px;
   }
 
-  .board-snippet.board-trend-unranked li {
+  .board-snippet.board-trend-unranked li,
+  .board-snippet.board-roster li {
     grid-template-columns: minmax(0, max-content) max-content;
     justify-content: start;
     column-gap: 16px;

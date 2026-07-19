@@ -1,17 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { dailyTrendGuard, dailyTrendPreviousWindowEnd, dailyTrendWindowStart } from "./dailyTrends";
 
-describe("dailyTrendGuard", () => {
-  it("requires exactly 3 for the 7-day window", () => {
-    expect(dailyTrendGuard(7)).toBe(3);
+describe("dailyTrendGuard (PKG-14: reality-scaled, not a flat threshold)", () => {
+  it("scales lifetime to ceil(dailiesAvailable / 3): 4 dailies -> guard 2 (the exact prod scenario)", () => {
+    expect(dailyTrendGuard(null, 4)).toBe(2);
   });
 
-  it("requires exactly 10 for the 30-day window", () => {
-    expect(dailyTrendGuard(30)).toBe(10);
+  it("floors every window at 1 - a single daily ever played still ranks its player", () => {
+    expect(dailyTrendGuard(7, 1)).toBe(1);
+    expect(dailyTrendGuard(30, 1)).toBe(1);
+    expect(dailyTrendGuard(null, 1)).toBe(1);
   });
 
-  it("requires exactly 10 for lifetime (null window)", () => {
-    expect(dailyTrendGuard(null)).toBe(10);
+  it("floors at 1 even with zero dailies available (never divides down to 0)", () => {
+    expect(dailyTrendGuard(7, 0)).toBe(1);
+    expect(dailyTrendGuard(30, 0)).toBe(1);
+    expect(dailyTrendGuard(null, 0)).toBe(1);
+  });
+
+  it("caps the 7-day window at 3 once its (at most 7) dailies would ceil past it", () => {
+    expect(dailyTrendGuard(7, 7)).toBe(3);
+    // A 7d window can never exceed 7 daily_features rows, but the cap still
+    // holds defensively if it somehow did.
+    expect(dailyTrendGuard(7, 21)).toBe(3);
+  });
+
+  it("caps the 30-day window at 10 once 30 dailies have run", () => {
+    expect(dailyTrendGuard(30, 30)).toBe(10);
+  });
+
+  it("caps lifetime at 10 once the catalog reaches 30 dailies", () => {
+    expect(dailyTrendGuard(null, 30)).toBe(10);
+  });
+
+  it("scales the middle of the range too, not just the floor/cap ends", () => {
+    expect(dailyTrendGuard(30, 15)).toBe(5);
+    expect(dailyTrendGuard(null, 9)).toBe(3);
   });
 });
 

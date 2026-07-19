@@ -3345,7 +3345,7 @@ describe("Task 4 D1 projections", () => {
       topTargets: [],
       mostVisited: [],
       dailyStreak: 0,
-      trend30: { avgPlacement: null, playedCount: 0, ranked: false },
+      trend30: { avgPlacement: null, playedCount: 0, ranked: false, guard: 1 },
     });
   });
 
@@ -3399,7 +3399,7 @@ describe("Task 4 D1 projections", () => {
         { title: "Gravity", count: 1 },
       ],
       dailyStreak: 0,
-      trend30: { avgPlacement: null, playedCount: 0, ranked: false },
+      trend30: { avgPlacement: null, playedCount: 0, ranked: false, guard: 1 },
     });
     await expect(count("account_profiles")).resolves.toBe(0);
     await expect(count("account_aliases")).resolves.toBe(1);
@@ -4015,6 +4015,17 @@ describe("listDailyTrends (Increment 4)", () => {
     await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-16", challengeId: "trend-d1", selectionSource: "automatic" });
     await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-17", challengeId: "trend-d2", selectionSource: "automatic" });
     await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId: "trend-d3", selectionSource: "automatic" });
+    // PKG-14: the guard is now reality-scaled off how many dailies actually
+    // exist in the window (`ceil(dailiesAvailable / 3)`, clamped to
+    // [1, 3] for 7d) - filling out the rest of the 7-day window
+    // (2026-07-12..15, unplayed by anyone) brings the window to a full 7
+    // dailies, so `ceil(7/3) = 3` reproduces this test's intended guard-of-3
+    // narrative exactly as before.
+    for (const [index, dailyDate] of ["2026-07-12", "2026-07-13", "2026-07-14", "2026-07-15"].entries()) {
+      const challengeId = `trend-guard-filler-${index}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 504 + index });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+    }
 
     const accountA = "trend-account-a";
     const accountB = "trend-account-b";
@@ -4048,6 +4059,16 @@ describe("listDailyTrends (Increment 4)", () => {
     await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId: "trend-window-inside", selectionSource: "automatic" });
     // 17 days before "today" - outside the 7d window.
     await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-01", challengeId: "trend-window-outside", selectionSource: "automatic" });
+    // PKG-14: fill out the rest of the 7-day window (unplayed by anyone) so
+    // this test's single played day stays below both the week guard
+    // (ceil(6/3) = 2) and the lifetime guard (ceil(7/3) = 3) - proving the
+    // window/lifetime date-bound distinction on its own, independent of the
+    // reality-scaled guard math `dailyTrendGuard.test.ts` already covers.
+    for (const [index, dailyDate] of ["2026-07-12", "2026-07-13", "2026-07-14", "2026-07-15", "2026-07-16"].entries()) {
+      const challengeId = `trend-window-filler-${index}`;
+      await insertDailyChallenge({ id: challengeId, sortOrder: 512 + index });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+    }
 
     const accountId = "trend-window-account";
     await insertCompletedV2({ id: "window-inside-run", accountId, elapsedMs: 5_000, completedAt: "2026-07-18T01:00:05.000Z", challengeId: "trend-window-inside" });
@@ -4087,6 +4108,19 @@ describe("listDailyTrends (Increment 4)", () => {
         });
       }
     }
+    // PKG-14: the guard is reality-scaled off how many dailies actually
+    // exist in the window (`ceil(dailiesAvailable / 3)`, clamped to
+    // [1, 10] for 30d) - the above loop only covers 10 of the 30-day
+    // window's calendar dates, which alone would scale the guard down to
+    // `ceil(10/3) = 4`. Filling out the remaining 20 dates (unplayed by
+    // anyone) brings the window to a full 30 dailies, so `ceil(30/3) = 10`
+    // reproduces this test's "guard = 10" boundary exactly as before.
+    for (let daysBefore = 10; daysBefore < 30; daysBefore += 1) {
+      const challengeId = `trend-guard-filler-30d-${daysBefore}`;
+      const dailyDate = centralDateDaysBefore("2026-07-18", daysBefore);
+      await insertDailyChallenge({ id: challengeId, sortOrder: 650 + daysBefore });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId, selectionSource: "automatic" });
+    }
 
     const { repository } = fixture();
     const { ranked, unranked } = await repository.listDailyTrends(30, "2026-07-18");
@@ -4112,10 +4146,15 @@ describe("listDailyTrends (Increment 4)", () => {
     }
 
     const { repository } = fixture();
-    const { unranked } = await repository.listDailyTrends(null, "2026-07-18");
+    // PKG-14: with only this single daily ever played, the lifetime guard
+    // scales down to `ceil(1/3) = 1` - every one of these 105 single-attempt
+    // finishers now clears it and lands in `ranked` (not `unranked`, as it
+    // did under the old flat guard=10). The no-LIMIT assertion this test
+    // exists for is unaffected by which array they land in.
+    const { ranked } = await repository.listDailyTrends(null, "2026-07-18");
 
-    expect(unranked).toHaveLength(total);
-    expect(unranked.find((entry) => entry.accountId === "nolimit-account-104")).toBeDefined();
+    expect(ranked).toHaveLength(total);
+    expect(ranked.find((entry) => entry.accountId === "nolimit-account-104")).toBeDefined();
   }, 20_000);
 
   it("excludes board_excluded runs from a daily's placement computation", async () => {
@@ -4146,8 +4185,14 @@ describe("listDailyTrends (Increment 4)", () => {
     ).bind(ghost, canonical).run();
 
     const { repository } = fixture();
-    const { unranked } = await repository.listDailyTrends(7, "2026-07-18");
-    const ids = unranked.map((entry) => entry.accountId);
+    // PKG-14: with only this single in-window daily, the guard scales down
+    // to `ceil(1/3) = 1`, so this one completed play now clears it and
+    // lands in `ranked` rather than `unranked` (the pre-PKG-14 flat guard=3
+    // kept it unranked) - alias resolution is what this test actually
+    // covers, so it checks membership across both arrays rather than
+    // pinning to whichever one the guard happens to sort it into.
+    const { ranked, unranked } = await repository.listDailyTrends(7, "2026-07-18");
+    const ids = [...ranked, ...unranked].map((entry) => entry.accountId);
 
     expect(ids).toContain(canonical);
     expect(ids).not.toContain(ghost);
@@ -4233,9 +4278,12 @@ describe("listDailyTrends (Increment 4)", () => {
     const { repository } = fixture();
     const { ranked, unranked } = await repository.listDailyTrends(30, "2026-07-18");
 
-    // 11 played (8 finished + 3 DNF) >= the 30d guard (10) -> ranked, but
-    // avgPlacement is over the 8 finishes only (each solo -> placement 1
-    // every time -> avg exactly 1).
+    // PKG-14: 11 daily_features rows exist in this 30d window (8 finish +
+    // 3 DNF days), scaling the guard to `ceil(11/3) = 4` - 11 played clears
+    // it either way, so this test's real point (DNF counts toward
+    // `playedCount` but never `avgPlacement`) is unaffected by the guard
+    // formula change. avgPlacement is over the 8 finishes only (each solo
+    // -> placement 1 every time -> avg exactly 1).
     expect(ranked).toEqual([
       { accountId, displayName: null, avgPlacement: 1, playedCount: 11 },
     ]);
@@ -4257,6 +4305,89 @@ describe("listDailyTrends (Increment 4)", () => {
 
     expect(ranked.find((entry) => entry.accountId === accountId)).toBeUndefined();
     expect(unranked.find((entry) => entry.accountId === accountId)).toMatchObject({ playedCount: 10 });
+  });
+});
+
+describe("listAllPlayersRoster (PKG-14: direct owner feedback - lifetime/board stats must include everyone who's played)", () => {
+  it("includes an account whose only run is on a custom (non-daily) challenge - the exact gap listDailyTrends has", async () => {
+    const accountId = "roster-custom-only";
+    await insertAccountProfile(accountId, "FranTheGreat");
+    // Default challenge-0001 - a seeded challenge with no daily_features
+    // row at all, i.e. purely "custom" from this query's point of view.
+    await insertCompletedV2({ id: "roster-custom-run", accountId, elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z" });
+
+    const { repository } = fixture();
+    const roster = await repository.listAllPlayersRoster();
+
+    expect(roster.find((entry) => entry.accountId === accountId)).toEqual({
+      accountId, displayName: "FranTheGreat", racesStarted: 1, finishes: 1, wins: 1,
+    });
+  });
+
+  it("counts races started, finishes, and wins separately - a DNF-only account has 0 finishes/wins but still appears", async () => {
+    const finisherAccount = "roster-two-runs-finisher";
+    const winnerAccount = "roster-other-winner";
+    const dnfOnlyAccount = "roster-dnf-only";
+    // `finisherAccount` finishes both challenge-0001 and challenge-0002, but
+    // `winnerAccount` beats them on both - two finishes, zero wins.
+    await insertCompletedV2({ id: "roster-run-1", accountId: finisherAccount, elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId: "challenge-0001" });
+    await insertCompletedV2({ id: "roster-run-2", accountId: finisherAccount, elapsedMs: 5_000, completedAt: "2026-07-18T01:00:05.000Z", challengeId: "challenge-0002" });
+    await insertCompletedV2({ id: "roster-run-1-winner", accountId: winnerAccount, elapsedMs: 1_000, completedAt: "2026-07-18T01:00:01.000Z", challengeId: "challenge-0001" });
+    await insertCompletedV2({ id: "roster-run-2-winner", accountId: winnerAccount, elapsedMs: 1_000, completedAt: "2026-07-18T01:00:01.000Z", challengeId: "challenge-0002" });
+    await insertAbandonedV2({ id: "roster-dnf-run", accountId: dnfOnlyAccount, clickCount: 2, elapsedMs: 3_000, abandonedAt: "2026-07-18T01:00:03.000Z", challengeId: "challenge-0003" });
+
+    const { repository } = fixture();
+    const roster = await repository.listAllPlayersRoster();
+
+    expect(roster.find((entry) => entry.accountId === finisherAccount)).toMatchObject({
+      racesStarted: 2, finishes: 2, wins: 0,
+    });
+    expect(roster.find((entry) => entry.accountId === dnfOnlyAccount)).toMatchObject({
+      racesStarted: 1, finishes: 0, wins: 0,
+    });
+    expect(roster.find((entry) => entry.accountId === winnerAccount)).toMatchObject({
+      racesStarted: 2, finishes: 2, wins: 2,
+    });
+  });
+
+  it("excludes board_excluded runs entirely - a zz*/zephyr-style test account never appears", async () => {
+    const accountId = "roster-excluded-account";
+    await insertCompletedV2({ id: "roster-excluded-run", accountId, elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId: "challenge-0001" });
+    await env.VWIKI_RACE_DB.prepare("UPDATE runs SET board_excluded = 1 WHERE id = ?").bind("roster-excluded-run").run();
+
+    const { repository } = fixture();
+    const roster = await repository.listAllPlayersRoster();
+
+    expect(roster.find((entry) => entry.accountId === accountId)).toBeUndefined();
+  });
+
+  it("resolves canonical accounts through account_aliases, same as listDailyTrends/listChallengePlacements", async () => {
+    const canonical = "roster-alias-canonical";
+    const ghost = "roster-alias-ghost";
+    await insertCompletedV2({ id: "roster-alias-run", accountId: ghost, elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId: "challenge-0001" });
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO account_aliases (alias_account_id, canonical_account_id, updated_at)
+       VALUES (?, ?, '2026-07-18T00:00:00.000Z')`,
+    ).bind(ghost, canonical).run();
+
+    const { repository } = fixture();
+    const roster = await repository.listAllPlayersRoster();
+    const ids = roster.map((entry) => entry.accountId);
+
+    expect(ids).toContain(canonical);
+    expect(ids).not.toContain(ghost);
+    // Never double-counted under both identities.
+    expect(roster.find((entry) => entry.accountId === canonical)).toMatchObject({ racesStarted: 1 });
+  });
+
+  it("is independent of daily_features entirely - a catalog with zero dailies ever still returns every custom-challenge player", async () => {
+    const accountId = "roster-no-dailies-account";
+    await insertCompletedV2({ id: "roster-no-dailies-run", accountId, elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId: "challenge-0001" });
+
+    const { repository } = fixture();
+    const roster = await repository.listAllPlayersRoster();
+
+    expect(roster.find((entry) => entry.accountId === accountId)).toBeDefined();
   });
 });
 
@@ -4680,6 +4811,14 @@ describe("GET /api/v2/boards/trends", () => {
     await insertDailyChallenge({ id: challengeId, sortOrder: 1600 });
     await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId, selectionSource: "automatic" });
     await insertCompletedV2({ id: "boards-trends-route-run", accountId: "boards-trends-account", elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId });
+    // PKG-14: fill out the rest of the 7-day window (unplayed by anyone) so
+    // `ceil(dailiesAvailable / 3)` reaches its 7d cap of 3, reproducing this
+    // test's pre-PKG-14 flat guard=3 expectation.
+    for (const [index, dailyDate] of ["2026-07-12", "2026-07-13", "2026-07-14", "2026-07-15", "2026-07-16", "2026-07-17"].entries()) {
+      const fillerChallengeId = `boards-trends-route-filler-${index}`;
+      await insertDailyChallenge({ id: fillerChallengeId, sortOrder: 1610 + index });
+      await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate, challengeId: fillerChallengeId, selectionSource: "automatic" });
+    }
 
     const { repository } = fixture({ now: "2026-07-18T20:00:00.000Z" });
     const worker = createWorker({
@@ -4727,6 +4866,52 @@ describe("GET /api/v2/boards/trends", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ error: { code: "invalid_window" } });
+  });
+
+  it("PKG-14: window=lifetime folds in the all-players roster (custom-only racers included); 7d never carries one", async () => {
+    const dailyChallengeId = "boards-trends-roster-daily";
+    await insertDailyChallenge({ id: dailyChallengeId, sortOrder: 1700 });
+    await insertEditorialFeature(env.VWIKI_RACE_DB, { dailyDate: "2026-07-18", challengeId: dailyChallengeId, selectionSource: "automatic" });
+    await insertAccountProfile("roster-route-daily-player", "Vijay");
+    await insertCompletedV2({
+      id: "boards-trends-roster-daily-run", accountId: "roster-route-daily-player",
+      elapsedMs: 4_000, completedAt: "2026-07-18T01:00:04.000Z", challengeId: dailyChallengeId,
+    });
+    // A custom (non-daily) challenge - `listDailyTrends` can never see this
+    // account, but the roster must (the owner's exact reported gap).
+    await insertAccountProfile("roster-route-custom-player", "FranTheGreat");
+    await insertCompletedV2({
+      id: "boards-trends-roster-custom-run", accountId: "roster-route-custom-player",
+      elapsedMs: 6_000, completedAt: "2026-07-18T01:00:06.000Z", challengeId: "challenge-0001",
+    });
+
+    const { repository } = fixture({ now: "2026-07-18T20:00:00.000Z" });
+    const worker = createWorker({
+      now: () => new Date("2026-07-18T20:00:00.000Z"),
+      createTracking: () => ({
+        handlers: createApiHandlers(repository),
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => account,
+      } as unknown as WorkerTracking),
+    });
+
+    const lifetimeResponse = await worker.fetch(
+      new Request("https://worker.example/api/v2/boards/trends?window=lifetime"),
+      workerEnv(),
+    );
+    expect(lifetimeResponse.status).toBe(200);
+    const lifetimeBody = await lifetimeResponse.json() as { roster: Array<{ accountId: string }> };
+    expect(lifetimeBody.roster.map((entry) => entry.accountId).sort()).toEqual(
+      ["roster-route-custom-player", "roster-route-daily-player"].sort(),
+    );
+
+    const sevenDayResponse = await worker.fetch(
+      new Request("https://worker.example/api/v2/boards/trends?window=7"),
+      workerEnv(),
+    );
+    const sevenDayBody = await sevenDayResponse.json() as { roster?: unknown };
+    expect(sevenDayBody.roster).toBeUndefined();
   });
 });
 

@@ -2,6 +2,7 @@ import type {
   AccountStatus,
   AccountStats,
   AbandonRunTransition,
+  AllPlayersRosterEntry,
   AuthorizedAccount,
   Challenge,
   ChallengeBoardDnfRow,
@@ -149,6 +150,14 @@ export interface BoardsTrendsResponse {
   guard: number;
   ranked: BoardsTrendRankedEntry[];
   unranked: DailyTrendUnrankedEntry[];
+  /**
+   * PKG-14 (direct owner feedback): Lifetime's "Everyone who's played"
+   * roster, folded into this same response (one fetch, no separate route)
+   * rather than a dedicated `/api/v2/boards/roster` endpoint - `window ===
+   * "7"`/`"30"` never populate this field at all (Lifetime-only scope), so
+   * `undefined` here just means "not lifetime," not "still loading."
+   */
+  roster?: AllPlayersRosterEntry[];
 }
 
 export interface RunPathResponse {

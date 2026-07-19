@@ -16,6 +16,7 @@ import type {
 } from "../server/contracts";
 import type {
   AccountStats,
+  AllPlayersRosterEntry,
   Challenge,
   ChallengeOutcomeEntry,
   ChallengeSummaryEntry,
@@ -462,7 +463,21 @@ function isBoardsTrendsResponse(value: unknown): value is BoardsTrendsResponse {
     (value.window === "7" || value.window === "30" || value.window === "lifetime") &&
     hasNumber(value, "guard") &&
     Array.isArray(value.ranked) && value.ranked.every(isDailyTrendRankedEntry) &&
-    Array.isArray(value.unranked) && value.unranked.every(isDailyTrendUnrankedEntry);
+    Array.isArray(value.unranked) && value.unranked.every(isDailyTrendUnrankedEntry) &&
+    // PKG-14: `roster` only ever exists on the lifetime segment's response -
+    // absent entirely (not even `null`) on 7d/30d, so it's tolerated as
+    // undefined here rather than required.
+    (value.roster === undefined ||
+      (Array.isArray(value.roster) && value.roster.every(isAllPlayersRosterEntry)));
+}
+
+function isAllPlayersRosterEntry(value: unknown): value is AllPlayersRosterEntry {
+  return isRecord(value) &&
+    hasString(value, "accountId") &&
+    (value.displayName === null || hasString(value, "displayName")) &&
+    hasNumber(value, "racesStarted") &&
+    hasNumber(value, "finishes") &&
+    hasNumber(value, "wins");
 }
 
 function isDailyTrendRankedEntry(value: unknown): value is BoardsTrendsResponse["ranked"][number] {
@@ -759,7 +774,10 @@ function isAccountTrend30(value: unknown): value is AccountStats["trend30"] {
   return isRecord(value) &&
     (value.avgPlacement === null || hasNumber(value, "avgPlacement")) &&
     hasNumber(value, "playedCount") &&
-    typeof value.ranked === "boolean";
+    typeof value.ranked === "boolean" &&
+    // PKG-14: reality-scaled, server-echoed guard - required, same as
+    // `BoardsTrendsResponse.guard`.
+    hasNumber(value, "guard");
 }
 
 function isLeaderboardRow(value: unknown): value is RankedLeaderboardRow {

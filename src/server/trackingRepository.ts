@@ -2,6 +2,7 @@ import type {
   AccountStatus,
   AccountStats,
   AbandonRunTransition,
+  AllPlayersRosterEntry,
   AuthorizedAccount,
   Challenge,
   ChallengeOutcomeEntry,
@@ -257,11 +258,27 @@ export interface RunProtocolRepository extends TrackingRepository {
    * (participation) the same as a finish does, both for clearing the
    * ranking guard and for the below-guard progress count - but
    * `avgPlacement` is only ever computed over finished dailies.
+   *
+   * PKG-14: `guard` is now computed HERE (not by the caller from `windowDays`
+   * alone) because it's reality-scaled off `dailiesAvailable` - the count of
+   * `daily_features` rows actually inside this exact window (lifetime = all
+   * time) - which only this query's own `WHERE`/date-bind logic already
+   * knows. Callers (apiHandlers' `getBoardsTrends`, `getAccountStats`'
+   * `trend30`) just echo this `guard` back out; see `dailyTrendGuard`.
    */
   listDailyTrends(windowDays: 7 | 30 | null, todayCentral: string): Promise<{
     ranked: DailyTrendRankedEntry[];
     unranked: DailyTrendUnrankedEntry[];
+    guard: number;
   }>;
+  /**
+   * PKG-14 (direct owner feedback): Lifetime's "Everyone who's played"
+   * roster - every canonical account with ≥1 board-visible run across ANY
+   * challenge (daily or custom), independent of the ranked-trends
+   * participation guard entirely. See `AllPlayersRosterEntry`'s doc comment
+   * for the exact `racesStarted`/`finishes`/`wins` definitions.
+   */
+  listAllPlayersRoster(): Promise<AllPlayersRosterEntry[]>;
   /**
    * Boards/Home streak (Increment 4): consecutive Central dates, ending
    * today or yesterday, on which `accountId` (alias-resolved) has ≥1

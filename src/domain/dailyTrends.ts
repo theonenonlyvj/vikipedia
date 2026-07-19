@@ -8,15 +8,32 @@ import { centralDateDaysBefore } from "./challengeSelection";
 export type TrendWindowDays = 7 | 30 | null;
 
 /**
- * Participation guard (spec: "must have played ≥⅓ of the window's dailies
- * to be ranked (7d → ≥3, 30d → ≥10; lifetime → ≥10 total)"). These are fixed
- * thresholds, not `windowDays / 3` of however many dailies actually exist in
- * that window yet - a young catalog with only 5 dailies ever played still
- * requires 10 to rank on 30d/lifetime, exactly as the spec's parenthetical
- * spells out (not a derived fraction of "dailies that exist").
+ * Participation guard cap - the ceiling `dailyTrendGuard` clamps to once the
+ * catalog has produced enough dailies (spec: 7d → 3, 30d/lifetime → 10).
  */
-export function dailyTrendGuard(windowDays: TrendWindowDays): number {
-  return windowDays === null ? 10 : Math.ceil(windowDays / 3);
+function dailyTrendGuardCap(windowDays: TrendWindowDays): number {
+  return windowDays === 7 ? 3 : 10;
+}
+
+/**
+ * PKG-14 (owner-proxy ruling, 2026-07-19 - direct owner feedback overriding
+ * round-1 council materials): the original fixed guards (7d always 3, 30d/
+ * lifetime always 10) assumed a mature catalog. In real prod use, only 4
+ * dailies had EVER existed - nobody, including the owner (4/4 played), could
+ * ever clear a flat 10-daily lifetime guard. The guard now scales to how
+ * many dailies actually exist in the window: `ceil(dailiesAvailable / 3)`,
+ * clamped to [1, cap] - so a young catalog ranks its earliest players
+ * immediately instead of gatekeeping everyone until an arbitrary, unreachable
+ * total. With today's 4 dailies the lifetime guard is `ceil(4/3) = 2`; once
+ * the catalog has produced enough dailies the clamp keeps the guard from
+ * exceeding the spec's original steady-state cap (3 for 7d, 10 for 30d/
+ * lifetime). `dailiesAvailable` must be counted the same way the caller
+ * counts the window itself (lifetime = all `daily_features` rows ever;
+ * 7d/30d = rows inside that window) - see `listDailyTrends`.
+ */
+export function dailyTrendGuard(windowDays: TrendWindowDays, dailiesAvailable: number): number {
+  const cap = dailyTrendGuardCap(windowDays);
+  return Math.min(cap, Math.max(1, Math.ceil(dailiesAvailable / 3)));
 }
 
 /**

@@ -19,7 +19,7 @@ function stats(completed: number): AccountStats {
     topTargets: [],
     mostVisited: [],
     dailyStreak: 0,
-    trend30: { avgPlacement: null, playedCount: 0, ranked: false },
+    trend30: { avgPlacement: null, playedCount: 0, ranked: false, guard: 10 },
   };
 }
 

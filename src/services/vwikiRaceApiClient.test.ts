@@ -749,7 +749,7 @@ describe("VWiki Race API client", () => {
       topTargets: [],
       mostVisited: [],
       dailyStreak: 0,
-      trend30: { avgPlacement: null, playedCount: 0, ranked: false },
+      trend30: { avgPlacement: null, playedCount: 0, ranked: false, guard: 10 },
     };
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const requestUrl = String(input);
@@ -884,6 +884,42 @@ describe("VWiki Race API client", () => {
       { apiOrigin },
     );
     await expect(client.getBoardsTrends("7")).rejects.toMatchObject({
+      code: "invalid_response",
+      status: 502,
+    });
+  });
+
+  it("PKG-14: fetches and validates Lifetime's roster - absent entirely on 7d/30d, present on lifetime", async () => {
+    const withoutRoster = { window: "7" as const, guard: 3, ranked: [], unranked: [] };
+    const withRoster = {
+      window: "lifetime" as const,
+      guard: 2,
+      ranked: [],
+      unranked: [],
+      roster: [
+        { accountId: "acc-fran", displayName: "FranTheGreat", racesStarted: 1, finishes: 0, wins: 0 },
+        { accountId: "acc-loller", displayName: "lollerskates", racesStarted: 2, finishes: 2, wins: 1 },
+      ],
+    };
+    const client = createVWikiRaceApiClient(
+      vi.fn(async (input: RequestInfo | URL) =>
+        Response.json(String(input).includes("window=lifetime") ? withRoster : withoutRoster)),
+      { apiOrigin },
+    );
+
+    await expect(client.getBoardsTrends("7")).resolves.toEqual(withoutRoster);
+    await expect(client.getBoardsTrends("lifetime")).resolves.toEqual(withRoster);
+  });
+
+  it("rejects a Boards trend response whose roster entry is missing a count field", async () => {
+    const client = createVWikiRaceApiClient(
+      vi.fn(async () => Response.json({
+        window: "lifetime", guard: 2, ranked: [], unranked: [],
+        roster: [{ accountId: "acc-1", displayName: "Vijay", racesStarted: 1, finishes: 1 }],
+      })),
+      { apiOrigin },
+    );
+    await expect(client.getBoardsTrends("lifetime")).rejects.toMatchObject({
       code: "invalid_response",
       status: 502,
     });
@@ -1119,7 +1155,7 @@ function accountStats(attempts: number) {
     topTargets: [],
     mostVisited: [],
     dailyStreak: 0,
-    trend30: { avgPlacement: null, playedCount: 0, ranked: false },
+    trend30: { avgPlacement: null, playedCount: 0, ranked: false, guard: 10 },
   };
 }
 

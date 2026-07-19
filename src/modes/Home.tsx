@@ -8,7 +8,6 @@ import {
   type HomeHeroSelection,
 } from "../domain/challengeSelection";
 import { dailyFlavorBadgeText } from "../domain/dailyEditorial";
-import { dailyTrendGuard } from "../domain/dailyTrends";
 import { formatTimeAndClicks } from "../domain/formatting";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import type { AccountStats, Challenge } from "../domain/types";
@@ -309,8 +308,9 @@ export default function Home({
           here even when the hero IS today's real daily: the spec's whole
           reason for preferring yesterday's board pre-play is "the player has
           no stake in today's board yet, and it discourages scouting" - this
-          fallback keeps that invariant by pointing at Boards instead of
-          leaking today's live standings. */}
+          fallback keeps that invariant by pointing at Stats (PKG-14 rename;
+          nav tab formerly labeled "Boards") instead of leaking today's live
+          standings. */}
       {dailyState !== "finished" && !yesterdaysDaily ? (
         <p className="home-boards-fallback muted">
           No prior daily board yet.{" "}
@@ -319,7 +319,7 @@ export default function Home({
             onClick={() => onGoToBoards()}
             type="button"
           >
-            See Boards ›
+            See Stats ›
           </button>
         </p>
       ) : null}
@@ -368,11 +368,10 @@ export default function Home({
  * F4 (council acceptance): a below-guard trend no longer goes silent - it
  * shows the same muted "M/{guard} dailies" progress framing Boards' own
  * unranked section uses, so a below-guard account still sees *something*
- * moving instead of a chip that just isn't there. `dailyTrendGuard(30)` is
- * a fixed constant (always 10; see `dailyTrendGuard`), not a value that
- * could drift from a server-side number, so hardcoding it here doesn't
- * reintroduce the guard-re-derivation problem F5 fixes on Boards (which
- * has to pick between 3/10/10 depending on the selected window).
+ * moving instead of a chip that just isn't there. PKG-14: `trend30.guard`
+ * is read straight off the server's response (reality-scaled off however
+ * many dailies actually exist, not a fixed constant) - never hardcoded or
+ * re-derived here, same F5 discipline Boards' own guard copy follows.
  * The whole row still disappears when there's truly nothing to show yet -
  * no streak and zero dailies played, ever (a brand-new account).
  *
@@ -409,7 +408,7 @@ function StreakTrendRow({
       {dailyStreak > 0 ? " · " : null}
       {trend30.ranked
         ? `30-day avg #${trend30.avgPlacement?.toFixed(1)} (${trend30.playedCount} dailies)`
-        : `${trend30.playedCount}/${dailyTrendGuard(30)} dailies`}
+        : `${trend30.playedCount}/${trend30.guard} dailies`}
     </p>
   );
 }
