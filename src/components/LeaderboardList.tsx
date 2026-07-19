@@ -88,7 +88,10 @@ export default function LeaderboardList({
       </section>
 
       <section className="board-snippet board-dnf-section muted" aria-label="DNF">
-        <h3>DNF</h3>
+        {/* QF-05: spelled out - "DNF" alone is jargon to a first-time
+            player, and RaceResults' own kicker already expands it
+            identically ("DNF — Did not finish"). */}
+        <h3>DNF — Did not finish</h3>
         {dnfs.length ? (
           <ol>
             {dnfs.map((row) => {

@@ -3230,6 +3230,12 @@ describe("Race flow: full-screen takeover", () => {
       expect.stringContaining("oldid=78910"),
     );
     expect(within(preview).getByText(/start: apple/i)).toBeVisible();
+    // QF-05: the rules restated here, one screen before the clock can start
+    // - the only other place they live (the first-visit teaching gate
+    // popup) is gone for good after an account's first completed race.
+    expect(
+      within(preview).getByText(/click links inside the article — no search, no back button/i),
+    ).toBeVisible();
     expect(within(preview).getByRole("button", { name: /^back$/i })).toBeVisible();
     expect(within(preview).getByRole("button", { name: /start race/i })).toBeEnabled();
     expect(within(preview).getByRole("button", { name: /see other challenges/i })).toBeVisible();
@@ -3702,7 +3708,9 @@ describe("Race flow: full-screen takeover", () => {
 
     await user.click(screen.getByRole("button", { name: /^end run$/i }));
     const dialog = await screen.findByRole("dialog", { name: /end this run/i });
-    expect(within(dialog).getByText(/it'll count as a dnf with 1 click\./i)).toBeVisible();
+    expect(
+      within(dialog).getByText(/it'll count as a dnf — did not finish — with 1 click\./i),
+    ).toBeVisible();
     await user.click(within(dialog).getByRole("button", { name: /confirm end run/i }));
 
     expect(await screen.findByText(/that one got away/i)).toBeVisible();
@@ -4119,12 +4127,40 @@ describe("Home v2: stateful daily hub + teaching gate (Increment 2 Task 2)", () 
       />,
     );
 
-    await user.click(await screen.findByRole("button", { name: /how to play/i }));
+    // Scoped to the first-visit strip specifically - QF-05 added a second,
+    // permanent "how to play" trigger in the footer that opens the exact
+    // same popup, so an unscoped query now matches both.
+    const strip = await screen.findByRole("note");
+    await user.click(within(strip).getByRole("button", { name: /how to play/i }));
     const dialog = await screen.findByRole("dialog", { name: /how to play/i });
     expect(within(dialog).getByText(/get from/i)).toHaveTextContent(/apple/i);
     expect(within(dialog).getByText(/fruit/i)).toBeVisible();
     expect(within(dialog).getByText(/no search, no back button cheese/i)).toBeVisible();
     expect(within(dialog).getByText(/fastest time wins; fewest clicks breaks ties/i)).toBeVisible();
+    // QF-05: the flavor-badge legend - wording matches `dailyFlavorLabel`'s
+    // actual on-screen output ("Recognizable"/"Weird"/"Hard"), not a
+    // synonym.
+    expect(
+      within(dialog).getByText(/recognizable picks early week, weird thu.{1,3}fri, hard weekends/i),
+    ).toBeVisible();
+
+    await user.click(within(dialog).getByRole("button", { name: /close how to play/i }));
+    expect(screen.queryByRole("dialog", { name: /how to play/i })).toBeNull();
+  });
+
+  it("QF-05: keeps 'How to play' re-accessible forever via a permanent footer link, even after the first-visit strip is gone", async () => {
+    const fetchImpl = createFetchMock({ challenges: twoChallenges(), accountCompleted: 1 });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await screen.findByRole("button", { name: /▶ race/i });
+    // The first-visit strip is gone (account already has a completed race).
+    expect(screen.queryByText(/two articles\. links only\. beat the clock\./i)).toBeNull();
+
+    const footer = document.querySelector(".site-footer") as HTMLElement;
+    await user.click(within(footer).getByRole("button", { name: /how to play/i }));
+    const dialog = await screen.findByRole("dialog", { name: /how to play/i });
+    expect(within(dialog).getByText(/no search, no back button cheese/i)).toBeVisible();
 
     await user.click(within(dialog).getByRole("button", { name: /close how to play/i }));
     expect(screen.queryByRole("dialog", { name: /how to play/i })).toBeNull();
@@ -4603,7 +4639,11 @@ describe("PKG-07 (council 2026-07-19, owner-proxy ruling): daily ritual identity
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    await user.click(await screen.findByRole("button", { name: /how to play/i }));
+    // Scoped to the first-visit strip specifically - QF-05 added a second,
+    // permanent "how to play" trigger in the footer that opens the exact
+    // same popup, so an unscoped query now matches both.
+    const strip = await screen.findByRole("note");
+    await user.click(within(strip).getByRole("button", { name: /how to play/i }));
     const dialog = await screen.findByRole("dialog", { name: /how to play/i });
     expect(
       within(dialog).getByText(/a new pair drops every day at 5:00 am central.*keep your streak alive/i),

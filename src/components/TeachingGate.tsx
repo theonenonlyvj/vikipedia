@@ -51,7 +51,13 @@ export default function TeachingGate({ pairChallenge }: { pairChallenge: Challen
   );
 }
 
-function TeachingGatePopup({
+/**
+ * QF-05: exported so a permanent "How to play" link (AppShell's footer -
+ * the rules otherwise vanish for good once `shouldShowTeachingGate` stops
+ * showing the strip above, after an account's first completed race) can
+ * reuse this exact popup rather than forking a second copy of the rules.
+ */
+export function TeachingGatePopup({
   pairChallenge,
   onClose,
   returnFocusRef,
@@ -103,6 +109,12 @@ function TeachingGatePopup({
           "Day 1 · New daily drops 5:00 AM — come defend your spot", a
           first-finish-only trigger, not persistent teaching copy). */}
       <p>A new pair drops every day at 5:00 AM Central — keep your streak alive.</p>
+      {/* QF-05: the flavor badge ("Recognizable"/"Weird"/"Hard") shows up
+          everywhere a daily does (Home, Boards, Browse, Preview, in-race/
+          Results kicker) with zero explanation of what it means until now -
+          wording matches `dailyFlavorLabel`'s actual output
+          (domain/dailyEditorial.ts), not a synonym. */}
+      <p>Recognizable picks early week, Weird Thu–Fri, Hard weekends — the badge tells you which.</p>
     </ModalDialog>
   );
 }

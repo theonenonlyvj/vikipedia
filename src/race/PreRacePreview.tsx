@@ -84,6 +84,13 @@ export default function PreRacePreview({
 
         <p className="pre-race-start-article">Start: {challenge.start.title}</p>
 
+        {/* QF-05: restated here, one screen before the clock can start -
+            the only other place this rule lives (TeachingGatePopup) is
+            gone for good after an account's first completed race, so a
+            returning player heading into a fresh race has no reminder of
+            it otherwise. */}
+        <p className="pre-race-rules muted">Click links inside the article — no search, no back button.</p>
+
         <button
           className="start-race-button"
           disabled={startDisabled}

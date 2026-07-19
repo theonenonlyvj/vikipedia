@@ -1300,8 +1300,11 @@ export default function App({
   const visibleError = error ?? race.error;
   const endRunIsBlocked = modeState === "syncing" || Boolean(race.pendingRetry);
   const endRunClickCount = race.recoveryRun?.clickCount ?? race.session?.clicks ?? 0;
+  // QF-05: "DNF" spelled out here too, matching RaceResults' own kicker
+  // ("DNF — Did not finish") - this dialog is often a first-time player's
+  // first encounter with the term, before they've ever seen Results.
   const endRunConfirmCopy = endRunClickCount >= 1
-    ? `It'll count as a DNF with ${endRunClickCount} ${endRunClickCount === 1 ? "click" : "clicks"}.`
+    ? `It'll count as a DNF — Did not finish — with ${endRunClickCount} ${endRunClickCount === 1 ? "click" : "clicks"}.`
     : "This cannot be resumed after the server accepts it.";
   const showBanners = !authPrompt && !endConfirmationOpen;
   const bannerError = showBanners ? visibleError : null;

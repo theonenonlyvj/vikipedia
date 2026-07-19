@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import AdminDailies from "../components/AdminDailies";
-import TeachingGate from "../components/TeachingGate";
+import TeachingGate, { TeachingGatePopup } from "../components/TeachingGate";
 import { selectHomeHeroChallenge } from "../domain/challengeSelection";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import { shouldShowTeachingGate } from "../domain/teachingGate";
@@ -140,6 +140,14 @@ export default function AppShell({
     () => selectHomeHeroChallenge(challenges, todayCentral),
     [challenges, todayCentral],
   );
+
+  // QF-05: the footer's permanent "How to play" link - the rules strip
+  // above (TeachingGate) stops rendering for good once the account has a
+  // completed race, so this is the only re-accessible way back to them
+  // afterward. Reuses TeachingGatePopup verbatim rather than forking a
+  // second copy of the rules copy.
+  const [howToPlayOpen, setHowToPlayOpen] = useState(false);
+  const howToPlayTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const adminRoute = isAdminDailiesRoute();
 
@@ -314,6 +322,21 @@ export default function AppShell({
           from the developer rather than the app itself. */}
       <footer className="site-footer">
         <p>
+          {/* QF-05: permanent - unlike the first-visit TeachingGate strip
+              above (which stops rendering for good after an account's
+              first completed race), this link never goes away, so the
+              rules stay re-accessible forever. */}
+          <button
+            className="link-button"
+            onClick={(event) => {
+              howToPlayTriggerRef.current = event.currentTarget;
+              setHowToPlayOpen(true);
+            }}
+            type="button"
+          >
+            How to play
+          </button>
+          {" · "}
           Bugs or ideas?{" "}
           <a
             href="https://theonenonlyvj.github.io/personal-site/contact"
@@ -332,6 +355,14 @@ export default function AppShell({
           </a>.
         </p>
       </footer>
+
+      {howToPlayOpen ? (
+        <TeachingGatePopup
+          onClose={() => setHowToPlayOpen(false)}
+          pairChallenge={homeHero?.challenge ?? null}
+          returnFocusRef={howToPlayTriggerRef}
+        />
+      ) : null}
 
     </>
   );
