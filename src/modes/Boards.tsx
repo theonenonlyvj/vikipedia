@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   dailyDateForChallenge,
   previousCentralDate,
@@ -128,6 +134,11 @@ export default function Boards({
   // out scrolled offscreen. Keep the active tab reachable/visible by
   // scrolling it into view whenever the active segment changes.
   const segmentButtonRefs = useRef<Partial<Record<BoardsSegment, HTMLButtonElement | null>>>({});
+  // PKG-10: an inert spacer after the last segment (styles.css) so the
+  // static right-edge fade never lands on a real, fully-visible "Lifetime"
+  // label - see the ref's own usage below for why it needs a scroll nudge
+  // of its own.
+  const segmentSpacerRef = useRef<HTMLSpanElement | null>(null);
   useEffect(() => {
     // Optional-chained on the method itself, not just the element: jsdom
     // (this repo's test environment) doesn't implement scrollIntoView at
@@ -137,7 +148,23 @@ export default function Boards({
       block: "nearest",
       inline: "nearest",
     });
+    // PKG-10: "nearest" stops the instant the tapped button's trailing edge
+    // touches the scrollport's edge - it has no reason to also reveal the
+    // inert spacer that follows the last segment, so on its own it would
+    // leave the static edge-fade (styles.css) overlapping real "Lifetime"
+    // glyphs even though nothing more is left to scroll. Only the last
+    // segment can ever sit at the true scroll end, so only it needs the
+    // extra nudge - scrolling the spacer (not the label) the rest of the
+    // way there so the fade lands on empty space instead.
+    if (segment === ALL_SEGMENTS[ALL_SEGMENTS.length - 1]) {
+      segmentSpacerRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "nearest",
+      });
+    }
   }, [segment]);
+
   const [board, setBoard] = useState<ChallengeBoardResponse>(EMPTY_BOARD);
   const [trends, setTrends] = useState<BoardsTrendsResponse | null>(null);
   // F6: a failed trends fetch is its own state, distinct from "still
@@ -322,11 +349,34 @@ export default function Boards({
   // rather than showing a guessed number.
   const guard = trendMatchesSegment ? trends!.guard : null;
 
+  /**
+   * PKG-10 (owner-proxy ruling: keep role=tab/tablist, complete the
+   * pattern): roving tabindex + ArrowLeft/Right, matching the WAI-ARIA tabs
+   * pattern's "automatic activation" model - moving focus with the arrow
+   * keys selects the newly-focused segment immediately, same as a tap.
+   * Wraps at both ends.
+   */
+  function handleSegmentKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const currentIndex = ALL_SEGMENTS.indexOf(segment);
+    const delta = event.key === "ArrowRight" ? 1 : -1;
+    const nextSegment =
+      ALL_SEGMENTS[(currentIndex + delta + ALL_SEGMENTS.length) % ALL_SEGMENTS.length];
+    setSegment(nextSegment);
+    segmentButtonRefs.current[nextSegment]?.focus();
+  }
+
   return (
     <section className="boards-mode leaderboard-panel" aria-label="Boards">
       <h2>Boards</h2>
 
-      <div className="board-segment-control" role="tablist" aria-label="Board period">
+      <div
+        aria-label="Board period"
+        className="board-segment-control"
+        onKeyDown={handleSegmentKeyDown}
+        role="tablist"
+      >
         {ALL_SEGMENTS.map((key) => (
           <button
             aria-selected={segment === key}
@@ -337,11 +387,16 @@ export default function Boards({
               segmentButtonRefs.current[key] = el;
             }}
             role="tab"
+            tabIndex={segment === key ? 0 : -1}
             type="button"
           >
             {SEGMENT_LABEL[key]}
           </button>
         ))}
+        {/* PKG-10: inert - scrollIntoView'd (never focused/tapped) so the
+            static edge-fade (styles.css, Bug B) has empty space to land on
+            once the row's actually scrolled all the way to "Lifetime". */}
+        <span aria-hidden="true" className="board-segment-spacer" ref={segmentSpacerRef} />
       </div>
 
       {isTrendSegment(segment) ? (
@@ -378,7 +433,7 @@ export default function Boards({
                           type="button"
                         >
                           <span className="rank">{index + 1}.</span>
-                          <span>
+                          <span className="trend-row-name">
                             {row.displayName ?? "Unknown"}
                             {isYou ? <span className="muted"> (you)</span> : null}
                           </span>
@@ -476,25 +531,6 @@ export default function Boards({
             <p className="ritual-line muted">New daily drops 5:00 AM Central.</p>
           ) : null}
 
-          {showRaceCta ? (
-            <div className="player-gate">
-              {/* PKG-04: opens the preview only (non-committal), same class
-                  as Home's hero and Detail's "Race this" - see Home.tsx's
-                  doc comment on the identical treatment. PKG-01: the label
-                  itself downgrades to a bare "Race" whenever the shown
-                  challenge isn't actually today's daily - matches Home's
-                  identical downgrade. */}
-              <button
-                className="race-preview-button"
-                disabled={raceBusy}
-                onClick={() => onRaceChallenge(activeChallenge.id)}
-                type="button"
-              >
-                {todayShowsYesterdayFraming ? `${"▶"} Race` : `${"▶"} Race today's daily`}
-              </button>
-            </div>
-          ) : null}
-
           <section
             className="board-snippet"
             aria-label={`${segment === "today" && !todayShowsYesterdayFraming ? "Today's" : "Yesterday's"} board`}
@@ -544,6 +580,30 @@ export default function Boards({
           </section>
 
           <p className="muted board-footnote">Paths hidden until you&apos;ve played.</p>
+
+          {/* PKG-10: below the leaderboard/DNF/footnote, matching
+              mockup-boards-trends' "Daily view" bottom-of-screen CTA
+              placement (council: see-the-board-then-commit order) - it used
+              to render right under the badge/title, above any board data at
+              all. */}
+          {showRaceCta ? (
+            <div className="player-gate">
+              {/* PKG-04: opens the preview only (non-committal), same class
+                  as Home's hero and Detail's "Race this" - see Home.tsx's
+                  doc comment on the identical treatment. PKG-01: the label
+                  itself downgrades to a bare "Race" whenever the shown
+                  challenge isn't actually today's daily - matches Home's
+                  identical downgrade. */}
+              <button
+                className="race-preview-button"
+                disabled={raceBusy}
+                onClick={() => onRaceChallenge(activeChallenge.id)}
+                type="button"
+              >
+                {todayShowsYesterdayFraming ? `${"▶"} Race` : `${"▶"} Race today's daily`}
+              </button>
+            </div>
+          ) : null}
         </>
       )}
     </section>

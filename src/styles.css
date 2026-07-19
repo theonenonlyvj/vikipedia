@@ -848,9 +848,11 @@ h1 {
    `.mode-nav`'s pill-toggle look (44px targets, coral active state)
    rather than inventing a second tabbar pattern.
    Bug B fix: with all 5 segments (Today/Yesterday/7d/30d/Lifetime, real
-   words - no abbreviating "Lifetime") the row's content width exceeds a
-   ~390px phone's container, so it's made horizontally scrollable instead
-   of compressed - segments keep their intrinsic width/44px tap target
+   words - no abbreviating "Lifetime") the row's content width used to
+   exceed a ~390px phone's container even after the narrow-width shrink
+   below (PKG-10), so it's still made horizontally scrollable as a fallback
+   for anything narrower than that (down to the app's 320px floor) rather
+   than compressed further - segments keep their 44px tap target
    (grid-auto-flow: column already sizes tracks to content, so nothing
    shrinks) and the container scrolls. Harmless at wider widths where all 5
    already fit (nothing to scroll). Scrollbar chrome hidden since the pill
@@ -871,6 +873,9 @@ h1 {
 }
 
 .board-segment-control button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-height: 44px;
   background: var(--ink-soft);
   color: var(--muted);
@@ -886,6 +891,20 @@ h1 {
   background: rgba(13, 235, 215, 0.12);
   border-color: var(--cyan);
   color: var(--cyan);
+}
+
+/* PKG-10: an inert, unfocusable spacer after "Lifetime" (Boards.tsx) - pure
+   layout filler, never a tab. Without it, the mobile edge-fade below always
+   overlaps whichever segment is scrolled flush against the container's
+   right edge; when that segment is the real, fully-scrolled-to, actively
+   selected "Lifetime" (nothing further to scroll), that reads as the
+   label itself being cut off. Giving the fade empty space to land on
+   instead - at least as wide as the fade - fixes it for any scroll
+   position, not just Lifetime's, without a scroll-position-aware script
+   (Judge A: keep the codebase's existing static-mask choice, styles.css
+   Bug B below). */
+.board-segment-spacer {
+  width: 28px;
 }
 
 .board-segment-header {
@@ -909,16 +928,36 @@ h1 {
   font-size: 0.82rem;
 }
 
+/* PKG-10 P0 fix: this button is the `<li>`'s ONLY child, and `.board-snippet
+   li` (below) is itself a 3-column rank/name/score grid built for plain
+   rank rows - at equal specificity it was winning the cascade, so the
+   unplaced button auto-placed into just the li's first ~2.4em track and
+   its own 3 columns overflowed/overlapped inside that squeezed width (the
+   "theeoge#h0ly3jdailies" glyph smear). `grid-column: 1 / -1` makes the
+   button span the li's full width instead of fighting it for columns - the
+   button's own `grid-template-columns` below is what actually lays out
+   rank/name/score, same fix shape as the sibling "Bug A fix" a few rules
+   down (applied there to unranked rows, never ranked ones until now).
+   `minmax(0, 1fr)` on the name column (mirroring that same Bug A fix) lets
+   the name track shrink so `.trend-row-name`'s ellipsis (below) can engage
+   instead of bleeding into the avg-placement text. */
 .trend-row-toggle {
   display: grid;
-  grid-template-columns: 2.4em 1fr auto;
+  grid-column: 1 / -1;
+  grid-template-columns: 2.4em minmax(0, 1fr) auto;
   gap: 8px;
   align-items: baseline;
   width: 100%;
-  min-height: 0;
+  /* PKG-10: was 0/0 - well under the 24px WCAG 2.5.8 floor, let alone the
+     44px target size the rest of the app uses (e.g. `.board-segment-control
+     button` above). Vertical padding does the centering (not `align-items`,
+     which stays `baseline` so rank/name/score still line up on their text
+     baseline as before); `min-height` is the floor for the rare case the
+     padded content is still short of it. */
+  min-height: 44px;
+  padding: 10px 0;
   background: transparent;
   border: none;
-  padding: 0;
   color: inherit;
   font: inherit;
   font-size: 0.88rem;
@@ -938,8 +977,25 @@ h1 {
   color: var(--cyan);
 }
 
+/* PKG-10: the ranked-row name column (mirrors the "Bug A fix" ellipsis
+   treatment a few rules down, which only ever covered the unranked list). */
+.trend-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* PKG-10 follow-on: this is the ranked `<li>`'s second child once expanded
+   (the toggle button is the first) - now that the toggle spans the li's
+   full 3-column width via `grid-column: 1 / -1`, the row-flow auto-
+   placement algorithm advances to a fresh row for this sibling rather than
+   packing it beside the toggle, but it still defaults to a 1-column span
+   there (the li's own narrow 2.4em first track) unless told otherwise.
+   Needs the same full-span treatment so the drilldown list isn't squeezed
+   into the rank column's width. */
 .board-trend-drilldown {
   display: grid;
+  grid-column: 1 / -1;
   gap: 4px;
   margin: 8px 0 0;
   padding-left: 2.4em;
@@ -2425,13 +2481,30 @@ h1 {
     min-height: 44px;
   }
 
-  /* Bug B: at this width the 5 segments realistically overflow (see the
-     base-rule comment) - snap + a subtle right-edge fade hint that there's
-     more to scroll, without a scroll-position-aware script. */
+  /* Bug B: below this width the 5 segments can still overflow even after
+     the PKG-10 narrow-width shrink just below (worst case: a phone at the
+     app's 320px floor, where "Yesterday" alone eats most of the row) - snap
+     + a subtle right-edge fade hint that there's more to scroll, without a
+     scroll-position-aware script. The `.board-segment-spacer` (base rule
+     above) is what keeps this fade from ever landing on real "Lifetime"
+     glyphs once it's fully scrolled into view. PKG-10 also shrinks the
+     gap/button padding/font here so all 5 segments - including 9-char
+     "Yesterday" - actually fit a 375-390px phone without scrolling in the
+     first place (the primary approach per owner-proxy ruling; 320px is the
+     documented fallback, not a regression). `.mode-nav button`'s own
+     350px-and-under query shrinks 4 short labels this same way; this needs
+     to hold one more, wider label at a wider breakpoint, hence its own
+     tighter numbers rather than a copy of that block's. */
   .board-segment-control {
+    gap: 3px;
     scroll-snap-type: x proximity;
     mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
     -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent 100%);
+  }
+
+  .board-segment-control button {
+    padding: 8px 6px;
+    font-size: 0.72rem;
   }
 
   h1 {

@@ -4017,6 +4017,43 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
     }
   });
 
+  it("moves roving tabindex focus with ArrowLeft/ArrowRight and selects the newly-focused segment, wrapping at both ends (PKG-10)", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = screen.getByRole("region", { name: "Boards" });
+    const [today, yesterday, sevenDay, thirtyDay, lifetime] = within(board).getAllByRole("tab");
+
+    // Roving tabindex: only the selected tab is in the Tab order.
+    expect(today).toHaveAttribute("tabindex", "0");
+    for (const tab of [yesterday, sevenDay, thirtyDay, lifetime]) {
+      expect(tab).toHaveAttribute("tabindex", "-1");
+    }
+
+    today.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(yesterday).toHaveFocus();
+    expect(yesterday).toHaveAttribute("aria-selected", "true");
+    expect(yesterday).toHaveAttribute("tabindex", "0");
+    expect(today).toHaveAttribute("aria-selected", "false");
+    expect(today).toHaveAttribute("tabindex", "-1");
+
+    await user.keyboard("{ArrowLeft}");
+    expect(today).toHaveFocus();
+    expect(today).toHaveAttribute("aria-selected", "true");
+
+    // Wraps backward past the first segment to the last ("Lifetime").
+    await user.keyboard("{ArrowLeft}");
+    expect(lifetime).toHaveFocus();
+    expect(lifetime).toHaveAttribute("aria-selected", "true");
+
+    // Wraps forward past the last segment back to the first ("Today").
+    await user.keyboard("{ArrowRight}");
+    expect(today).toHaveFocus();
+    expect(today).toHaveAttribute("aria-selected", "true");
+  });
+
   it("shows today's deduped board - rank, name, time·clicks - and highlights the viewer's own row", async () => {
     // PKG-01: a genuine today's daily, not `twoChallenges()`'s plain fixture
     // (no dailyFeature/origin) - Boards' Today segment now shows its own
@@ -4119,6 +4156,37 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
     expect(raceCta).not.toHaveClass("start-race-button");
     await user.click(raceCta);
     expect(await screen.findByRole("button", { name: /start race/i })).toBeVisible();
+  });
+
+  it("renders the Race CTA after the DNF section and the 'Paths hidden' footnote, not before the board (PKG-10, mockup-boards-trends order)", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [dailyChallenge("challenge-0001", { dailyDate: "2026-07-17" })],
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: [{ accountId: "acc-ari", displayName: "Ari", placement: 1, elapsedMs: 20_000, clickCount: 3 }],
+          dnfs: [{ accountId: "acc-mike", displayName: "MikeD", clickCount: 3, elapsedMs: 9_000 }],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Boards" }));
+    const board = screen.getByRole("region", { name: "Boards" });
+    const dnfSection = await within(board).findByRole("region", { name: "DNF" });
+    const footnote = within(board).getByText(/paths hidden until you.ve played/i);
+    const raceCta = within(board).getByRole("button", { name: /race today's daily/i });
+
+    // DOCUMENT_POSITION_FOLLOWING (4): raceCta comes after both.
+    expect(dnfSection.compareDocumentPosition(raceCta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(footnote.compareDocumentPosition(raceCta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("hides the Race CTA once the viewer has a completed placement, and never shows it on Yesterday", async () => {
