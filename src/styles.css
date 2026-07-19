@@ -1481,7 +1481,25 @@ h1 {
   color: #202122;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 2.6rem;
-  scroll-margin-top: 132px;
+  /* Ghost-HUD hotfix (2026-07-19): WikipediaArticlePanel's mount effect
+     (RaceMode.tsx) calls `heading.scrollIntoView({ block: "start" })` on
+     every article - including the first. `.race-hud` is `position: sticky`
+     and `.path-strip` is plain static flow right below it, so scrollIntoView
+     has to leave enough clearance above this h2 for BOTH of them (plus the
+     two 14px `.race-mode` grid gaps and this card's own top padding) or the
+     sticky race-hud ends up pinned on TOP of path-strip once scrolled -
+     `.run-metrics`'s "always visible" timer/clicks row (PKG-02) then only
+     shows as a barely-visible ghost bleeding through path-strip's
+     translucent/blurred surface, which is what shipped in 56023ef/dd0b2f4
+     (those tuned this value against an older, shorter race-hud and never
+     re-measured it after PKG-02 added the run-metrics row + dd0b2f4's grid
+     rework). 132px only cleared race-hud alone. Live-measured clearance
+     needed here is race-hud height (126px) + gap + path-strip height (61px
+     desktop / 57px mobile - verified constant across a 320-1440px width
+     range and a long wrapped target title) + gap + this padding/margin,
+     rounded up with slack. If race-hud or path-strip grow again, re-measure
+     and bump this (and the <=640px override below) rather than guessing. */
+  scroll-margin-top: 280px;
   font-weight: 400;
   line-height: 1.15;
 }
@@ -2732,7 +2750,9 @@ h1 {
   }
 
   .article-heading h2 {
-    scroll-margin-top: 176px;
+    /* See the base rule's comment above - same fix, re-measured for the
+       <=640px `.race-hud`/`.path-strip` heights (both a hair shorter here). */
+    scroll-margin-top: 260px;
   }
 
   .article-content {
