@@ -1052,11 +1052,14 @@ describe("VWiki Race app", () => {
     // tab (Results itself stays unchanged this increment - see the
     // race-flow spec's Results beat). This fixture challenge isn't a real
     // daily, so Boards' Today segment falls back to it (same fallback Home's
-    // hero uses), and fetches its own deduped board exactly once.
+    // hero uses), and fetches its own deduped board exactly once - the
+    // second /board call overall, after Home's own hero board read on
+    // initial mount (desktop-pass FIX 3: Home reads the deduped board now,
+    // not the per-attempt leaderboard).
     await user.click(screen.getByRole("button", { name: /view leaderboard/i }));
     expect(screen.getByRole("heading", { name: "Boards" })).toBeVisible();
     expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
-    await waitFor(() => expect(boardCalls(fetchImpl, "challenge-0001")).toBe(1));
+    await waitFor(() => expect(boardCalls(fetchImpl, "challenge-0001")).toBe(2));
     expect(completeRunCalls(fetchImpl)).toBe(0);
   });
 
@@ -3336,6 +3339,163 @@ describe("Home v2: stateful daily hub + teaching gate (Increment 2 Task 2)", () 
   });
 });
 
+describe("Home board dedup + pre-drop hero (desktop pass, FIX 3/FIX 4)", () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  it("renders the yesterday card from the deduped board endpoint - one row per account - and never calls the raw leaderboard", async () => {
+    const todayChallenge = dailyChallenge("challenge-0001", {
+      dailyDate: "2026-07-17",
+      start: "Apple",
+      target: "Fruit",
+    });
+    const yesterdayChallenge = dailyChallenge("challenge-0002", {
+      dailyDate: "2026-07-16",
+      start: "Mars",
+      target: "Water",
+      label: "Yesterday's Daily",
+    });
+    const fetchImpl = createFetchMock({
+      challenges: [todayChallenge, yesterdayChallenge],
+      // The raw per-attempt leaderboard deliberately lists the same account
+      // twice (bug e: production showed #1 AND #2 both theonenonlyvj). If
+      // Home still read this endpoint, the card would render both rows.
+      leaderboardRowsByChallenge: {
+        "challenge-0002": [
+          leaderboardRow({ rank: 1, runId: "run-y1", challengeId: "challenge-0002", accountId: "acc-other", displayName: "Ari", elapsedMs: 20_000, clickCount: 3 }),
+          leaderboardRow({ rank: 2, runId: "run-y2", challengeId: "challenge-0002", accountId: "acc-other", displayName: "Ari", elapsedMs: 25_000, clickCount: 4, isRepeatRun: true }),
+        ],
+      },
+      // The deduped board endpoint: one row per canonical account.
+      boardByChallenge: {
+        "challenge-0002": {
+          placements: [
+            { accountId: "acc-other", displayName: "Ari", placement: 1, elapsedMs: 20_000, clickCount: 3 },
+            { accountId: "acc-1", displayName: "Vijay", placement: 2, elapsedMs: 25_000, clickCount: 4 },
+          ],
+        },
+      },
+    });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    const yesterdayCard = await screen.findByRole("region", { name: /yesterday's results/i });
+    await within(yesterdayCard).findByText(/ari/i);
+    expect(within(yesterdayCard).queryAllByText(/ari/i)).toHaveLength(1);
+    expect(within(yesterdayCard).getByText("#1")).toBeVisible();
+    expect(within(yesterdayCard).getByText("#2")).toBeVisible();
+    expect(within(yesterdayCard).getByText(/\(you\)/i)).toBeVisible();
+    expect(boardCalls(fetchImpl, "challenge-0002")).toBeGreaterThan(0);
+    expect(leaderboardCalls(fetchImpl, "challenge-0002")).toBe(0);
+  });
+
+  it("derives the DNF sub-state from the board's dnfs section (completed placements always win)", async () => {
+    const todayChallenge = dailyChallenge("challenge-0001", {
+      dailyDate: "2026-07-17",
+      start: "Apple",
+      target: "Fruit",
+    });
+    const fetchImpl = createFetchMock({
+      challenges: [todayChallenge],
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: [],
+          dnfs: [{ accountId: "acc-1", displayName: "Vijay", clickCount: 3, elapsedMs: 12_000 }],
+        },
+      },
+    });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    expect(await screen.findByText(/last try: dnf/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeEnabled();
+    // Home's state came from the board endpoint (App.tsx's own
+    // selected-challenge leaderboard read for Detail/paths is out of scope
+    // here and may still fire once).
+    expect(boardCalls(fetchImpl, "challenge-0001")).toBeGreaterThan(0);
+  });
+
+  it("pre-drop (FIX 4): heroes YESTERDAY's daily with an explicit badge, drop-time line, and a live Race button", async () => {
+    const yesterdayChallenge = dailyChallenge("challenge-0002", {
+      dailyDate: "2026-07-16",
+      flavor: "weird",
+      start: "Mars",
+      target: "Water",
+      label: "Yesterday's Daily",
+    });
+    // The first active challenge would have been the old silent fallback
+    // (bug f: production heroed "Moon -> Gravity" with no badge) - its
+    // presence proves yesterday's daily now wins pre-drop.
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0], yesterdayChallenge],
+    });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    expect(await screen.findByText(fullTextMatch(/Mars -> Water/), { selector: "strong" })).toBeVisible();
+    expect(screen.getByText(/yesterday's daily · weird/i)).toBeVisible();
+    expect(screen.getByText(/new daily drops 5:00 am central\./i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /▶ race/i })).toBeEnabled();
+    // The hero IS yesterday's daily - no duplicate "Yesterday's results"
+    // card underneath repeating the same challenge.
+    expect(screen.queryByRole("region", { name: /yesterday's results/i })).toBeNull();
+    // And the silent fallback pair must NOT be the hero.
+    expect(screen.queryByText(fullTextMatch(/Apple -> Fruit/), { selector: "strong" })).toBeNull();
+  });
+
+  it("post-drop stays unchanged: today's daily heroes with its plain flavor badge and no drop-time line", async () => {
+    const todayChallenge = dailyChallenge("challenge-0001", {
+      dailyDate: "2026-07-17",
+      flavor: "recognizable",
+      start: "Apple",
+      target: "Fruit",
+    });
+    const fetchImpl = createFetchMock({ challenges: [todayChallenge] });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(screen.getByText("Recognizable")).toBeVisible();
+    expect(screen.queryByText(/yesterday's daily/i)).toBeNull();
+    expect(screen.queryByText(/new daily drops 5:00 am central\./i)).toBeNull();
+  });
+
+  it("no dailies at all: keeps the default-challenge hero with no badge and no drop-time line", async () => {
+    const fetchImpl = createFetchMock({ challenges: [twoChallenges()[0]] });
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(screen.getByText(fullTextMatch(/Apple -> Fruit/), { selector: "strong" })).toBeVisible();
+    expect(screen.queryByText(/yesterday's daily/i)).toBeNull();
+    expect(screen.queryByText(/new daily drops/i)).toBeNull();
+  });
+});
+
 describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/");
@@ -3380,7 +3540,11 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
     });
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    expect(await screen.findByText(/🔥 12-day streak/)).toBeVisible();
+    // Settle into the post-play (finished) state first - Home re-renders the
+    // chip inside the finished branch once its board fetch lands, so an
+    // element grabbed during the transient pre-play frame can detach.
+    expect(await screen.findByText(/done · you finished #2/i)).toBeVisible();
+    expect(screen.getByText(/🔥 12-day streak/)).toBeVisible();
     expect(screen.getByText(/30-day avg #2\.4 \(26 dailies\)/)).toBeVisible();
   });
 
@@ -4420,7 +4584,10 @@ function createFetchMock(options?: {
         .map((row, index) => ({
           accountId: row.accountId,
           displayName: row.displayName ?? null,
-          placement: index + 1,
+          // Preserve the fixture row's rank as the board placement so tests
+          // modeling "you finished #3" don't silently collapse to #1 when
+          // derived from a single-row leaderboard fixture.
+          placement: typeof row.rank === "number" ? row.rank : index + 1,
           elapsedMs: row.elapsedMs,
           clickCount: row.clickCount,
         }));

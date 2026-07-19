@@ -52,6 +52,48 @@ export function selectDefaultChallenge(
     null;
 }
 
+export type HomeHeroKind = "today-daily" | "yesterday-daily" | "default";
+
+export interface HomeHeroSelection {
+  challenge: Challenge;
+  kind: HomeHeroKind;
+}
+
+/**
+ * Home's hero challenge + how it should be framed (desktop pass, FIX 4 -
+ * the pre-drop bug: before the 5:00 AM Central drop, or after a generation
+ * failure, `selectDefaultChallenge` silently fell back to the first active
+ * challenge and Home presented it as if it were the daily - no badge, no
+ * explanation). Order:
+ *   1. today's real daily -> "today-daily" (unchanged post-drop behavior);
+ *   2. else YESTERDAY's daily when still in the catalog -> "yesterday-daily"
+ *      (it's still playable; Home badges it honestly and says when the new
+ *      one drops);
+ *   3. else the pre-redesign default-challenge fallback -> "default"
+ *      (e.g. a catalog with no dailies at all - many test fixtures).
+ * Home-only: `selectDefaultChallenge`'s other consumers (Boards' Today
+ * segment, App's selection routing) deliberately keep their existing
+ * behavior.
+ */
+export function selectHomeHeroChallenge(
+  challenges: Challenge[],
+  todayCentral: string,
+): HomeHeroSelection | null {
+  const activeChallenges = challenges.filter((challenge) => challenge.isActive !== false);
+  const todaysDaily = activeChallenges.find((challenge) =>
+    dailyDateForChallenge(challenge) === todayCentral
+  );
+  if (todaysDaily) return { challenge: todaysDaily, kind: "today-daily" };
+
+  const yesterdaysDaily = activeChallenges.find((challenge) =>
+    dailyDateForChallenge(challenge) === previousCentralDate(todayCentral)
+  );
+  if (yesterdaysDaily) return { challenge: yesterdaysDaily, kind: "yesterday-daily" };
+
+  const fallback = selectDefaultChallenge(challenges, { todayUtc: todayCentral });
+  return fallback ? { challenge: fallback, kind: "default" } : null;
+}
+
 export function dailyDateForChallenge(challenge: Challenge): string | null {
   if (challenge.dailyFeature) return challenge.dailyFeature.dailyDate;
   return challenge.origin === "daily" ? challenge.dailyDate ?? null : null;

@@ -7,6 +7,7 @@ import {
   dailyBadgeLabel,
   previousCentralDate,
   selectDefaultChallenge,
+  selectHomeHeroChallenge,
 } from "./challengeSelection";
 
 describe("editorial Daily flavors", () => {
@@ -106,6 +107,54 @@ describe("default challenge selection", () => {
       requestedChallengeId: "challenge-0001",
       todayUtc: "2026-07-15",
     })?.id).toBe("challenge-0002");
+  });
+});
+
+describe("selectHomeHeroChallenge (FIX 4: pre-drop daily state)", () => {
+  it("post-drop: picks today's daily as kind today-daily", () => {
+    const hero = selectHomeHeroChallenge(challenges, "2026-07-15");
+    expect(hero).toMatchObject({ kind: "today-daily", challenge: { id: "challenge-0003" } });
+  });
+
+  it("pre-drop: falls back to YESTERDAY's daily (kind yesterday-daily), never a silent default", () => {
+    const hero = selectHomeHeroChallenge(challenges, "2026-07-16");
+    expect(hero).toMatchObject({ kind: "yesterday-daily", challenge: { id: "challenge-0003" } });
+  });
+
+  it("honors dailyFeature metadata for the yesterday fallback too", () => {
+    const featured = challenge("challenge-featured", {
+      origin: "manual",
+      dailyDate: null,
+      dailyFeature: { dailyDate: "2026-07-15", flavor: "weird", selectionSource: "community" },
+    });
+    expect(selectHomeHeroChallenge([challenge("challenge-manual"), featured], "2026-07-16"))
+      .toMatchObject({ kind: "yesterday-daily", challenge: { id: "challenge-featured" } });
+  });
+
+  it("no dailies at all: keeps the pre-redesign default fallback (kind default)", () => {
+    const hero = selectHomeHeroChallenge(
+      [challenge("challenge-0001"), challenge("challenge-0002")],
+      "2026-07-16",
+    );
+    expect(hero).toMatchObject({ kind: "default", challenge: { id: "challenge-0001" } });
+  });
+
+  it("a two-day-old daily is NOT a hero candidate - it degrades to the default fallback", () => {
+    const hero = selectHomeHeroChallenge(challenges, "2026-07-17");
+    expect(hero).toMatchObject({ kind: "default", challenge: { id: "challenge-0001" } });
+  });
+
+  it("never selects an inactive challenge for any kind", () => {
+    const rows = [
+      challenge("challenge-0003", { origin: "daily", dailyDate: "2026-07-15", isActive: false }),
+      challenge("challenge-0002"),
+    ];
+    expect(selectHomeHeroChallenge(rows, "2026-07-15"))
+      .toMatchObject({ kind: "default", challenge: { id: "challenge-0002" } });
+  });
+
+  it("returns null for an empty catalog", () => {
+    expect(selectHomeHeroChallenge([], "2026-07-15")).toBeNull();
   });
 });
 

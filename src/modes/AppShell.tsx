@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import AdminDailies from "../components/AdminDailies";
 import TeachingGate from "../components/TeachingGate";
-import { selectDefaultChallenge } from "../domain/challengeSelection";
+import { selectDefaultChallenge, selectHomeHeroChallenge } from "../domain/challengeSelection";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import { shouldShowTeachingGate } from "../domain/teachingGate";
 import type { CreateChallengeInput } from "./challenges/Browse";
@@ -27,8 +27,10 @@ const MODE_ITEMS: { key: ModeKey; label: string }[] = [
 ];
 
 /**
- * The bottom-nav mode shell (Increment 2): replaces App.tsx's old top
- * tabbar with the real Home/Boards/Challenges/You nav, and owns the
+ * The mode shell (Increment 2): replaces App.tsx's old top tabbar with the
+ * real Home/Boards/Challenges/You nav - ONE `.mode-nav` element that CSS
+ * pins to the viewport bottom below 880px and docks inline top-right (next
+ * to the logo) at desktop widths (desktop pass, FIX 2) - and owns the
  * `/admin/dailies` bypass (migration note ii - the pathname-gated route
  * never becomes a fifth nav item; visiting it while authorized replaces
  * this entire shell, nav included, the same way the race takeover does).
@@ -110,13 +112,20 @@ export default function AppShell({
   sessionDnfChallengeIds: ReadonlySet<string>;
   todayCentral: string;
 }) {
-  // The one challenge Home's hero races and the teaching-gate popup uses as
-  // its worked example - today's real daily when the catalog has one,
-  // falling back to selectDefaultChallenge's existing "first active
-  // challenge" default otherwise (matches the pre-redesign app's behavior
-  // when no daily is flagged, e.g. many existing test fixtures).
+  // Boards' Today segment keeps the pre-redesign selectDefaultChallenge
+  // derivation (desktop-pass FIX 4 deliberately leaves non-Home consumers
+  // untouched).
   const todaysHeroChallenge = useMemo(
     () => selectDefaultChallenge(challenges, { todayUtc: todayCentral }),
+    [challenges, todayCentral],
+  );
+  // The one challenge Home's hero races and the teaching-gate popup uses as
+  // its worked example, so the two can never show a different pair. FIX 4:
+  // today's real daily post-drop; yesterday's still-playable daily pre-drop
+  // (Home badges it as such); the default fallback only when the catalog
+  // has no daily at all.
+  const homeHero = useMemo(
+    () => selectHomeHeroChallenge(challenges, todayCentral),
     [challenges, todayCentral],
   );
 
@@ -165,6 +174,25 @@ export default function AppShell({
           <span className="viota-mark">VWiki</span>
           <h1>VWiki Race</h1>
         </div>
+
+        {/* Desktop pass (FIX 2): ONE nav element for both breakpoints.
+            Below 880px CSS pins it fixed to the viewport bottom (the
+            classic mobile pattern - position:fixed ignores this header
+            parent); at >=880px it lays out inline here, docked top-right
+            beside the logo. No floating mid-air strip on either. */}
+        <nav className="mode-nav" aria-label="VWiki Race views">
+          {MODE_ITEMS.map(({ key, label }) => (
+            <button
+              aria-pressed={visibleMode === key}
+              className={visibleMode === key ? "active" : undefined}
+              key={key}
+              onClick={() => onSelectMode(key)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
       </header>
 
       {bannerError ? <p className="error-banner" role="alert">{bannerError}</p> : null}
@@ -174,7 +202,7 @@ export default function AppShell({
           This page is not available.
         </p>
       ) : null}
-      {showTeachingGate ? <TeachingGate pairChallenge={todaysHeroChallenge} /> : null}
+      {showTeachingGate ? <TeachingGate pairChallenge={homeHero?.challenge ?? null} /> : null}
 
       <section className="content-shell">
         {visibleMode === "home" ? (
@@ -182,7 +210,7 @@ export default function AppShell({
             accountStats={accountStats}
             apiClient={apiClient}
             challenges={challenges}
-            heroChallenge={todaysHeroChallenge}
+            hero={homeHero}
             identityAccountId={identitySession?.accountId ?? null}
             onCreateRandomChallenge={onCreateRandomChallenge}
             onGoToBoards={onGoToBoardsFor}
@@ -193,9 +221,7 @@ export default function AppShell({
             raceBusy={authBusy}
             randomChallengeBusy={randomChallengeBusy}
             randomChallengeError={randomChallengeError}
-            selectedChallengeId={selectedChallenge?.id ?? null}
             sessionDnfChallengeIds={sessionDnfChallengeIds}
-            sharedLeaderboard={leaderboard}
             todayCentral={todayCentral}
           />
         ) : null}
@@ -274,19 +300,6 @@ export default function AppShell({
         </p>
       </footer>
 
-      <nav className="bottom-nav" aria-label="VWiki Race views">
-        {MODE_ITEMS.map(({ key, label }) => (
-          <button
-            aria-pressed={visibleMode === key}
-            className={visibleMode === key ? "active" : undefined}
-            key={key}
-            onClick={() => onSelectMode(key)}
-            type="button"
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
     </>
   );
 }

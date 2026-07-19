@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import BoardSnippet from "../components/BoardSnippet";
 import PlayAnotherCard from "../components/PlayAnotherCard";
-import { dailyDateForChallenge, previousCentralDate } from "../domain/challengeSelection";
+import { boardSnippetRowsFromBoard } from "../domain/boardSnippet";
+import {
+  dailyDateForChallenge,
+  previousCentralDate,
+  type HomeHeroSelection,
+} from "../domain/challengeSelection";
 import { dailyFlavorLabel } from "../domain/dailyEditorial";
 import { dailyTrendGuard } from "../domain/dailyTrends";
 import { formatTimeAndClicks } from "../domain/formatting";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
-import type { AccountStats, Challenge, RankedLeaderboardRow } from "../domain/types";
+import type { AccountStats, Challenge } from "../domain/types";
+import type { ChallengeBoardResponse } from "../server/contracts";
 import { ShareResultButton } from "../race/shared";
 import type { VWikiRaceApiClient } from "../services/vwikiRaceApiClient";
 
@@ -15,29 +21,29 @@ type DailyState = "not-attempted" | "dnf" | "finished";
 /**
  * Home v2 (Increment 2 Task 2): the stateful daily hub (UX redesign spec,
  * Home §stateful). Reads today's daily as one of three conditions - not
- * attempted, attempted-not-finished (DNF), finished - derived entirely from
- * existing data: `heroChallenge` (today's real daily, or the pre-redesign
- * default-challenge fallback when the catalog has none - see AppShell) and
- * that challenge's own leaderboard, fetched here directly (no new
- * endpoint). Own row = a leaderboard row whose accountId matches the
- * current identity (works after a guest->claimed upgrade too, since claims
- * carry the same canonical accountId - see server's account_aliases
- * resolution). `sessionDnfChallengeIds` covers the one gap a leaderboard
- * can't: a 0-click abandon leaves no row at all, so App.tsx remembers "ended
- * a run for this challenge this session" locally for that case only (never
- * used for the teaching gate, which stays server-derived - migration note
- * iii).
+ * attempted, attempted-not-finished (DNF), finished - derived from the
+ * DEDUPED board endpoint (`GET /challenges/{id}/board`, desktop-pass FIX 3:
+ * the raw per-attempt leaderboard listed the same account once per run, so
+ * "Yesterday's results" could show one player twice; the board is one row
+ * per canonical account, placements first, invariant-2-correct server-side).
+ * Finished = your accountId is in `placements`; DNF = it's in `dnfs` (or
+ * `sessionDnfChallengeIds` - a 0-click abandon leaves no board row at all,
+ * so App.tsx remembers "ended a run for this challenge this session"
+ * locally for that case only; never used for the teaching gate, which stays
+ * server-derived - migration note iii). AccountId matching works after a
+ * guest->claimed upgrade too, since claims carry the same canonical
+ * accountId - see the server's account_aliases resolution.
  *
- * Old how-to-play copy is gone - the app-shell teaching gate supersedes it.
- * The embedded ChallengeBrowser/target-preview card from Home v1 are gone
- * too - Browse now owns the library, and the Pre-race preview beat owns the
- * target blurb; Home's hero only needs the pair + a Race button.
+ * The hero itself is `selectHomeHeroChallenge`'s pick (FIX 4): today's real
+ * daily post-drop; YESTERDAY's daily pre-drop (badged honestly, with the
+ * 5:00 AM Central drop line - it's still playable); the pre-redesign
+ * default-challenge fallback only when the catalog has no daily at all.
  */
 export default function Home({
   accountStats,
   apiClient,
   challenges,
-  heroChallenge,
+  hero,
   identityAccountId,
   onGoToBoards,
   onOpenChallenge,
@@ -48,9 +54,7 @@ export default function Home({
   raceBusy,
   randomChallengeBusy,
   randomChallengeError,
-  selectedChallengeId,
   sessionDnfChallengeIds,
-  sharedLeaderboard,
   todayCentral,
 }: {
   // Increment 4 (UX redesign spec, Home §Pre-play/§Post-play): the guarded
@@ -61,7 +65,7 @@ export default function Home({
   accountStats: AccountStats | null;
   apiClient: VWikiRaceApiClient;
   challenges: Challenge[];
-  heroChallenge: Challenge | null;
+  hero: HomeHeroSelection | null;
   identityAccountId: string | null;
   onGoToBoards: () => void;
   // Play-another's suggestion opens Challenge Detail - same route as
@@ -79,16 +83,10 @@ export default function Home({
   raceBusy: boolean;
   randomChallengeBusy: boolean;
   randomChallengeError: string | null;
-  // The app shell already fetches/refreshes a leaderboard for whatever
-  // challenge is currently selected elsewhere (Boards/Detail) - when that
-  // happens to be today's daily too (the common case: nothing else has been
-  // browsed yet), Home reuses it instead of firing a second, redundant
-  // request for the exact same endpoint.
-  selectedChallengeId: string | null;
   sessionDnfChallengeIds: ReadonlySet<string>;
-  sharedLeaderboard: RankedLeaderboardRow[];
   todayCentral: string;
 }) {
+  const heroChallenge = hero?.challenge ?? null;
   const yesterdayCentral = useMemo(
     () => previousCentralDate(todayCentral),
     [todayCentral],
@@ -101,49 +99,50 @@ export default function Home({
     [challenges, yesterdayCentral],
   );
 
-  const heroMatchesSelected = Boolean(heroChallenge) && selectedChallengeId === heroChallenge?.id;
-  const [independentTodayBoard, setIndependentTodayBoard] = useState<RankedLeaderboardRow[]>([]);
-  const [yesterdayBoard, setYesterdayBoard] = useState<RankedLeaderboardRow[]>([]);
+  const [heroBoard, setHeroBoard] = useState<ChallengeBoardResponse | null>(null);
+  const [independentYesterdayBoard, setIndependentYesterdayBoard] =
+    useState<ChallengeBoardResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    if (!heroChallenge || heroMatchesSelected) {
-      // Nothing to fetch, or the app shell's own selection already covers
-      // this exact challenge - see sharedLeaderboard above.
-      return;
-    }
-    void apiClient.listLeaderboard(heroChallenge.id)
-      .then((rows) => {
-        if (!cancelled) setIndependentTodayBoard(rows);
+    if (!heroChallenge) return;
+    void apiClient.getChallengeBoard(heroChallenge.id)
+      .then((response) => {
+        if (!cancelled) setHeroBoard(response);
       })
       .catch(() => {
-        if (!cancelled) setIndependentTodayBoard([]);
+        // Same convention as Boards' daily views: a failed board read renders
+        // as "no results yet" rather than blocking the hero itself.
+        if (!cancelled) setHeroBoard(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [apiClient, heroChallenge?.id, heroMatchesSelected]);
-  const todayBoard = heroMatchesSelected ? sharedLeaderboard : independentTodayBoard;
+  }, [apiClient, heroChallenge?.id]);
+
+  // Pre-drop (FIX 4) the hero IS yesterday's daily - reuse its board rather
+  // than fetching the identical endpoint twice.
+  const yesterdayIsHero = Boolean(yesterdaysDaily) && yesterdaysDaily?.id === heroChallenge?.id;
 
   useEffect(() => {
     let cancelled = false;
-    if (!yesterdaysDaily) {
-      setYesterdayBoard([]);
+    if (!yesterdaysDaily || yesterdayIsHero) {
+      setIndependentYesterdayBoard(null);
       return;
     }
-    void apiClient.listLeaderboard(yesterdaysDaily.id)
-      .then((rows) => {
-        if (!cancelled) setYesterdayBoard(rows);
+    void apiClient.getChallengeBoard(yesterdaysDaily.id)
+      .then((response) => {
+        if (!cancelled) setIndependentYesterdayBoard(response);
       })
       .catch(() => {
-        if (!cancelled) setYesterdayBoard([]);
+        if (!cancelled) setIndependentYesterdayBoard(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [apiClient, yesterdaysDaily?.id]);
+  }, [apiClient, yesterdaysDaily?.id, yesterdayIsHero]);
 
-  if (!heroChallenge) {
+  if (!hero || !heroChallenge) {
     return (
       <section className="home-layout">
         <section className="empty-state">
@@ -154,57 +153,76 @@ export default function Home({
     );
   }
 
-  const myRows = identityAccountId
-    ? todayBoard.filter((row) => row.accountId === identityAccountId)
-    : [];
+  // Guard against a stale board briefly surviving a hero change (same
+  // `board.challengeId === active.id` check Boards uses).
+  const heroBoardMatches = heroBoard?.challengeId === heroChallenge.id ? heroBoard : null;
+  const yesterdayBoard = yesterdayIsHero
+    ? heroBoardMatches
+    : independentYesterdayBoard && independentYesterdayBoard.challengeId === yesterdaysDaily?.id
+      ? independentYesterdayBoard
+      : null;
+
+  const myPlacement = identityAccountId && heroBoardMatches
+    ? heroBoardMatches.placements.find((row) => row.accountId === identityAccountId) ?? null
+    : null;
+  const myDnf = identityAccountId && heroBoardMatches
+    ? heroBoardMatches.dnfs.find((row) => row.accountId === identityAccountId) ?? null
+    : null;
   // Invariant 2: "A completion is permanent... A later DNF never demotes a
-  // prior checkmark." - a completed row always wins over a DNF row or the
-  // local session flag, regardless of which happened more recently.
-  const myCompletedRow = myRows.find((row) => row.status === "completed") ?? null;
-  const myDnfRow = myRows.find((row) => row.status === "abandoned") ?? null;
-  const dailyState: DailyState = myCompletedRow
+  // prior checkmark." - the board endpoint already resolves this server-side
+  // (an account with a completed run appears ONLY in placements), so a
+  // placement row always wins here by construction.
+  const dailyState: DailyState = myPlacement
     ? "finished"
-    : myDnfRow || sessionDnfChallengeIds.has(heroChallenge.id)
+    : myDnf || sessionDnfChallengeIds.has(heroChallenge.id)
       ? "dnf"
       : "not-attempted";
 
-  const yesterdayMyRow = identityAccountId
-    ? yesterdayBoard.find((row) => row.accountId === identityAccountId) ?? null
-    : null;
+  // FIX 4 framing: pre-drop the hero is yesterday's still-playable daily and
+  // must say so - badge it explicitly and tell the player when the next one
+  // lands, instead of silently presenting a stand-in as "the daily".
+  const heroIsYesterday = hero.kind === "yesterday-daily";
   const flavorBadge = heroChallenge.dailyFeature
-    ? dailyFlavorLabel(heroChallenge.dailyFeature.flavor)
+    ? heroIsYesterday
+      ? `Yesterday's daily · ${dailyFlavorLabel(heroChallenge.dailyFeature.flavor)}`
+      : dailyFlavorLabel(heroChallenge.dailyFeature.flavor)
     : null;
+  const heroBoardTitle = heroIsYesterday ? "Yesterday's board" : "Today's board";
 
   return (
     <section className="home-layout">
-      <div className="daily-hero challenge-route" aria-label="Today's daily">
-        <div className="challenge-meta">
-          {flavorBadge ? <span className="daily-badge">{flavorBadge}</span> : null}
-        </div>
-        <strong>
-          {heroChallenge.start.title} <span className="route-arrow">{"->"}</span> {heroChallenge.target.title}
-        </strong>
+      <div
+        className="daily-hero challenge-route"
+        aria-label={heroIsYesterday ? "Yesterday's daily" : "Today's daily"}
+      >
+        {/* FIX 5: badge + title + status copy grouped left/top; the Race
+            button is a sibling so CSS can dock it right on desktop and
+            stretch it full-width on mobile - no giant empty middle. */}
+        <div className="daily-hero-copy">
+          <div className="challenge-meta">
+            {flavorBadge ? <span className="daily-badge">{flavorBadge}</span> : null}
+          </div>
+          <strong>
+            {heroChallenge.start.title} <span className="route-arrow">{"->"}</span> {heroChallenge.target.title}
+          </strong>
 
-        {dailyState === "finished" && myCompletedRow ? (
-          <p className="daily-hero-status daily-hero-done">
-            {"✓"} DONE · You finished #{myCompletedRow.rank} ·{" "}
-            {formatTimeAndClicks(myCompletedRow.elapsedMs, myCompletedRow.clickCount)}
-          </p>
-        ) : dailyState === "dnf" ? (
-          <>
+          {dailyState === "finished" && myPlacement ? (
+            <p className="daily-hero-status daily-hero-done">
+              {"✓"} DONE · You finished #{myPlacement.placement} ·{" "}
+              {formatTimeAndClicks(myPlacement.elapsedMs, myPlacement.clickCount)}
+            </p>
+          ) : dailyState === "dnf" ? (
             <p className="daily-hero-status daily-hero-dnf">Last try: DNF</p>
-            <div className="player-gate">
-              <button
-                className="start-race-button"
-                disabled={raceBusy}
-                onClick={() => onRaceChallenge(heroChallenge.id)}
-                type="button"
-              >
-                Try again
-              </button>
-            </div>
-          </>
-        ) : (
+          ) : null}
+
+          {/* Finished state already closes with the "come defend your spot"
+              ritual line below - don't say "drops 5:00 AM" twice. */}
+          {heroIsYesterday && dailyState !== "finished" ? (
+            <p className="ritual-line muted">New daily drops 5:00 AM Central.</p>
+          ) : null}
+        </div>
+
+        {dailyState !== "finished" ? (
           <div className="player-gate">
             <button
               className="start-race-button"
@@ -212,19 +230,18 @@ export default function Home({
               onClick={() => onRaceChallenge(heroChallenge.id)}
               type="button"
             >
-              {"▶"} Race
+              {dailyState === "dnf" ? "Try again" : `${"▶"} Race`}
             </button>
           </div>
-        )}
+        ) : null}
       </div>
 
       {dailyState !== "finished" ? <StreakTrendRow stats={accountStats} /> : null}
 
-      {dailyState !== "finished" && yesterdaysDaily ? (
+      {dailyState !== "finished" && yesterdaysDaily && !yesterdayIsHero ? (
         <BoardSnippet
           title="Yesterday's results"
-          leaderboard={yesterdayBoard}
-          highlightRunId={yesterdayMyRow?.runId ?? null}
+          rows={yesterdayBoard ? boardSnippetRowsFromBoard(yesterdayBoard, identityAccountId) : []}
         >
           <button
             className="link-button"
@@ -236,19 +253,18 @@ export default function Home({
         </BoardSnippet>
       ) : null}
 
-      {dailyState === "finished" && myCompletedRow ? (
+      {dailyState === "finished" && myPlacement ? (
         <>
           <BoardSnippet
-            title="Today's board"
-            leaderboard={todayBoard}
-            highlightRunId={myCompletedRow.runId}
+            title={heroBoardTitle}
+            rows={heroBoardMatches ? boardSnippetRowsFromBoard(heroBoardMatches, identityAccountId) : []}
           />
 
           <ShareResultButton
             challenge={heroChallenge}
-            clicks={myCompletedRow.clickCount}
-            elapsedMs={myCompletedRow.elapsedMs}
-            rank={myCompletedRow.rank}
+            clicks={myPlacement.clickCount}
+            elapsedMs={myPlacement.elapsedMs}
+            rank={myPlacement.placement}
           />
 
           <PlayAnotherCard

@@ -1,5 +1,6 @@
 import { useCallback, useRef, type FocusEvent, type MouseEvent, type PointerEvent } from "react";
 import BoardSnippet from "../components/BoardSnippet";
+import { boardSnippetRowsFromLeaderboard } from "../domain/boardSnippet";
 import PlayAnotherCard from "../components/PlayAnotherCard";
 import { dailyDateForChallenge } from "../domain/challengeSelection";
 import { compressPathForStrip } from "../domain/pathCompression";
@@ -156,8 +157,7 @@ export default function RaceResults({
 
         <BoardSnippet
           title={isDailyToday ? "Today's board" : "Leaderboard"}
-          leaderboard={leaderboard}
-          highlightRunId={outcome.runId}
+          rows={boardSnippetRowsFromLeaderboard(leaderboard, outcome.runId)}
         />
 
         <PlayAnotherCard

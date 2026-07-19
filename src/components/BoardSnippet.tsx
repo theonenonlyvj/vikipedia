@@ -1,28 +1,30 @@
 import type { ReactNode } from "react";
+import type { BoardSnippetRow } from "../domain/boardSnippet";
 import { formatTimeAndClicks } from "../domain/formatting";
-import type { RankedLeaderboardRow } from "../domain/types";
 
 /**
  * Shared "top-3, with your row highlighted (and appended if it's outside the
  * top 3)" board rendering (invariant 1) - used by Results' board snippet and
  * Home's yesterday's-results/today's-board cards (UX redesign spec), so the
- * two screens can never drift on this shape. Originally private to
- * RaceResults.tsx; extracted here once Home needed the identical rendering.
+ * two screens can never drift on this shape. Renders the neutral
+ * `BoardSnippetRow` shape (src/domain/boardSnippet.ts): Home feeds it the
+ * DEDUPED board endpoint's rows (one per canonical account - desktop-pass
+ * FIX 3; the raw per-attempt leaderboard listed the same account twice),
+ * while Results still feeds it per-attempt leaderboard rows highlighting the
+ * exact run just finished.
  */
 export default function BoardSnippet({
   title,
-  leaderboard,
-  highlightRunId,
+  rows,
   emptyLabel = "No completed runs yet.",
   children,
 }: {
   title: string;
-  leaderboard: RankedLeaderboardRow[];
-  highlightRunId: string | null;
+  rows: BoardSnippetRow[];
   emptyLabel?: string;
   children?: ReactNode;
 }) {
-  if (leaderboard.length === 0) {
+  if (rows.length === 0) {
     return (
       <section aria-label={title} className="board-snippet">
         <h3>{title}</h3>
@@ -32,31 +34,25 @@ export default function BoardSnippet({
     );
   }
 
-  const top3 = leaderboard.slice(0, 3);
-  const highlightedRow = highlightRunId
-    ? leaderboard.find((row) => row.runId === highlightRunId) ?? null
-    : null;
-  const highlightedInTop3 = Boolean(highlightedRow) &&
-    top3.some((row) => row.runId === highlightedRow?.runId);
-  const visibleRows = highlightedRow && !highlightedInTop3 ? [...top3, highlightedRow] : top3;
+  const top3 = rows.slice(0, 3);
+  const yourRow = rows.find((row) => row.isYou) ?? null;
+  const yourRowInTop3 = Boolean(yourRow) && top3.some((row) => row.key === yourRow?.key);
+  const visibleRows = yourRow && !yourRowInTop3 ? [...top3, yourRow] : top3;
 
   return (
     <section aria-label={title} className="board-snippet">
       <h3>{title}</h3>
       <ol>
-        {visibleRows.map((row) => {
-          const isYou = row.runId === highlightRunId;
-          return (
-            <li className={isYou ? "is-you" : undefined} key={row.runId}>
-              <span className="rank">{row.status === "abandoned" ? "DNF" : `#${row.rank}`}</span>
-              <span>
-                {row.displayName}
-                {isYou ? <span className="muted"> (you)</span> : null}
-              </span>
-              <span>{formatTimeAndClicks(row.elapsedMs, row.clickCount)}</span>
-            </li>
-          );
-        })}
+        {visibleRows.map((row) => (
+          <li className={row.isYou ? "is-you" : undefined} key={row.key}>
+            <span className="rank">{row.rankLabel}</span>
+            <span>
+              {row.displayName}
+              {row.isYou ? <span className="muted"> (you)</span> : null}
+            </span>
+            <span>{formatTimeAndClicks(row.elapsedMs, row.clickCount)}</span>
+          </li>
+        ))}
       </ol>
       {children}
     </section>
