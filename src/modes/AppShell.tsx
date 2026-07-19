@@ -196,12 +196,15 @@ export default function AppShell({
   return (
     <>
       <header className="shell-topbar">
-        {/* PKG-04: dropped the mini "VWiki" kicker that used to stack above
-            this h1 - every mockup shows a single wordmark, and repeating
-            the brand name here (unlike the identity dialog's "VWiki" kicker
-            over a *different* heading, "Save your stats") just duplicated
-            it. */}
+        {/* FB-1: PKG-04 had dropped the mini kicker above this h1 as a
+            duplicate of the wordmark. Owner asked for it back, reading the
+            family brand "VGames" instead of "VWiki" - it's the one brand
+            kicker now, not a repeat of the mode's own name. Sibling (not
+            nested) to match the identity-dialog / admin-heading kicker
+            pattern elsewhere, so the h1's accessible name stays "VWiki
+            Race" unchanged. */}
         <div className="brand-lockup" aria-label="VWiki Race">
+          <span className="vwiki-mark">VGames</span>
           <h1>VWiki Race</h1>
         </div>
 

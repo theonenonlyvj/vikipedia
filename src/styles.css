@@ -420,6 +420,13 @@ ol {
   min-width: 0;
 }
 
+/* FB-1: restored kicker, reading the family brand "VGames" instead of the
+   mode's own name - coral is otherwise reserved for race-commit/destructive
+   actions, so this is now the one deliberate exception (brand mark). */
+.brand-lockup .vwiki-mark {
+  color: var(--coral);
+}
+
 .vwiki-mark {
   color: var(--text-bright);
   display: block;
