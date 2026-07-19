@@ -99,9 +99,10 @@ ol {
 
 .app-shell {
   min-height: 100vh;
-  /* Clears the fixed .bottom-nav mode shell (Increment 2) below the content
-     - a no-op while the race takeover or the admin bypass is on screen,
-     since neither renders that nav. */
+  /* Clears the fixed .mode-nav bar (mobile placement) below the content -
+     a no-op while the race takeover or the admin bypass is on screen,
+     since neither renders that nav; at >=880px the desktop block drops
+     this clearance (the nav is a top bar there). */
   padding: 20px 20px calc(92px + env(safe-area-inset-bottom));
 }
 
@@ -301,6 +302,7 @@ ol {
 .error-banner,
 .run-notice,
 .loading-text,
+.teaching-gate-strip,
 .content-shell {
   width: min(1320px, 100%);
   margin-inline: auto;
@@ -309,8 +311,9 @@ ol {
 /*
  * Mode shell (Increment 2): a slim persistent brand strip replaces the old
  * game-header's 4-column layout (current challenge/Start/account chip all
- * moved into Home/You, per the redesign spec) plus the bottom-nav mode
- * switcher below (`.bottom-nav`) replaces `.tabbar`.
+ * moved into Home/You, per the redesign spec) plus the mode-nav switcher
+ * (`.mode-nav` - fixed-bottom on mobile, inline here on desktop) replaces
+ * `.tabbar`. Flex so the brand sits left and the nav right at >=880px.
  */
 .shell-topbar {
   display: flex;
@@ -606,22 +609,24 @@ h1 {
 }
 
 /*
- * Bottom-nav mode shell (Increment 2): fixed to the viewport bottom on
- * every breakpoint (mobile-first; desktop is the same nav, just centered
- * under the max-width column below) - replaces the old top `.tabbar`.
- * `.app-shell`'s bottom padding (below) keeps shell content clear of it.
+ * Mode nav (Increment 2, reworked in the desktop pass - FIX 2): ONE element
+ * (inside .shell-topbar - see AppShell.tsx) with two placements. Mobile-first
+ * base: a full-width bar fixed to the viewport bottom - opaque background,
+ * top border, safe-area padding - with `.app-shell`'s bottom padding keeping
+ * content clear of it (the old min(560px) centered strip read as a floating
+ * island on anything wider than a phone). At >=880px the desktop block at
+ * the end of this file lays the same element out inline in the topbar,
+ * docked right of the logo.
  */
-.bottom-nav {
+.mode-nav {
   position: fixed;
   inset: auto 0 0 0;
   z-index: 30;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
-  width: min(560px, 100%);
-  margin-inline: auto;
-  border: 1px solid var(--line);
-  border-bottom: 0;
+  width: 100%;
+  border-top: 1px solid var(--line);
   background: rgba(6, 16, 20, 0.96);
   backdrop-filter: blur(16px);
   box-shadow: 0 -12px 36px rgba(0, 0, 0, 0.32);
@@ -629,7 +634,7 @@ h1 {
     max(8px, env(safe-area-inset-left));
 }
 
-.bottom-nav button {
+.mode-nav button {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -644,19 +649,19 @@ h1 {
   clip-path: none;
 }
 
-.bottom-nav button:not(:disabled):hover {
+.mode-nav button:not(:disabled):hover {
   box-shadow: none;
   transform: none;
   color: #eef7f8;
 }
 
-.bottom-nav button.active {
+.mode-nav button.active {
   background: var(--coral);
   border-color: #ffb4a6;
   color: #170908;
 }
 
-.bottom-nav button.active:not(:disabled):hover {
+.mode-nav button.active:not(:disabled):hover {
   color: #170908;
 }
 
@@ -748,6 +753,22 @@ h1 {
   border-left: 5px solid var(--coral);
 }
 
+/* FIX 5: badge/title/status grouped as one block; the Race button
+   (.player-gate) is its sibling - stacked below on mobile, docked right by
+   the desktop block at the end of this file. */
+.daily-hero-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+@media (max-width: 879.98px) {
+  .daily-hero .player-gate,
+  .daily-hero .player-gate button {
+    width: 100%;
+  }
+}
+
 .daily-hero-status {
   margin: 8px 0 0;
   font-weight: 850;
@@ -789,7 +810,7 @@ h1 {
    bypass screen, and You's account chip/claim CTA. */
 
 /* Boards v1 (Increment 3): the [Today][Yesterday] segmented control - reuses
-   `.bottom-nav`'s pill-toggle look (44px targets, coral active state)
+   `.mode-nav`'s pill-toggle look (44px targets, coral active state)
    rather than inventing a second tabbar pattern.
    Bug B fix: with all 5 segments (Today/Yesterday/7d/30d/Lifetime, real
    words - no abbreviating "Lifetime") the row's content width exceeds a
@@ -2210,7 +2231,9 @@ h1 {
 
 @media (max-width: 980px) {
   .app-shell {
-    padding: 10px;
+    /* Keep the fixed-nav clearance - dropping it here was why short pages
+       ended with content hidden under (or the nav floating over) the bar. */
+    padding: 10px 10px calc(84px + env(safe-area-inset-bottom));
   }
 
   .challenge-route {
@@ -2328,7 +2351,7 @@ h1 {
     font-size: 0.72rem;
   }
 
-  .bottom-nav button {
+  .mode-nav button {
     padding-inline: 5px;
     font-size: 0.72rem;
   }
@@ -2493,9 +2516,87 @@ h1 {
 }
 
 @media (max-width: 350px) {
-  .bottom-nav button {
+  .mode-nav button {
     padding-inline: 2px;
     font-size: 0.62rem;
+  }
+}
+
+/*
+ * Desktop pass (>=880px) - FIX 1/2/5. Everything above stays the mobile
+ * layout; this block must come after the max-width blocks so it wins the
+ * 880-980px overlap on equal specificity.
+ *
+ * - FIX 1: one centered ~820px content column for all four modes (the race
+ *   takeover keeps its wide 1320px reading layout - untouched). Board rows
+ *   pack rank/name/score adjacent instead of pinning name far-left and
+ *   time-clicks far-right across the card.
+ * - FIX 2: the same .mode-nav element docks inline in the topbar - logo
+ *   left, the four items right. No fixed bottom bar, so the shell's bottom
+ *   clearance goes back to normal padding.
+ * - FIX 5: the hero becomes copy-left / Race-button-right, vertically
+ *   centered - no giant empty middle.
+ */
+@media (min-width: 880px) {
+  .shell-topbar {
+    justify-content: space-between;
+    gap: 18px;
+    width: min(820px, 100%);
+    padding: 14px 0 0;
+  }
+
+  .mode-nav {
+    position: static;
+    display: flex;
+    width: auto;
+    border: 0;
+    background: transparent;
+    backdrop-filter: none;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .mode-nav button {
+    flex-direction: row;
+    min-height: 40px;
+    padding: 8px 14px;
+  }
+
+  .app-shell {
+    /* No fixed bottom bar to clear at this width. */
+    padding: 20px 20px 40px;
+  }
+
+  .content-shell,
+  .error-banner,
+  .run-notice,
+  .loading-text,
+  .teaching-gate-strip,
+  .site-footer {
+    width: min(820px, 100%);
+  }
+
+  .board-snippet li,
+  .trend-row-toggle {
+    grid-template-columns: 2.4em minmax(0, max-content) max-content;
+    justify-content: start;
+    column-gap: 16px;
+  }
+
+  .board-snippet.board-trend-unranked li {
+    grid-template-columns: minmax(0, max-content) max-content;
+    justify-content: start;
+    column-gap: 16px;
+  }
+
+  .daily-hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 18px;
+  }
+
+  .daily-hero .player-gate {
+    align-items: center;
   }
 }
 
