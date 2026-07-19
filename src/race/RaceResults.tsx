@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type FocusEvent, type MouseEvent, type PointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type MouseEvent,
+  type PointerEvent,
+  type RefObject,
+} from "react";
 import BoardSnippet from "../components/BoardSnippet";
 import { boardSnippetRowsForResult } from "../domain/boardSnippet";
 import PlayAnotherCard from "../components/PlayAnotherCard";
@@ -125,6 +134,27 @@ export default function RaceResults({
     stableArticlePrewarm(event.target);
   }, [stableArticlePrewarm]);
 
+  // PKG-12 (council 2026-07-19): a DNF lands here with nothing to receive
+  // focus at all - WikipediaArticlePanel only renders below for the
+  // "completed" outcome, so a keyboard/screen-reader user got silence.
+  // Scoped to the DNF outcome only: the "completed" case already has a
+  // focus target (WikipediaArticlePanel's own mount effect, RaceMode.tsx,
+  // focuses the article heading - React fires that child effect before
+  // this parent one on mount, so adding an unconditional focus-here effect
+  // would silently steal focus from an existing, already-tested behavior
+  // for no reason - "Fruit"'s article heading is the right landing spot
+  // when there's an article to land on).
+  const resultHeadingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (outcome.status === "dnf") {
+      resultHeadingRef.current?.focus();
+    }
+    // Mount-only: RaceFlow always fully unmounts/remounts RaceResults
+    // between runs (RaceMode <-> RaceResults, never the same instance
+    // re-purposed), so `outcome` can't change under an already-mounted
+    // instance.
+  }, []);
+
   const challenge = outcome.status === "completed" ? outcome.session.challenge : outcome.challenge;
 
   const [board, setBoard] = useState<ChallengeBoardResponse>(() => emptyBoard(challenge.id));
@@ -184,7 +214,11 @@ export default function RaceResults({
         {outcome.status === "completed" ? (
           <CompletedResultHeader isDailyToday={isDailyToday} outcome={outcome} />
         ) : (
-          <DnfResultHeader clicks={outcome.clicks} elapsedMs={outcome.elapsedMs} />
+          <DnfResultHeader
+            clicks={outcome.clicks}
+            elapsedMs={outcome.elapsedMs}
+            headingRef={resultHeadingRef}
+          />
         )}
 
         {showFirstFinishRitual ? (
@@ -303,7 +337,20 @@ function CompletedResultHeader({
   );
 }
 
-function DnfResultHeader({ clicks, elapsedMs }: { clicks: number; elapsedMs: number }) {
+function DnfResultHeader({
+  clicks,
+  elapsedMs,
+  headingRef,
+}: {
+  clicks: number;
+  elapsedMs: number;
+  // PKG-12: the DNF outcome has no article panel to land focus on (unlike
+  // "completed", where WikipediaArticlePanel's own mount effect already
+  // focuses the article heading) - nothing received focus here at all.
+  // tabIndex=-1 + a mount-effect focus() call (RaceResults) makes this the
+  // landing spot for a keyboard/screen-reader user arriving at a DNF.
+  headingRef: RefObject<HTMLHeadingElement | null>;
+}) {
   return (
     <>
       {/* PKG-05: "DNF" is never spelled out anywhere else in the app - a
@@ -311,7 +358,7 @@ function DnfResultHeader({ clicks, elapsedMs }: { clicks: number; elapsedMs: num
           the one place that can carry the expansion without disturbing the
           compact "DNF · time · clicks" score line invariant 1 requires. */}
       <span className="result-kicker">DNF — Did not finish</span>
-      <h2>That one got away</h2>
+      <h2 ref={headingRef} tabIndex={-1}>That one got away</h2>
       {/* Invariant 1 ("Time AND clicks, always") applies to DNF too. */}
       <p className="result-score">DNF · {formatTimeAndClicks(elapsedMs, clicks)}</p>
     </>

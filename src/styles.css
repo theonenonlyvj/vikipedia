@@ -238,6 +238,30 @@ ol {
   line-height: 0.9;
 }
 
+/* PKG-12 (council 2026-07-19): the how-to-play popup's own box - deliberately
+   not `.identity-dialog` (see TeachingGate.tsx's comment). Modeled on
+   `.recovery-notice`'s already-lighter treatment (no shadow, smaller clip,
+   ui-font) rather than a second competing "lightweight dialog" pattern, so a
+   3-line tip stops wearing signup-form chrome (spec calls this a
+   "quick-dismiss popup"). */
+.teaching-gate-dialog {
+  width: min(440px, 100%);
+  border: 1px solid var(--line);
+  background: var(--ink-raised);
+  color: var(--text);
+  padding: 18px;
+  clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px);
+  font-family: var(--viota-ui-font);
+}
+
+.teaching-gate-dialog h2 {
+  color: #f7feff;
+  font-family: var(--viota-display-font);
+  font-size: 1.8rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
 .icon-button {
   display: grid;
   width: 44px;
@@ -503,10 +527,17 @@ h1 {
   padding: 0 10px;
 }
 
-.name-control input:focus,
-.name-control select:focus {
+.name-control input:focus-visible,
+.name-control select:focus-visible {
+  /* PKG-12 (council 2026-07-19): this used to win over the app's global
+     `input:focus-visible` ring (styles.css above) via class specificity
+     while drawing a near-invisible rgba-cyan-at-0.22 outline (~1.7:1
+     contrast) - the one focus indicator in the app that didn't match. Now
+     switched to `:focus-visible` (keyboard-only, like the global rule) and
+     the same solid, high-contrast ring every other control uses. */
   border-color: #0debd7;
-  outline: 2px solid rgba(13, 235, 215, 0.22);
+  outline: 3px solid #ffffff;
+  outline-offset: 3px;
 }
 
 .name-hint {
@@ -584,7 +615,12 @@ h1 {
 
 .target-reference summary {
   display: grid;
-  min-height: 36px;
+  /* PKG-12 (council 2026-07-19, Judge A verified): this was mobile-only
+     (44px inside the max-width:640px query below), 36px at every wider
+     width - including tablet/touch-laptop widths where this disclosure is
+     equally tap-driven. Made the base rule so the touch target holds at
+     every width, not just phones. */
+  min-height: 44px;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
   align-items: center;
@@ -2569,7 +2605,8 @@ h1 {
   }
 
   .target-reference summary {
-    min-height: 44px;
+    /* min-height: 44px is now the base rule above (PKG-12) - only the
+       tighter mobile gap remains here. */
     gap: 5px;
   }
 
@@ -2618,7 +2655,8 @@ h1 {
   }
 
   .identity-dialog,
-  .end-run-dialog {
+  .end-run-dialog,
+  .teaching-gate-dialog {
     max-height: calc(100vh - 20px);
     max-height: calc(100dvh - 20px);
     overflow-y: auto;

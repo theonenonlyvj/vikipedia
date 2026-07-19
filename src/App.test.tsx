@@ -847,6 +847,37 @@ describe("VWiki Race app", () => {
     ).toHaveFocus();
   });
 
+  it("opens the real Wikipedia article in a new tab on a modifier-click, without counting a click or navigating in-app (PKG-12)", async () => {
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+
+    // The anchor's own href is the in-app synthetic `#article:Fruit` hash
+    // (there is no hash router) - a bare skip of preventDefault would open a
+    // new tab to nothing useful, so this must read the real Wikipedia URL
+    // from data-vwiki-race-href instead.
+    fireEvent.click(screen.getByRole("link", { name: /fruit/i }), { ctrlKey: true });
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://en.wikipedia.org/wiki/Fruit",
+      "_blank",
+      "noopener",
+    );
+    // Still mid-race on Apple - the in-app SPA nav never fired alongside the
+    // new tab, during an ACTIVE, timed run (a stray Cmd-click must not
+    // silently cost the player a move).
+    expect(screen.getByRole("heading", { name: "Apple" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Fruit" })).toBeNull();
+    expect(clickRequestBodies(fetchImpl)).toHaveLength(0);
+
+    openSpy.mockRestore();
+  });
+
   it("scrolls to the accepted article top, not an unaccepted optimistic page", async () => {
     const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
     const scrollIntoView = vi.fn();
@@ -1345,6 +1376,14 @@ describe("VWiki Race app", () => {
     await user.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
     expect(document.body.style.overflow).toBe("hidden");
+    // PKG-12 (council 2026-07-19, Judge B): this dialog opens from
+    // PreRacePreview, i.e. while RaceFlow's `.race-takeover` - not
+    // AppShell - is the sibling behind it. A named-class inert list
+    // (`.shell-topbar`/`.content-shell`/`.site-footer`) would be a no-op
+    // here; the generic "inert my own backdrop's siblings" approach must
+    // cover this mount point too.
+    const raceTakeover = document.querySelector(".race-takeover");
+    expect(raceTakeover).toHaveAttribute("inert");
     const close = screen.getByRole("button", { name: /close identity prompt/i });
     await user.click(screen.getByRole("button", { name: /^guest$/i }));
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
@@ -1358,6 +1397,7 @@ describe("VWiki Race app", () => {
     expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull();
     expect(document.body.style.overflow).toBe("");
     expect(document.activeElement).toBe(trigger);
+    expect(raceTakeover).not.toHaveAttribute("inert");
   });
 
   it("offers End Old Run for protocol-1 recovery and sends the recovery abandon", async () => {
@@ -2858,6 +2898,13 @@ describe("VWiki Race app", () => {
       const claimCta = screen.getByRole("region", { name: /claim your stats/i });
       await user.click(within(claimCta).getByRole("button", { name: /claim your stats/i }));
       expect(await screen.findByRole("dialog", { name: /save your stats/i })).toBeVisible();
+
+      // PKG-12 (council 2026-07-19): here AppShell (not RaceFlow) is the
+      // sibling behind the dialog - covers the other real mount point the
+      // generic inert-my-backdrop's-siblings approach must handle.
+      expect(document.querySelector(".shell-topbar")).toHaveAttribute("inert");
+      expect(document.querySelector(".content-shell")).toHaveAttribute("inert");
+      expect(document.querySelector(".site-footer")).toHaveAttribute("inert");
     });
 
     it("does not show the claim CTA in You for an already-claimed account", async () => {
@@ -3332,6 +3379,10 @@ describe("Race flow: full-screen takeover", () => {
     expect(
       within(dialog).getByText(/this cannot be resumed after the server accepts it\./i),
     ).toBeVisible();
+    // PKG-12 (council 2026-07-19, Judge B): End Run is the dialog that most
+    // needs backgrounding - it interrupts a live timed race, and its
+    // sibling is `.race-takeover` (RaceMode), not any AppShell class.
+    expect(document.querySelector(".race-takeover")).toHaveAttribute("inert");
   });
 
   it("shows the DNF Results variant, DNF-aware End Run confirm copy, and elapsed time after abandoning a run with clicks", async () => {
@@ -3359,6 +3410,10 @@ describe("Race flow: full-screen takeover", () => {
     await user.click(within(dialog).getByRole("button", { name: /confirm end run/i }));
 
     expect(await screen.findByText(/that one got away/i)).toBeVisible();
+    // PKG-12 (council 2026-07-19): unlike a completed run (which has an
+    // article panel whose own heading takes focus), a DNF had nothing to
+    // receive focus at all - the result heading is now the landing spot.
+    expect(screen.getByRole("heading", { name: /that one got away/i })).toHaveFocus();
     // Invariant 1 ("Time AND clicks, always") - the DNF headline must carry
     // elapsed time too, not just click count.
     expect(screen.getByText(/dnf · 0:08 · 1 clk/i)).toBeVisible();

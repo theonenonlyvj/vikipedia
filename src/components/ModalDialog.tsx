@@ -28,6 +28,7 @@ export default function ModalDialog({
   returnFocusRef: RefObject<HTMLElement | null>;
   titleId: string;
 }) {
+  const backdropRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const focusCycle = useRef(0);
 
@@ -52,6 +53,40 @@ export default function ModalDialog({
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  // PKG-12 (council 2026-07-19, Judge B): inert every sibling of this
+  // dialog's own backdrop, generically - not a named list of app-shell
+  // classes (`.shell-topbar`/`.content-shell`/`.site-footer`), because
+  // those only exist while AppShell is mounted. Both real call sites can
+  // also open while RaceFlow is mounted instead (End Run mid-race, the
+  // identity dialog from RaceResults' "Claim your spot"), where the
+  // sibling is a single `.race-takeover` div - a literal named-class list
+  // would be a no-op for exactly the dialog that most needs backgrounding.
+  // Walking `.modal-backdrop`'s own DOM siblings covers every mount point
+  // through one shared parent, so a virtual-cursor AT can't wander into
+  // nav/footer/the frozen race behind the dialog.
+  useEffect(() => {
+    const backdrop = backdropRef.current;
+    const parent = backdrop?.parentElement;
+    if (!backdrop || !parent) return;
+    // `setAttribute`/`removeAttribute`, not the `.inert` IDL property - the
+    // attribute is what real browsers key inert-ness off (the property is
+    // just a reflection of it), and it's the only one jsdom's own test
+    // environment actually implements here.
+    const inerted: HTMLElement[] = [];
+    for (const sibling of parent.children) {
+      if (sibling === backdrop || !(sibling instanceof HTMLElement) || sibling.hasAttribute("inert")) {
+        continue;
+      }
+      sibling.setAttribute("inert", "");
+      inerted.push(sibling);
+    }
+    return () => {
+      for (const sibling of inerted) {
+        sibling.removeAttribute("inert");
+      }
     };
   }, []);
 
@@ -85,7 +120,7 @@ export default function ModalDialog({
   }
 
   return (
-    <div className="modal-backdrop" role="presentation">
+    <div className="modal-backdrop" ref={backdropRef} role="presentation">
       <section
         aria-labelledby={titleId}
         aria-modal="true"

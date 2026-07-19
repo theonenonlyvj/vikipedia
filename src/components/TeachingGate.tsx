@@ -62,7 +62,16 @@ function TeachingGatePopup({
 }) {
   return (
     <ModalDialog
-      className="identity-dialog teaching-gate-dialog"
+      // PKG-12 (council 2026-07-19, judge A/owner-proxy): this used to also
+      // carry `identity-dialog` so it could borrow that class's box styling
+      // - but `.modal-backdrop:has(.identity-dialog)` (styles.css) is an
+      // iOS-keyboard-bug fix scoped to the real "Save your stats" dialog,
+      // and matching it here top-anchored this 3-line quick-dismiss popup
+      // with a half-viewport dead zone below it on mobile (mockup-02-howto
+      // vs mobile-02-howto). `.teaching-gate-dialog` now has its own,
+      // lighter rules (styles.css, modeled on `.recovery-notice`) instead
+      // of wearing the signup-form dialog's full chrome.
+      className="teaching-gate-dialog"
       onClose={onClose}
       returnFocusRef={returnFocusRef}
       titleId="teaching-gate-title"

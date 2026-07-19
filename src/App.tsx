@@ -1259,6 +1259,25 @@ export default function App({
       return;
     }
 
+    // PKG-12 (council 2026-07-19, Judge B amendment 2): the anchor's own
+    // `href` is the in-app synthetic `#article:<title>` hash rewritten by
+    // rewriteArticleLinks (services/wikipediaSanitizer.ts) - there is no
+    // hash router anywhere in this app, so simply skipping preventDefault
+    // on a modifier/middle click would open a new tab at this app's own
+    // current URL with a dead fragment, not the Wikipedia article the user
+    // meant to peek at. The real source URL is captured separately in
+    // data-vwiki-race-href - open that instead, and still preventDefault so
+    // the in-app SPA nav (which would also cost a race click) never fires
+    // alongside it.
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) {
+      event.preventDefault();
+      const sourceUrl = link.dataset.vwikiRaceHref;
+      if (sourceUrl) {
+        window.open(sourceUrl, "_blank", "noopener");
+      }
+      return;
+    }
+
     event.preventDefault();
     const title = link.dataset.vwikiRaceTitle;
     if (title) {
