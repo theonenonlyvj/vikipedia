@@ -32,8 +32,14 @@ function emptyBoard(challengeId: string): ChallengeBoardResponse {
  * Beat 3 of the race flow: Results. Two outcomes share this screen -
  * "completed" (target reached) and "dnf" (ended the run via End Run with
  * >=1 click) - per the spec's Race flow section and Home's DNF sub-state
- * language family. Both read from data already fetched elsewhere
- * (leaderboardContext/leaderboard); nothing here calls the network.
+ * language family. FB-7 (owner ruling, 2026-07-19) deliberately does NOT
+ * touch this >=1-click gate: the just-finished run's OWN Results page is a
+ * personal moment, unlike the board/streak/Home-sub-state derivations
+ * elsewhere that now require >= MIN_COUNTED_DNF_CLICKS (2) - a 1-click DNF
+ * still gets its own Results screen here, even though it won't appear on
+ * any board or tick Home into the DNF sub-state. Both outcomes read from
+ * data already fetched elsewhere (leaderboardContext/leaderboard); nothing
+ * here calls the network.
  */
 export type RaceResultOutcome =
   | {
