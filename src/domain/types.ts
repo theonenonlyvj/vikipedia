@@ -227,13 +227,16 @@ export interface AccountStats {
   dailyStreak: number;
   /**
    * Increment 4 (spec §Data requirements - "Rolling avg placement" +
-   * §Boards - the 7d/30d/lifetime participation guard): this account's own
-   * 30-day rolling-placement standing, guard-gated the same way Boards'
-   * trend segments are. `avgPlacement` is only meaningful when `ranked` is
-   * true; a below-guard account still gets `playedCount` so Home/You can
-   * render "N/{guard} dailies" progress copy instead of a bare rejection.
-   * PKG-14: `guard` is this response's own server-computed threshold (reality
-   * -scaled off how many dailies actually exist, not a fixed constant) - Home
+   * §Boards - the 7d/30d/lifetime participation guard); generalized by
+   * FB-10 (owner ruling, 2026-07-20) from daily-only to every challenge:
+   * this account's own 30-day rolling-placement standing across ALL
+   * challenges played (created within that window), guard-gated the same
+   * way Boards' trend segments are. `avgPlacement` is only meaningful when
+   * `ranked` is true; a below-guard account still gets `playedCount` so
+   * Home/You can render "N/{guard} challenges" progress copy instead of a
+   * bare rejection. PKG-14, amended by FB-10: `guard` is this response's own
+   * server-computed threshold (reality-scaled off how many ACTIVE
+   * challenges actually exist in the window, not a fixed constant) - Home
    * reads it off this field the same way Boards reads `BoardsTrendsResponse.
    * guard` (F5 invariant: never re-derived client-side).
    */
@@ -247,16 +250,17 @@ export interface AccountStats {
 
 /**
  * Boards' rolling-trend row (Increment 4, UX redesign spec §Boards -
- * "7d/30d/lifetime" paragraph): one row per canonical account, using the
- * same best-rank-per-account-per-daily definition as `ChallengeBoardPlacement`,
- * aggregated across a window's dailies. A `DailyTrendRankedEntry` has
- * cleared the participation guard (`playedCount >= guard`, and has at least
- * one finished daily to average - F2: `playedCount` alone counts
- * board-visible DNF days too, but an all-DNF account has no `avgPlacement`
- * to rank by and stays unranked); accounts below it appear as
- * `DailyTrendUnrankedEntry` instead, with no `avgPlacement` - council:
- * unranked state "should read as progress toward a goal, not a bare
- * rejection", so `playedCount` is still surfaced.
+ * "7d/30d/lifetime" paragraph; generalized by FB-10, owner ruling
+ * 2026-07-20, from daily-only to every challenge): one row per canonical
+ * account, using the same best-rank-per-account-per-challenge definition as
+ * `ChallengeBoardPlacement`, aggregated across a window's challenges. A
+ * `DailyTrendRankedEntry` has cleared the participation guard (`playedCount
+ * >= guard`, and has at least one finished challenge to average - F2:
+ * `playedCount` alone counts board-visible DNF challenges too, but an
+ * all-DNF account has no `avgPlacement` to rank by and stays unranked);
+ * accounts below it appear as `DailyTrendUnrankedEntry` instead, with no
+ * `avgPlacement` - council: unranked state "should read as progress toward
+ * a goal, not a bare rejection", so `playedCount` is still surfaced.
  */
 export interface DailyTrendRankedEntry {
   accountId: string;
@@ -277,16 +281,21 @@ export interface DailyTrendUnrankedEntry {
  * Lifetime's "Everyone who's played" roster row - EVERY canonical account
  * with ≥1 `board_excluded = 0` run across ANY challenge (daily or custom),
  * not just the ones who've cleared the ranked-trends participation guard.
- * Diagnosis: `listDailyTrends` only ever counts daily-featured challenges,
- * so an account that solely races custom (non-daily) challenges can never
- * appear on 7d/30d/Lifetime, even as "not yet ranked" - this roster is the
- * fix, and it is Lifetime-only (no 7d/30d roster - spec scope). Counts, not
+ * Diagnosis (pre-FB-10): `listDailyTrends` used to only count
+ * daily-featured challenges, so an account that solely raced custom
+ * (non-daily) challenges could never appear on 7d/30d/Lifetime, even as "not
+ * yet ranked" - this roster was the fix. FB-10 (owner ruling, 2026-07-20)
+ * later generalized `listDailyTrends` itself to every challenge, closing
+ * that gap for the ranked/unranked lists too - but this roster still serves
+ * a distinct purpose (below-guard AND below-`MIN_COUNTED_DNF_CLICKS`
+ * accounts included unconditionally) and stays Lifetime-only (no 7d/30d
+ * roster - spec scope). Counts, not
  * a leaderboard: the time+clicks-on-board-rows invariant governs ranked
  * board rows, not this roster (owner-proxy ruling) - `racesStarted`/
  * `finishes`/`wins` are plain counts, never a time. `wins` uses the exact
  * same best-rank-per-account-per-challenge dedup as `DailyTrendRankedEntry`/
  * `ChallengeBoardPlacement` ("the deduped placement rule"), generalized
- * across every challenge instead of one window's dailies; `finishes` is the
+ * across every challenge ever instead of one window's; `finishes` is the
  * simpler raw completed-run count `AccountStats.totals.completed` already
  * uses (no ranked-eligibility filter) - this roster is a friendly census,
  * not a ranking. Alias-resolved through `account_aliases` like every other

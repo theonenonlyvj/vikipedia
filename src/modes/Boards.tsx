@@ -81,7 +81,10 @@ function isTrendSegment(segment: BoardsSegment): segment is TrendSegment {
  * rolling-placement trends (Increment 4), reading `GET
  * /api/v2/boards/trends` - ranked rows that have cleared the participation
  * guard, plus a muted "not yet ranked" section framed as progress ("M/{guard}
- * dailies"), never a bare rejection (council note). All trend copy (the
+ * challenges" - FB-10, owner ruling 2026-07-20, generalized this and every
+ * other trend/guard/rank string from "dailies" to "challenges" once trends
+ * themselves started aggregating over every challenge, not just dailies),
+ * never a bare rejection (council note). All trend copy (the
  * guard number itself, and every "N/{guard}" progress line) reads off the
  * server-echoed `trends.guard` - never re-derived client-side (F5) - so a
  * future guard-formula change can't silently disagree between server and
@@ -503,7 +506,7 @@ export default function Boards({
         ) : (
           <>
             <p className="board-trend-subheader muted">
-              Rolling {TREND_PROSE_LABEL[segment]} · ranked by average placement · play {"≥"}{guard} dailies to rank
+              Rolling {TREND_PROSE_LABEL[segment]} · ranked by average placement · play {"≥"}{guard} challenges to rank
             </p>
 
             <section className="board-snippet" aria-label={`${SEGMENT_LABEL[segment]} rolling trend`}>
@@ -526,7 +529,7 @@ export default function Boards({
                             {isYou ? <span className="muted"> (you)</span> : null}
                           </span>
                           <span>
-                            avg #{row.avgPlacement.toFixed(1)} ({row.playedCount} dailies){" "}
+                            avg #{row.avgPlacement.toFixed(1)} ({row.playedCount} challenges){" "}
                             <span aria-label={trendArrowLabel(row)} className="trend-arrow muted">
                               {trendArrowGlyph(row)}
                             </span>
@@ -559,7 +562,7 @@ export default function Boards({
                 // the same server-echoed `guard` this branch's own presence
                 // already guarantees is non-null (F5 - never hardcode it).
                 <p className="muted">
-                  Nobody&apos;s played enough dailies to rank yet — play {guard} to show up here.
+                  Nobody&apos;s played enough challenges to rank yet — play {guard} to show up here.
                 </p>
               )}
             </section>
@@ -576,7 +579,7 @@ export default function Boards({
                           {row.displayName ?? "Unknown"}
                           {isYou ? <span className="muted"> (you)</span> : null}
                         </span>
-                        <span>{row.playedCount}/{guard} dailies</span>
+                        <span>{row.playedCount}/{guard} challenges</span>
                       </li>
                     );
                   })}
@@ -589,8 +592,13 @@ export default function Boards({
                 lollerskates) that have played"): Lifetime-only census of
                 EVERY board-visible account across ANY challenge, daily or
                 custom - independent of the ranked-trends participation
-                guard entirely, so a custom-only racer (invisible to
-                `listDailyTrends`) still shows up here. Counts, not a
+                guard entirely, so an account below the guard (or below the
+                FB-7 DNF threshold) still shows up here even though it
+                wouldn't clear ranked/unranked above. FB-10 (owner ruling,
+                2026-07-20) later generalized `listDailyTrends` itself to
+                every challenge, so a custom-only racer is no longer
+                invisible there either - but this roster still stays the one
+                place EVERY player shows up unconditionally. Counts, not a
                 leaderboard (owner-proxy ruling: the time+clicks invariant
                 governs ranked board rows, not this roster) - no time is
                 ever shown, only races/finishes/wins. */}
@@ -598,7 +606,7 @@ export default function Boards({
               <section className="board-snippet board-roster muted" aria-label="Everyone who's played">
                 <h3>Everyone who&apos;s played</h3>
                 <p className="board-roster-explainer muted">
-                  Daily rankings need {guard} played dailies — every racer counts here.
+                  Challenge rankings need {guard} played challenges — every racer counts here.
                 </p>
                 {roster.length ? (
                   <ol>

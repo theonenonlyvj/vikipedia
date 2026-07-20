@@ -430,10 +430,10 @@ export function createApiHandlers(
 
       // PKG-14: `guard` is no longer derived here from `windowDays` alone -
       // it comes straight off `listDailyTrends`'s own return, reality-scaled
-      // against however many dailies actually exist in this window (see
-      // `dailyTrendGuard`'s doc comment). The lifetime roster fetch is
-      // independent of both this and the previous-window fetch below, so it
-      // runs in parallel rather than serially tacked on.
+      // against however many active challenges actually exist in this
+      // window (see `dailyTrendGuard`'s doc comment). The lifetime roster
+      // fetch is independent of both this and the previous-window fetch
+      // below, so it runs in parallel rather than serially tacked on.
       const [{ ranked, unranked, guard }, roster] = await Promise.all([
         protocol.listDailyTrends(windowDays, cleanToday),
         window === "lifetime" ? protocol.listAllPlayersRoster() : Promise.resolve(undefined),

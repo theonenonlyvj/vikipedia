@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { dailyTrendGuard, dailyTrendPreviousWindowEnd, dailyTrendWindowStart } from "./dailyTrends";
+import {
+  dailyTrendGuard,
+  dailyTrendPreviousWindowEnd,
+  dailyTrendWindowStart,
+  partitionChallengesByTrendWindow,
+  type TrendChallengeCandidate,
+} from "./dailyTrends";
 
 describe("dailyTrendGuard (PKG-14: reality-scaled, not a flat threshold)", () => {
   it("scales lifetime to ceil(dailiesAvailable / 3): 4 dailies -> guard 2 (the exact prod scenario)", () => {
@@ -50,6 +56,77 @@ describe("dailyTrendWindowStart", () => {
 
   it("carries a 7-day window across a month/year boundary", () => {
     expect(dailyTrendWindowStart("2026-01-03", 7)).toBe("2025-12-28");
+  });
+});
+
+describe("partitionChallengesByTrendWindow (FB-10: all challenges, not just dailies)", () => {
+  const candidate = (
+    id: string,
+    createdAt: string,
+    isActive = true,
+  ): TrendChallengeCandidate => ({ id, createdAt, isActive });
+
+  it("lifetime includes every challenge ever, regardless of creation date", () => {
+    const challenges = [
+      candidate("old", "2020-01-01T12:00:00.000Z"),
+      candidate("new", "2026-07-18T12:00:00.000Z"),
+    ];
+    const { ids, activeCount } = partitionChallengesByTrendWindow(challenges, null, "2026-07-18");
+    expect(ids.sort()).toEqual(["new", "old"]);
+    expect(activeCount).toBe(2);
+  });
+
+  it("a 7d window includes a challenge created exactly at the window's inclusive start", () => {
+    // dailyTrendWindowStart("2026-07-18", 7) === "2026-07-12".
+    const challenges = [candidate("boundary", "2026-07-12T12:00:00.000Z")];
+    const { ids, activeCount } = partitionChallengesByTrendWindow(challenges, 7, "2026-07-18");
+    expect(ids).toEqual(["boundary"]);
+    expect(activeCount).toBe(1);
+  });
+
+  it("excludes a challenge created one calendar day before the 7d window starts", () => {
+    const challenges = [candidate("just-outside", "2026-07-11T12:00:00.000Z")];
+    const { ids, activeCount } = partitionChallengesByTrendWindow(challenges, 7, "2026-07-18");
+    expect(ids).toEqual([]);
+    expect(activeCount).toBe(0);
+  });
+
+  it("includes a challenge created today (the window's inclusive end)", () => {
+    const challenges = [candidate("today", "2026-07-18T12:00:00.000Z")];
+    const { ids } = partitionChallengesByTrendWindow(challenges, 7, "2026-07-18");
+    expect(ids).toEqual(["today"]);
+  });
+
+  it("converts created_at to Central date (not raw UTC date) - a UTC-midnight timestamp falls on the PREVIOUS Central calendar day in July (CDT, UTC-5)", () => {
+    // '2026-07-14T00:00:00.000Z' is 2026-07-13T19:00 in Central time.
+    const challenges = [candidate("utc-midnight", "2026-07-14T00:00:00.000Z")];
+    expect(partitionChallengesByTrendWindow(challenges, 7, "2026-07-13").ids).toEqual(["utc-midnight"]);
+    expect(partitionChallengesByTrendWindow(challenges, 7, "2026-07-14").ids).toEqual(["utc-midnight"]);
+    // Window ending 2026-07-12 doesn't reach back far enough to cover
+    // 2026-07-13, so the Central-date-13 challenge stays out.
+    expect(partitionChallengesByTrendWindow(challenges, 7, "2026-07-12").ids).toEqual([]);
+  });
+
+  it("a deactivated in-window challenge stays in `ids` (played numerator) but drops out of `activeCount` (guard denominator)", () => {
+    const challenges = [
+      candidate("active", "2026-07-15T12:00:00.000Z", true),
+      candidate("retired", "2026-07-16T12:00:00.000Z", false),
+    ];
+    const { ids, activeCount } = partitionChallengesByTrendWindow(challenges, 7, "2026-07-18");
+    expect(ids.sort()).toEqual(["active", "retired"]);
+    expect(activeCount).toBe(1);
+  });
+
+  it("an out-of-window challenge is excluded even if active", () => {
+    const challenges = [candidate("stale", "2026-06-01T12:00:00.000Z", true)];
+    const { ids, activeCount } = partitionChallengesByTrendWindow(challenges, 30, "2026-07-18");
+    expect(ids).toEqual([]);
+    expect(activeCount).toBe(0);
+  });
+
+  it("returns empty when the catalog has no challenges at all", () => {
+    expect(partitionChallengesByTrendWindow([], 7, "2026-07-18")).toEqual({ ids: [], activeCount: 0 });
+    expect(partitionChallengesByTrendWindow([], null, "2026-07-18")).toEqual({ ids: [], activeCount: 0 });
   });
 });
 

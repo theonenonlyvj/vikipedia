@@ -4934,7 +4934,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
     expect(screen.queryByText(/30-day avg/i)).toBeNull();
     // F4: below-guard no longer goes silent - it reads as progress, same
     // framing Boards' own unranked section uses.
-    expect(screen.getByText(/4\/10 dailies/)).toBeVisible();
+    expect(screen.getByText(/4\/10 challenges/)).toBeVisible();
   });
 
   it("F4: shows the below-guard progress chip alone when there's no streak either", async () => {
@@ -4945,7 +4945,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
     });
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
-    expect(await screen.findByText(/4\/10 dailies/)).toBeVisible();
+    expect(await screen.findByText(/4\/10 challenges/)).toBeVisible();
     expect(screen.queryByText(/day streak/i)).toBeNull();
     expect(screen.queryByText(/30-day avg/i)).toBeNull();
   });
@@ -4966,7 +4966,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
     // element grabbed during the transient pre-play frame can detach.
     expect(await screen.findByText(/done · you finished #2/i)).toBeVisible();
     expect(screen.getByText(/🔥 12-day streak/)).toBeVisible();
-    expect(screen.getByText(/30-day avg #2\.4 \(26 dailies\)/)).toBeVisible();
+    expect(screen.getByText(/30-day avg #2\.4 \(26 challenges\)/)).toBeVisible();
   });
 
   it("omits the streak text at 0 but still shows the trend chip once ranked", async () => {
@@ -4979,7 +4979,7 @@ describe("Home v2: guarded streak/trend chip (Increment 4)", () => {
 
     await screen.findByRole("button", { name: /▶ race/i });
     expect(screen.queryByText(/day streak/i)).toBeNull();
-    expect(screen.getByText(/30-day avg #3\.1 \(15 dailies\)/)).toBeVisible();
+    expect(screen.getByText(/30-day avg #3\.1 \(15 challenges\)/)).toBeVisible();
   });
 
   it("renders no chip at all when the streak is 0 and the trend is unranked (guard inheritance)", async () => {
@@ -5773,15 +5773,15 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "7d" }));
 
-    expect(await within(board).findByText(/rolling 7 days · ranked by average placement · play ≥3 dailies to rank/i)).toBeVisible();
+    expect(await within(board).findByText(/rolling 7 days · ranked by average placement · play ≥3 challenges to rank/i)).toBeVisible();
     expect(within(board).getByText("1.")).toBeVisible();
     expect(within(board).getByText(/vijay/i)).toBeVisible();
-    expect(within(board).getByText(/avg #1\.3 \(3 dailies\)/)).toBeVisible();
+    expect(within(board).getByText(/avg #1\.3 \(3 challenges\)/)).toBeVisible();
     expect(within(board).getByText(/\(you\)/i)).toBeVisible();
 
     const unrankedSection = within(board).getByRole("region", { name: "Not yet ranked" });
     expect(within(unrankedSection).getByText(/ari/i)).toBeVisible();
-    expect(within(unrankedSection).getByText(/1\/3 dailies/)).toBeVisible();
+    expect(within(unrankedSection).getByText(/1\/3 challenges/)).toBeVisible();
   });
 
   it("switches windows on segment change - 30d's guard is 10, framed as progress toward it", async () => {
@@ -5802,8 +5802,8 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "30d" }));
 
-    expect(await within(board).findByText(/rolling 30 days · ranked by average placement · play ≥10 dailies to rank/i)).toBeVisible();
-    expect(within(board).getByText(/4\/10 dailies/)).toBeVisible();
+    expect(await within(board).findByText(/rolling 30 days · ranked by average placement · play ≥10 challenges to rank/i)).toBeVisible();
+    expect(within(board).getByText(/4\/10 challenges/)).toBeVisible();
   });
 
   it("expands the viewer's own ranked row into their last 3 dailies as placement/DNF + time·clicks (invariant 1)", async () => {
@@ -5902,8 +5902,8 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     const board = screen.getByRole("region", { name: "Stats" });
     await user.click(within(board).getByRole("tab", { name: "7d" }));
 
-    expect(await within(board).findByText(/play ≥5 dailies to rank/i)).toBeVisible();
-    expect(within(board).getByText(/2\/5 dailies/)).toBeVisible();
+    expect(await within(board).findByText(/play ≥5 challenges to rank/i)).toBeVisible();
+    expect(within(board).getByText(/2\/5 challenges/)).toBeVisible();
   });
 
   it("renders an error banner + Retry on a failed trends fetch, never the 'no one has cleared the guard' empty state (F6)", async () => {
@@ -5926,7 +5926,7 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     await user.click(within(board).getByRole("tab", { name: "7d" }));
 
     expect(await within(board).findByRole("alert")).toHaveTextContent(/couldn.t load this trend/i);
-    expect(within(board).queryByText(/nobody.s played enough dailies to rank yet/i)).toBeNull();
+    expect(within(board).queryByText(/nobody.s played enough challenges to rank yet/i)).toBeNull();
 
     await user.click(within(board).getByRole("button", { name: /retry/i }));
 
@@ -5950,8 +5950,11 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
           unranked: [],
           roster: [
             { accountId: "acc-1", displayName: "Vijay", racesStarted: 4, finishes: 4, wins: 3 },
-            // Custom-only racers `listDailyTrends` can never surface -
-            // exactly the owner's reported gap ("fran, lollerskates").
+            // The roster shows every player unconditionally, independent of
+            // this mock's own `ranked`/`unranked` arrays (PKG-14's original
+            // gap report: "fran, lollerskates") - this test is pinning that
+            // UI behavior against this fixed mock, not asserting anything
+            // about `listDailyTrends`'s own real-server semantics.
             { accountId: "acc-fran", displayName: "FranTheGreat", racesStarted: 1, finishes: 0, wins: 0 },
             { accountId: "acc-loller", displayName: "lollerskates", racesStarted: 2, finishes: 2, wins: 1 },
           ],
@@ -5975,7 +5978,7 @@ describe("Boards v2: 7d/30d/lifetime trends (Increment 4)", () => {
     expect(within(roster).getByText(/1 race · 0 finishes · 0 wins/i)).toBeVisible();
     expect(within(roster).getByText(/lollerskates/i)).toBeVisible();
     expect(within(roster).getByText(/2 races · 2 finishes · 1 win/i)).toBeVisible();
-    expect(within(roster).getByText(/daily rankings need 2 played dailies/i)).toBeVisible();
+    expect(within(roster).getByText(/challenge rankings need 2 played challenges/i)).toBeVisible();
   });
 });
 

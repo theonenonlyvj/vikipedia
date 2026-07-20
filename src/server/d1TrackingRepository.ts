@@ -8,7 +8,10 @@ import type {
 } from "../domain/dailyEditorial";
 import { dailyFlavorForCentralDate } from "../domain/dailyEditorial";
 import { centralDateKey, previousCentralDate } from "../domain/challengeSelection";
-import { dailyTrendGuard, dailyTrendWindowStart } from "../domain/dailyTrends";
+import {
+  dailyTrendGuard,
+  partitionChallengesByTrendWindow,
+} from "../domain/dailyTrends";
 import type {
   AccountStatus,
   AccountStats,
@@ -2445,53 +2448,99 @@ export function createD1TrackingRepository(options: {
     },
 
     async listDailyTrends(windowDays, todayCentral) {
-      const dateFilter = windowDays === null
+      // FB-10 (owner ruling, 2026-07-20 - "stats - lifetime is all
+      // challenges, not just daily, same with 7 days"): trends now
+      // aggregate over EVERY challenge (daily or custom), window
+      // membership by the CHALLENGE'S OWN creation date, not
+      // `daily_features.daily_date` - see `partitionChallengesByTrendWindow`.
+      //
+      // `windowedIds` is `null` for lifetime, meaning "no challenge filter
+      // at all" (every challenge ever). It's deliberately NOT built via a
+      // per-row `IN (...)` bind list for lifetime - that's the exact "F1
+      // hard fuse" bug `getAccountDailyStreak` above already hit once (an
+      // unbounded, ever-growing row set turned into one bind param per row,
+      // blowing D1's ~100-param cap). 7d/30d are safe to bind as `IN (...)`
+      // because they're bounded by a real, short calendar window (and this
+      // app's challenge-creation rate limits), not by the catalog's entire
+      // history - the one case that's genuinely unbounded (lifetime) never
+      // builds a bind list at all.
+      let windowedIds: string[] | null = null;
+      let activeChallengesInWindow: number;
+      if (windowDays === null) {
+        const activeRow = await db
+          .prepare(`SELECT count(*) available FROM challenges WHERE is_active = 1`)
+          .first<{ available: number }>();
+        activeChallengesInWindow = Number(activeRow?.available ?? 0);
+      } else {
+        // A single, always-cheap, zero-bind read of the whole (small)
+        // challenge catalog - window membership itself needs the real
+        // Central date of each `created_at` (DST-correct, via
+        // `centralDateKey`), which plain SQL date comparison on a UTC
+        // timestamp can't give us without a timezone database.
+        const { results: challengeRows } = await db
+          .prepare(`SELECT id, created_at, is_active FROM challenges`)
+          .all<{ id: string; created_at: string; is_active: number }>();
+        const partition = partitionChallengesByTrendWindow(
+          challengeRows.map((row) => ({
+            id: row.id,
+            createdAt: row.created_at,
+            isActive: Number(row.is_active) === 1,
+          })),
+          windowDays,
+          todayCentral,
+        );
+        windowedIds = partition.ids;
+        activeChallengesInWindow = partition.activeCount;
+      }
+
+      // PKG-14: the participation guard is reality-scaled off how many
+      // ACTIVE challenges exist in this exact window (lifetime = ever) -
+      // FB-10: a retired/deactivated challenge (however recently created)
+      // never inflates it, but `windowedIds` below still includes it, so a
+      // challenge a user played before it was deactivated still counts in
+      // their `played_count` numerator.
+      const guard = dailyTrendGuard(windowDays, activeChallengesInWindow);
+
+      // No challenge at all exists in this window (young catalog, or a
+      // genuinely empty stretch) - `IN ()` is invalid SQL, and there's
+      // nothing to rank or count either way.
+      if (windowedIds !== null && windowedIds.length === 0) {
+        return { ranked: [], unranked: [], guard };
+      }
+
+      const challengeFilterSql = windowedIds === null
         ? ""
-        : "WHERE daily_date BETWEEN ? AND ?";
-      const dateBindings = windowDays === null
-        ? []
-        : [dailyTrendWindowStart(todayCentral, windowDays), todayCentral];
+        : `AND r.challenge_id IN (${windowedIds.map(() => "?").join(",")})`;
+      const challengeFilterBindings = windowedIds ?? [];
 
       // Deliberately no LIMIT anywhere in this query (Task 3.1's flagged
       // "revisit at Increment 4"): a rolling trend must weigh every
-      // eligible finisher of each daily, not just the first 100 - a
-      // truncated per-daily field would silently distort every account's
-      // average once aggregated across many dailies.
+      // eligible finisher of each challenge, not just the first 100 - a
+      // truncated per-challenge field would silently distort every
+      // account's average once aggregated across many challenges.
       //
       // F2 (spec §Boards "≥1 eligible/leaderboard-visible run"), amended by
       // FB-7 (owner ruling, 2026-07-19): a board-visible DNF (>=
       // MIN_COUNTED_DNF_CLICKS, same eligibility shape as
       // `listChallengeDnfs`) counts toward `played_count` alongside
-      // completed dailies, but `avg_placement` stays over `placements`
-      // only (finished dailies) - `played_days` is a distinct UNION of
-      // finished-challenge and DNF-challenge per account so a day that's
-      // both (unusual, but harmless) doesn't double-count. Sub-threshold
-      // (0/1-click) DNFs are non-attempts and never enter `played_days`.
-      // PKG-14: the participation guard is reality-scaled off how many
-      // dailies actually exist in this exact window (lifetime = ever) -
-      // this is the same `daily_features` row set `windowed_dailies` below
-      // draws from, counted with the identical filter/bindings so the two
-      // queries can never disagree about what "this window" means.
-      const dailiesAvailableRow = await db
-        .prepare(`SELECT count(*) available FROM daily_features ${dateFilter}`)
-        .bind(...dateBindings)
-        .first<{ available: number }>();
-      const guard = dailyTrendGuard(windowDays, Number(dailiesAvailableRow?.available ?? 0));
-
+      // completed challenges, but `avg_placement` stays over `placements`
+      // only (finished challenges) - `played_days` is a distinct UNION of
+      // finished-challenge and DNF-challenge per account so a challenge
+      // that's both (unusual, but harmless) doesn't double-count.
+      // Sub-threshold (0/1-click) DNFs are non-attempts and never enter
+      // `played_days`.
       const { results } = await db
         .prepare(
-          `WITH windowed_dailies AS (
-             SELECT daily_date, challenge_id FROM daily_features ${dateFilter}
-           ), resolved AS (
-             SELECT wd.challenge_id,
+          `WITH resolved AS (
+             SELECT r.challenge_id,
                     coalesce(a.canonical_account_id, r.canonical_account_id, r.account_id) account_id,
                     r.id, r.status, r.elapsed_ms, r.click_count, r.completed_at,
                     r.abandoned_at, r.protocol_version, r.ranked_eligible
-             FROM windowed_dailies wd
-             JOIN runs r ON r.challenge_id = wd.challenge_id
+             FROM runs r
              LEFT JOIN account_aliases a
                ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
              WHERE r.board_excluded = 0
+               ${challengeFilterSql}
            ), finished AS (
              SELECT * FROM resolved
              WHERE status = 'completed'
@@ -2539,7 +2588,7 @@ export function createD1TrackingRepository(options: {
            LEFT JOIN avgs ON avgs.account_id = played.account_id
            LEFT JOIN account_profiles p ON p.account_id = played.account_id`,
         )
-        .bind(...dateBindings, MIN_COUNTED_DNF_CLICKS)
+        .bind(...challengeFilterBindings, MIN_COUNTED_DNF_CLICKS)
         .all<DailyTrendQueryRow>();
 
       const ranked: DailyTrendRankedEntry[] = [];

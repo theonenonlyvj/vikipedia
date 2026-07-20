@@ -374,17 +374,22 @@ export default function Home({
  * Home's guarded streak/avg-placement chip (Increment 4, UX redesign spec:
  * "slim stats row: 🔥 streak · '30-day avg #2.4 (26 dailies)'"; post-play:
  * "streak/trend row (inherits the Boards §7d/30d participation guard)").
- * The streak piece is omitted entirely at 0 (spec: "(omit when 0)").
+ * The streak piece is omitted entirely at 0 (spec: "(omit when 0)"); the
+ * streak itself stays daily-only (FB-10, owner ruling 2026-07-20, did not
+ * change it - it's the daily-ritual metric).
  *
  * F4 (council acceptance): a below-guard trend no longer goes silent - it
- * shows the same muted "M/{guard} dailies" progress framing Boards' own
+ * shows the same muted "M/{guard} challenges" progress framing Boards' own
  * unranked section uses, so a below-guard account still sees *something*
- * moving instead of a chip that just isn't there. PKG-14: `trend30.guard`
- * is read straight off the server's response (reality-scaled off however
- * many dailies actually exist, not a fixed constant) - never hardcoded or
- * re-derived here, same F5 discipline Boards' own guard copy follows.
+ * moving instead of a chip that just isn't there. PKG-14, generalized by
+ * FB-10: `trend30.guard` is read straight off the server's response
+ * (reality-scaled off however many ACTIVE challenges actually exist, not a
+ * fixed constant) - never hardcoded or re-derived here, same F5 discipline
+ * Boards' own guard copy follows. `trend30` itself now aggregates every
+ * challenge a player raced in the last 30 days (created within that
+ * window), not just dailies - the copy below says "challenges" accordingly.
  * The whole row still disappears when there's truly nothing to show yet -
- * no streak and zero dailies played, ever (a brand-new account).
+ * no streak and zero challenges played, ever (a brand-new account).
  *
  * PKG-06 (council 2026-07-19, owner-proxy ruling, Judge A rescope): a guest
  * with no identified session at all (`stats === null` because there's
@@ -418,8 +423,8 @@ function StreakTrendRow({
       {dailyStreak > 0 ? `🔥 ${dailyStreak}-day streak` : null}
       {dailyStreak > 0 ? " · " : null}
       {trend30.ranked
-        ? `30-day avg #${trend30.avgPlacement?.toFixed(1)} (${trend30.playedCount} dailies)`
-        : `${trend30.playedCount}/${trend30.guard} dailies`}
+        ? `30-day avg #${trend30.avgPlacement?.toFixed(1)} (${trend30.playedCount} challenges)`
+        : `${trend30.playedCount}/${trend30.guard} challenges`}
     </p>
   );
 }

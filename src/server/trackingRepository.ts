@@ -250,26 +250,31 @@ export interface RunProtocolRepository extends TrackingRepository {
     }>
   >;
   /**
-   * Boards' 7d/30d/lifetime trend segments (Increment 4). `windowDays` is
-   * `null` for lifetime (all dailies, no date filter). Uses the same
-   * best-rank-per-account-per-daily dedup as `listChallengePlacements`, with
-   * NO `LIMIT` (unlike that query and `listChallengeDnfs`) - see Task 3.1's
-   * flagged "revisit at Increment 4": rolling trends must consider every
-   * eligible finisher of each daily, not just the first 100.
+   * Boards' 7d/30d/lifetime trend segments (Increment 4; generalized by
+   * FB-10, owner ruling 2026-07-20, from daily-only to every challenge).
+   * `windowDays` is `null` for lifetime (all challenges ever, no date
+   * filter); 7d/30d membership is by each CHALLENGE'S OWN creation date
+   * (Central-date of `created_at`), not `daily_features.daily_date` - see
+   * `partitionChallengesByTrendWindow`. Uses the same
+   * best-rank-per-account-per-challenge dedup as `listChallengePlacements`,
+   * with NO `LIMIT` (unlike that query and `listChallengeDnfs`) - see Task
+   * 3.1's flagged "revisit at Increment 4": rolling trends must consider
+   * every eligible finisher of each challenge, not just the first 100.
    *
    * F2 (spec §Boards "≥1 eligible/leaderboard-visible run"), amended by FB-7
    * (owner ruling, 2026-07-19): a board-visible DNF (>=
    * `MIN_COUNTED_DNF_CLICKS`, see runProtocol.ts) counts toward each entry's
    * `playedCount` (participation) the same as a finish does, both for
    * clearing the ranking guard and for the below-guard progress count - but
-   * `avgPlacement` is only ever computed over finished dailies. A
+   * `avgPlacement` is only ever computed over finished challenges. A
    * sub-threshold (0/1-click) DNF is a non-attempt and never counts.
    *
-   * PKG-14: `guard` is now computed HERE (not by the caller from `windowDays`
-   * alone) because it's reality-scaled off `dailiesAvailable` - the count of
-   * `daily_features` rows actually inside this exact window (lifetime = all
-   * time) - which only this query's own `WHERE`/date-bind logic already
-   * knows. Callers (apiHandlers' `getBoardsTrends`, `getAccountStats`'
+   * PKG-14, amended by FB-10: `guard` is computed HERE (not by the caller
+   * from `windowDays` alone) because it's reality-scaled off how many ACTIVE
+   * challenges exist inside this exact window (lifetime = all time) - a
+   * retired/deactivated challenge never inflates it, though a challenge
+   * played before it was later deactivated still counts toward a played
+   * numerator. Callers (apiHandlers' `getBoardsTrends`, `getAccountStats`'
    * `trend30`) just echo this `guard` back out; see `dailyTrendGuard`.
    */
   listDailyTrends(windowDays: 7 | 30 | null, todayCentral: string): Promise<{
