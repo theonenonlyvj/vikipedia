@@ -2659,6 +2659,41 @@ describe("VWiki Race app", () => {
     });
   });
 
+  // FB-9 Part 2 (owner ruling, 2026-07-20): "ALL CHALLENGES" now reads
+  // newest-created first (was sortOrder ASC = oldest first). This exercises
+  // the real production path - `createChallengeWithSession`'s client-side
+  // `getSortedChallenges` re-merge (App.tsx), not just the domain function
+  // in isolation (see domain/challenges.test.ts for that unit coverage).
+  it("shows a freshly created challenge above the pre-existing catalog on the Challenges list (newest-created first)", async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({ accountId: "acc-1", displayName: "Vijay", token: "jwt-claimed", status: "claimed" }),
+    );
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /^challenges$/i }));
+    await user.type(screen.getByLabelText(/start article/i), "Mars");
+    await user.type(screen.getByLabelText(/target article/i), "Water");
+    await user.click(screen.getByRole("button", { name: /create challenge/i }));
+    await screen.findByRole("region", { name: /challenge detail/i });
+
+    // Back to Browse's catalog list (not the nav's "Challenges" button,
+    // which would just re-select the already-active mode).
+    await user.click(await screen.findByRole("button", { name: /^← challenges$/i }));
+
+    const cardButtons = await screen.findAllByRole("button", { name: /→/ });
+    const names = cardButtons.map((button) => button.textContent ?? "");
+    const marsIndex = names.findIndex((text) => /mars/i.test(text));
+    const appleIndex = names.findIndex((text) => /apple/i.test(text));
+    expect(marsIndex).toBeGreaterThanOrEqual(0);
+    expect(appleIndex).toBeGreaterThanOrEqual(0);
+    expect(marsIndex).toBeLessThan(appleIndex);
+  });
+
   it("shows Daily nomination only in a claimed session's creation form", async () => {
     const claimedView = render(
       <App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />,
@@ -5290,6 +5325,54 @@ describe("Increment 5: Play-another suggestion + create-random (Browse full card
     const detail = await screen.findByRole("region", { name: /challenge detail/i });
     expect(within(detail).getByText(/ice/i)).toBeVisible();
     expect(randomChallengeCalls(fetchImpl)).toBe(1);
+  });
+
+  // FB-9 diagnostic (root-cause reproduction): every other outcomes-chip
+  // test in the suite renders `<ChallengeBrowser>` directly with a
+  // hand-supplied `identityToken` prop (Browse.test.tsx) - none of them
+  // exercise the real App -> AppShell -> Browse wiring a signed-in visitor
+  // actually goes through on page load (`storage={claimedStorage()}`, the
+  // same `readCachedIdentitySession` path a real persisted session takes).
+  // `createFetchMock`'s `challengeOutcomes` option has existed since
+  // Increment 5 but was never once passed by a test in this file - this is
+  // the first one that does.
+  it("shows the account's own completed-run chip on the Challenges list for a real persisted session (App -> AppShell -> Browse wiring)", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: twoChallenges(),
+      challengeOutcomes: [
+        { challengeId: "challenge-0001", outcome: "completed", best: { elapsedMs: 8_000, clickCount: 3 } },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+
+    const cardOne = await screen.findByRole("button", { name: /challenge #1/i });
+    expect(await within(cardOne).findByText("✓ 0:08 · 3 clk")).toBeVisible();
+  });
+
+  it("shows the account's own completed-run chip for an unclaimed guest ('ghost') session too, not just claimed", async () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      "vwiki-race:vgames-session",
+      JSON.stringify({ accountId: "acc-guest", displayName: "Vijay", token: "jwt-guest", status: "ghost" }),
+    );
+    const fetchImpl = createFetchMock({
+      challenges: twoChallenges(),
+      challengeOutcomes: [
+        { challengeId: "challenge-0001", outcome: "completed", best: { elapsedMs: 8_000, clickCount: 3 } },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+
+    const cardOne = await screen.findByRole("button", { name: /challenge #1/i });
+    expect(await within(cardOne).findByText("✓ 0:08 · 3 clk")).toBeVisible();
   });
 });
 

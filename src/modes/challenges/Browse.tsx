@@ -150,7 +150,17 @@ export default function ChallengeBrowser({
     };
   }, [apiClient, identityToken]);
 
-  const hasSession = identityToken !== null;
+  // FB-9 root-cause fix: this used to be `identityToken !== null` alone -
+  // true the instant a session exists, well before `outcomesByChallengeId`
+  // (below) has actually resolved. `StateChip` then rendered immediately
+  // with `outcome={undefined}` (the map is still `null` while loading), and
+  // `deriveChallengeStateChip(undefined)` returns "NEW" - so a signed-in
+  // visitor saw every card flash "NEW" first, including ones they'd already
+  // completed, contradicting this file's own doc comment on
+  // `outcomesByChallengeId` ("both render no chip at all rather than a
+  // premature/possibly-wrong 'NEW'"). Requiring the map to have actually
+  // resolved closes that gap: no chip at all until the real outcome is in.
+  const hasSession = identityToken !== null && outcomesByChallengeId !== null;
   // PKG-01: the pin only shows for a real daily (today's or yesterday's,
   // still-playable) - the "default" kind means no daily exists anywhere in
   // the catalog, and pinning its arbitrary fallback challenge would repeat

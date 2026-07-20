@@ -349,6 +349,30 @@ describe("Browse: pinned daily row (PKG-01 - one source of truth for 'today's da
     expect(within(pinned).getByText("✓ 0:42 · 6 clk")).toBeVisible();
   });
 
+  // FB-9 Part 2 (owner ruling, 2026-07-20): the pin is standing chrome
+  // (its own block, structurally rendered above `.challenge-list`'s
+  // catalog `<ol>` regardless of data) - never affected by catalog
+  // ordering either way. Browse itself never sorts `challenges` (that's
+  // `getSortedChallenges`'s job upstream - see domain/challenges.test.ts
+  // and App.test.tsx's create-flow coverage); this just proves Browse
+  // renders whatever order it's handed, with the pin unmoved even when it
+  // has the OLDEST sortOrder of the three (never "the newest," which would
+  // have hidden a real ordering bug here).
+  it("keeps the pin above the catalog regardless of its own sortOrder relative to the (now newest-first) catalog order", async () => {
+    renderBrowse({
+      challenges: [challengeTwo, challengeOne],
+      heroSelection: { challenge: { ...pinnedChallenge, sortOrder: 1 }, kind: "today-daily" },
+    });
+
+    const cardButtons = await screen.findAllByRole("button", { name: /→/ });
+    const names = cardButtons.map((button) => button.textContent ?? "");
+    expect(names).toEqual([
+      expect.stringContaining("Coffee"),
+      expect.stringContaining("Mars"),
+      expect.stringContaining("Apple"),
+    ]);
+  });
+
   it("shows no pinned row while the hero selection hasn't resolved yet", () => {
     renderBrowse({ heroSelection: null });
     expect(screen.queryByLabelText("Today's daily")).toBeNull();

@@ -15,16 +15,19 @@ describe("server challenge catalog", () => {
     });
   });
 
-  it("sorts active challenges by sortOrder", () => {
+  // FB-9 (owner ruling, 2026-07-20): "ALL CHALLENGES" reads newest-created
+  // first - `sortOrder` is a monotonically increasing creation-sequence
+  // number, so descending sortOrder is descending creation order.
+  it("sorts active challenges by sortOrder, newest (highest sortOrder) first", () => {
     const sorted = getSortedChallenges([
-      { ...SERVER_CHALLENGES[0], id: "challenge-0003", sortOrder: 3 },
       { ...SERVER_CHALLENGES[0], id: "challenge-0002", sortOrder: 2 },
+      { ...SERVER_CHALLENGES[0], id: "challenge-0003", sortOrder: 3 },
       { ...SERVER_CHALLENGES[0], id: "challenge-hidden", isActive: false },
     ]);
 
     expect(sorted.map((challenge) => challenge.id)).toEqual([
-      "challenge-0002",
       "challenge-0003",
+      "challenge-0002",
     ]);
   });
 });
