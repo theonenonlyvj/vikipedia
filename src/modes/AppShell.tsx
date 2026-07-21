@@ -266,6 +266,7 @@ export default function AppShell({
             challenges={challenges}
             hero={homeHero}
             identityAccountId={identitySession?.accountId ?? null}
+            identityToken={identitySession?.token ?? null}
             onCreateRandomChallenge={onCreateRandomChallenge}
             onGoToBoards={onGoToBoardsFor}
             onOpenChallenge={onOpenChallengeDetail}
@@ -286,6 +287,7 @@ export default function AppShell({
             challenges={challenges}
             heroSelection={homeHero}
             identityAccountId={identitySession?.accountId ?? null}
+            identityToken={identitySession?.token ?? null}
             initialSegment={boardsInitialSegment}
             onDisclosePath={onDisclosePath}
             onRaceChallenge={onRaceChallenge}
@@ -301,6 +303,7 @@ export default function AppShell({
               apiClient={apiClient}
               challenge={selectedChallenge}
               identityAccountId={identitySession?.accountId ?? null}
+              identityToken={identitySession?.token ?? null}
               leaderboard={leaderboard}
               onBack={onCloseChallengeDetail}
               onDisclosePath={onDisclosePath}

@@ -5,6 +5,7 @@ import type {
   BoardsTrendsResponse,
   BoardsTrendWindow,
   ChallengeBoardResponse,
+  ChallengePathsResponse,
   ChallengesSummaryResponse,
   ChallengeSuggestionResponse,
   ClickV2Response,
@@ -19,6 +20,7 @@ import type {
   AllPlayersRosterEntry,
   Challenge,
   ChallengeOutcomeEntry,
+  ChallengePathRunEntry,
   ChallengeSummaryEntry,
   RankedLeaderboardRow,
   ServerPathStep,
@@ -90,6 +92,17 @@ export interface VWikiRaceApiClient extends VWikiRaceDailyAdminApiClient {
   ): Promise<AbandonRunV2Response>;
   listLeaderboard(challengeId: string): Promise<RankedLeaderboardRow[]>;
   getChallengeBoard(challengeId: string): Promise<ChallengeBoardResponse>;
+  /**
+   * GR-1 ("View graph"): the merged-path visualization's bulk source - `GET
+   * /api/v2/challenges/{id}/paths`. Authenticated, unlike `getChallengeBoard`
+   * above - the server's own FB-4 viewer-finished guard (shared with
+   * `getRunPath`) needs a real bearer token. Callers only ever invoke this
+   * once the SAME client-side "could this viewer see paths" knowledge that
+   * already gates the per-row disclosure affordance is true (see
+   * `ChallengePathGraphButton`) - the server enforces the real boundary
+   * regardless.
+   */
+  getChallengePaths(challengeId: string, token: string): Promise<ChallengePathsResponse>;
   getBoardsTrends(window: BoardsTrendWindow): Promise<BoardsTrendsResponse>;
   // FB-4 (council 2026-07-19, owner decision 10): now authenticated - the
   // server's own viewer-finished guard (getPublicRunPath's doc comment,
@@ -207,6 +220,9 @@ export function createVWikiRaceApiClient(
     },
     async getChallengeBoard(challengeId) {
       return read(urlPath.board(challengeId), isChallengeBoardResponse);
+    },
+    async getChallengePaths(challengeId, token) {
+      return authenticatedRead(urlPath.paths(challengeId), token, isChallengePathsResponse);
     },
     async getBoardsTrends(window) {
       return read(urlPath.boardsTrends(window), isBoardsTrendsResponse);
@@ -395,6 +411,8 @@ const urlPath = {
     `/api/v2/challenges/${encodeURIComponent(challengeId)}/leaderboard`,
   board: (challengeId: string) =>
     `/api/v2/challenges/${encodeURIComponent(challengeId)}/board`,
+  paths: (challengeId: string) =>
+    `/api/v2/challenges/${encodeURIComponent(challengeId)}/paths`,
   boardsTrends: (window: BoardsTrendWindow) =>
     `/api/v2/boards/trends?window=${encodeURIComponent(window)}`,
   challengesSummary: "/api/v2/challenges/summary",
@@ -468,6 +486,28 @@ function isChallengeBoardDnfRow(value: unknown): value is ChallengeBoardResponse
     (value.displayName === null || hasString(value, "displayName")) &&
     hasNumber(value, "clickCount") &&
     hasNumber(value, "elapsedMs");
+}
+
+function isChallengePathsResponse(value: unknown): value is ChallengePathsResponse {
+  return isRecord(value) &&
+    Array.isArray(value.runs) && value.runs.every(isChallengePathRunEntry) &&
+    hasNumber(value, "totalRuns");
+}
+
+function isChallengePathRunEntry(value: unknown): value is ChallengePathRunEntry {
+  return isRecord(value) &&
+    hasString(value, "player") &&
+    (value.status === "completed" || value.status === "abandoned") &&
+    hasNumber(value, "elapsedMs") &&
+    hasNumber(value, "clicks") &&
+    Array.isArray(value.steps) && value.steps.every(isChallengePathStepEntry);
+}
+
+function isChallengePathStepEntry(value: unknown): value is ChallengePathRunEntry["steps"][number] {
+  return isRecord(value) &&
+    hasNumber(value, "n") &&
+    hasString(value, "from") &&
+    hasString(value, "to");
 }
 
 function isBoardsTrendsResponse(value: unknown): value is BoardsTrendsResponse {

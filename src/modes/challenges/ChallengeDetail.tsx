@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import ChallengePathGraphButton from "../../components/ChallengePathGraphButton";
 import LeaderboardList from "../../components/LeaderboardList";
 import WinningPathChain from "../../components/WinningPathChain";
 import { dailyBadgeLabel } from "../../domain/challengeSelection";
@@ -40,6 +41,7 @@ export default function ChallengeDetail({
   apiClient,
   challenge,
   identityAccountId,
+  identityToken,
   leaderboard,
   onBack,
   onDisclosePath,
@@ -51,6 +53,9 @@ export default function ChallengeDetail({
   apiClient: VWikiRaceApiClient;
   challenge: Challenge;
   identityAccountId: string | null;
+  // GR-1 ("View graph"): the bearer token `ChallengePathGraphButton` needs
+  // to fetch the merged graph - see its own doc comment.
+  identityToken: string | null;
   leaderboard: RankedLeaderboardRow[];
   onBack: () => void;
   onDisclosePath: (runId: string) => void;
@@ -142,7 +147,14 @@ export default function ChallengeDetail({
         />
         {!pathsUnlocked ? (
           <p className="muted board-footnote">Paths hidden until you&apos;ve played.</p>
-        ) : null}
+        ) : (
+          <ChallengePathGraphButton
+            apiClient={apiClient}
+            challengeId={challenge.id}
+            identityToken={identityToken}
+            unlocked={pathsUnlocked}
+          />
+        )}
       </section>
 
       <section className="leaderboard-panel" aria-label="Your history">

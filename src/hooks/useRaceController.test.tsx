@@ -547,6 +547,7 @@ function apiClient(overrides: Partial<VWikiRaceApiClient> = {}): VWikiRaceApiCli
     abandonRun: vi.fn(),
     listLeaderboard: vi.fn(async () => []),
     getChallengeBoard: vi.fn(async () => ({ challengeId: challenge.id, placements: [], dnfs: [] })),
+    getChallengePaths: vi.fn(async () => ({ runs: [], totalRuns: 0 })),
     getBoardsTrends: vi.fn(async () => ({ window: "7" as const, guard: 3, ranked: [], unranked: [] })),
     getRunPath: vi.fn(async () => []),
     getAccountStats: vi.fn(),

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import BoardSnippet from "../components/BoardSnippet";
+import ChallengePathGraphButton from "../components/ChallengePathGraphButton";
 import PlayAnotherCard from "../components/PlayAnotherCard";
 import { boardSnippetRowsFromBoard } from "../domain/boardSnippet";
 import {
@@ -61,6 +62,7 @@ export default function Home({
   challenges,
   hero,
   identityAccountId,
+  identityToken,
   onGoToBoards,
   onOpenChallenge,
   onCreateRandomChallenge,
@@ -83,6 +85,8 @@ export default function Home({
   challenges: Challenge[];
   hero: HomeHeroSelection | null;
   identityAccountId: string | null;
+  // GR-1 ("View graph"): the bearer token `ChallengePathGraphButton` needs.
+  identityToken: string | null;
   onGoToBoards: () => void;
   // Play-another's suggestion opens Challenge Detail - same route as
   // Browse's own cards (spec: "a Race affordance (route consistent with
@@ -193,6 +197,15 @@ export default function Home({
     : independentYesterdayBoard && independentYesterdayBoard.challengeId === yesterdaysDaily?.id
       ? independentYesterdayBoard
       : null;
+
+  // GR-1 ("View graph"): the SAME "has the viewer played this exact
+  // challenge" check path/board disclosure already uses elsewhere (a
+  // completed placement row, invariant 5) - reused here against the
+  // already-fetched `yesterdayBoard` rather than a new fetch, so the "see
+  // full board" row's graph affordance drops in with zero extra network
+  // cost.
+  const yesterdayPathsUnlocked = Boolean(identityAccountId) &&
+    Boolean(yesterdayBoard?.placements.some((row) => row.accountId === identityAccountId));
 
   const myPlacement = identityAccountId && heroBoardMatches
     ? heroBoardMatches.placements.find((row) => row.accountId === identityAccountId) ?? null
@@ -305,6 +318,14 @@ export default function Home({
           >
             see full board ›
           </button>
+          {yesterdayBoard ? (
+            <ChallengePathGraphButton
+              apiClient={apiClient}
+              challengeId={yesterdayBoard.challengeId}
+              identityToken={identityToken}
+              unlocked={yesterdayPathsUnlocked}
+            />
+          ) : null}
         </BoardSnippet>
       ) : null}
 

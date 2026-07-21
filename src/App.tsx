@@ -1435,6 +1435,7 @@ export default function App({
           todayCentral={currentCentralDate}
           identityStatus={identitySession?.status ?? null}
           identityAccountId={identitySession?.accountId ?? null}
+          identityToken={identitySession?.token ?? null}
           identityDisplayName={identitySession?.displayName ?? ""}
           preRaceCompletions={preRaceCompletionsRef.current}
           playAnotherSuggestion={playAnotherSuggestion}

@@ -55,6 +55,7 @@ export default function RaceFlow({
   todayCentral,
   identityStatus,
   identityAccountId,
+  identityToken,
   identityDisplayName,
   preRaceCompletions,
   playAnotherSuggestion,
@@ -105,6 +106,8 @@ export default function RaceFlow({
   todayCentral: string;
   identityStatus: VGamesIdentityStatus | null;
   identityAccountId: string | null;
+  // GR-1 ("View graph"): the bearer token RaceResults' `ChallengePathGraphButton` needs.
+  identityToken: string | null;
   identityDisplayName: string;
   // See RaceResults' preRaceCompletions doc comment (M2 fix): a snapshot,
   // not live accountStats.
@@ -182,6 +185,7 @@ export default function RaceFlow({
         article={article}
         outcome={{ status: "completed", session, elapsedMs, leaderboardContext, runId }}
         identityAccountId={identityAccountId}
+        identityToken={identityToken}
         todayCentral={todayCentral}
         identityStatus={identityStatus}
         identityDisplayName={identityDisplayName}
@@ -214,6 +218,7 @@ export default function RaceFlow({
           runId: dnfResult.runId,
         }}
         identityAccountId={identityAccountId}
+        identityToken={identityToken}
         todayCentral={todayCentral}
         identityStatus={identityStatus}
         identityDisplayName={identityDisplayName}

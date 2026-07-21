@@ -5,6 +5,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import ChallengePathGraphButton from "../components/ChallengePathGraphButton";
 import WinningPathChain from "../components/WinningPathChain";
 import {
   dailyDateForChallenge,
@@ -159,6 +160,7 @@ export default function Boards({
   challenges,
   heroSelection,
   identityAccountId,
+  identityToken,
   initialSegment = "today",
   onDisclosePath,
   onRaceChallenge,
@@ -173,6 +175,8 @@ export default function Boards({
   // is still loading (or is genuinely empty).
   heroSelection: HomeHeroSelection | null;
   identityAccountId: string | null;
+  // GR-1 ("View graph"): the bearer token `ChallengePathGraphButton` needs.
+  identityToken: string | null;
   initialSegment?: BoardsSegment;
   // FB-4: same `onDisclosePath`/`runPaths` App.tsx already wires up for
   // Challenge Detail - one App.tsx-owned cache/dedup (`requestedPaths`,
@@ -757,7 +761,14 @@ export default function Boards({
 
           {!pathsUnlocked ? (
             <p className="muted board-footnote">Paths hidden until you&apos;ve played.</p>
-          ) : null}
+          ) : (
+            <ChallengePathGraphButton
+              apiClient={apiClient}
+              challengeId={activeChallenge.id}
+              identityToken={identityToken}
+              unlocked={pathsUnlocked}
+            />
+          )}
 
           {/* PKG-10: below the leaderboard/DNF/footnote, matching
               mockup-boards-trends' "Daily view" bottom-of-screen CTA

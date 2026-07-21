@@ -39,6 +39,7 @@ function mockApiClient(overrides: Partial<VWikiRaceApiClient> = {}): VWikiRaceAp
     abandonRun: vi.fn(),
     listLeaderboard: vi.fn(async () => []),
     getChallengeBoard: vi.fn(async () => ({ challengeId: "", placements: [], dnfs: [] })),
+    getChallengePaths: vi.fn(async () => ({ runs: [], totalRuns: 0 })),
     getBoardsTrends: vi.fn(async () => ({ window: "7" as const, guard: 3, ranked: [], unranked: [] })),
     getRunPath: vi.fn(async () => []),
     getAccountStats: vi.fn(),

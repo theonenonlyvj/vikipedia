@@ -9,6 +9,7 @@ import {
   type RefObject,
 } from "react";
 import BoardSnippet from "../components/BoardSnippet";
+import ChallengePathGraphButton from "../components/ChallengePathGraphButton";
 import WinningPathChain from "../components/WinningPathChain";
 import { boardSnippetRowsForResult, dedupedRankForJustFinished } from "../domain/boardSnippet";
 import PlayAnotherCard from "../components/PlayAnotherCard";
@@ -63,6 +64,7 @@ export default function RaceResults({
   article,
   outcome,
   identityAccountId,
+  identityToken,
   todayCentral,
   identityStatus,
   identityDisplayName,
@@ -90,6 +92,8 @@ export default function RaceResults({
   article: Article | null;
   outcome: RaceResultOutcome;
   identityAccountId: string | null;
+  // GR-1 ("View graph"): the bearer token `ChallengePathGraphButton` needs.
+  identityToken: string | null;
   // The current Central-time date (see App.tsx's currentCentralDate/
   // todayUtc) - the only thing that distinguishes "today's actual daily"
   // from any other challenge for the "today"/"Today's board" copy below.
@@ -356,7 +360,18 @@ export default function RaceResults({
         <BoardSnippet
           title={isDailyToday ? "Today's board" : "Leaderboard"}
           rows={boardSnippetRowsForResult(board, identityAccountId, boardLoaded ? justFinishedRow : null)}
-        />
+        >
+          {/* GR-1 ("View graph"): a completed outcome always qualifies for
+              disclosure (the run that just landed here IS the viewer's own
+              eligible completed run on this challenge) - a DNF outcome never
+              does, same invariant 5 rule every other surface follows. */}
+          <ChallengePathGraphButton
+            apiClient={apiClient}
+            challengeId={challenge.id}
+            identityToken={identityToken}
+            unlocked={outcome.status === "completed"}
+          />
+        </BoardSnippet>
 
         <PlayAnotherCard
           onBrowseChallenges={onShowChallenges}
