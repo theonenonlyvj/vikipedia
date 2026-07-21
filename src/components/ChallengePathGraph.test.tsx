@@ -64,4 +64,43 @@ describe("ChallengePathGraph", () => {
     expect(container.querySelectorAll(".cpg-dnf-stamp")).toHaveLength(1);
     expect(screen.getByText("DNF")).toBeVisible();
   });
+
+  // GX-1: SVG_HEIGHT used to be a flat 560px regardless of lane count,
+  // leaving a big void under a solo (or 2-lane) run's graph. Height is now
+  // derived from lane count (190 base + 75/lane, clamped [260, 640]) - these
+  // pin the exact formula down against 1-, 2-, and the full 6-run fixture's
+  // lane counts so a future tweak to the constants is a deliberate choice,
+  // not a silent regression.
+  describe("lane-count-driven canvas height", () => {
+    function svgHeightOf(container: HTMLElement): number {
+      const svg = container.querySelector(".cpg-svg");
+      const viewBox = svg?.getAttribute("viewBox") ?? "";
+      const height = Number(viewBox.split(" ")[3]);
+      expect(svg).toHaveAttribute("height", String(height));
+      return height;
+    }
+
+    it("gives a solo run a short canvas instead of the old fixed 560px void", () => {
+      const soloRun: ChallengePathRun[] = [runs[0]];
+      const { container } = render(<ChallengePathGraph runs={soloRun} />);
+      expect(svgHeightOf(container)).toBe(265);
+    });
+
+    it("grows the canvas for a 2-lane run", () => {
+      const twoRuns: ChallengePathRun[] = [runs[0], runs[1]];
+      const { container } = render(<ChallengePathGraph runs={twoRuns} />);
+      expect(svgHeightOf(container)).toBe(340);
+    });
+
+    it("clamps a dense multi-lane run at the max instead of growing unbounded", () => {
+      const sixRuns: ChallengePathRun[] = [
+        ...runs,
+        { player: "P4", status: "completed", elapsedMs: 4_000, clicks: 1, steps: [{ n: 1, from: "Start", to: "Target" }] },
+        { player: "P5", status: "completed", elapsedMs: 5_000, clicks: 1, steps: [{ n: 1, from: "Start", to: "Target" }] },
+        { player: "P6", status: "abandoned", elapsedMs: 6_000, clicks: 1, steps: [{ n: 1, from: "Start", to: "Dead End" }] },
+      ];
+      const { container } = render(<ChallengePathGraph runs={sixRuns} />);
+      expect(svgHeightOf(container)).toBe(640);
+    });
+  });
 });

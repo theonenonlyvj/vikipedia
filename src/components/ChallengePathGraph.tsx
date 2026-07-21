@@ -107,13 +107,28 @@ export interface ChallengePathRun {
 }
 
 const SVG_WIDTH = 1080;
-const SVG_HEIGHT = 560;
 const MARGIN_LEFT = 100;
 const MARGIN_RIGHT = 112;
 const MARGIN_TOP = 56;
 const MARGIN_BOTTOM = 40;
 const PLOT_WIDTH = SVG_WIDTH - MARGIN_LEFT - MARGIN_RIGHT;
-const PLOT_HEIGHT = SVG_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM;
+
+// GX-1: height used to be a flat 560px regardless of how many players'
+// lanes actually need stacking - a fine fit around 4-6 runs, but a solo
+// (or 2-run) result left most of that height an empty void beneath one or
+// two lanes. Derived from lane count instead: a fixed base (room for the
+// legend/margins/one lane) plus a per-lane increment, clamped so a 1-lane
+// graph doesn't collapse too thin to read and a many-lane graph doesn't
+// grow unbounded.
+const SVG_HEIGHT_BASE = 190;
+const SVG_HEIGHT_PER_LANE = 75;
+const SVG_HEIGHT_MIN = 260;
+const SVG_HEIGHT_MAX = 640;
+
+function computeSvgHeight(laneCount: number): number {
+  const raw = SVG_HEIGHT_BASE + SVG_HEIGHT_PER_LANE * laneCount;
+  return Math.min(SVG_HEIGHT_MAX, Math.max(SVG_HEIGHT_MIN, raw));
+}
 
 // Four player hues that read well on the dark ink palette, kept clear of
 // --cyan (reserved for the start ring) and --coral (reserved for the
@@ -201,12 +216,20 @@ interface GraphLayout {
   finisherCount: number;
   targetGlowOpacity: number;
   entranceTotalMs: number;
+  svgHeight: number;
 }
 
 function buildGraph(orderedRuns: ChallengePathRun[]): GraphLayout {
   const playerOrder = orderedRuns.map((r) => r.player);
   const winnerRun = orderedRuns.find((r) => r.status === "completed") ?? null;
   const finisherCount = orderedRuns.filter((r) => r.status === "completed").length;
+
+  // GX-1: lane-count-driven height - computed once, up front, so every
+  // downstream y-calculation (laneY, the weighted-mean fallback, the raw
+  // node fallback) already flows from the real height instead of the old
+  // fixed 560.
+  const svgHeight = computeSvgHeight(Math.max(1, playerOrder.length));
+  const plotHeight = svgHeight - MARGIN_TOP - MARGIN_BOTTOM;
 
   const nodeAggs = new Map<string, NodeAgg>();
 
@@ -272,7 +295,7 @@ function buildGraph(orderedRuns: ChallengePathRun[]): GraphLayout {
   const laneIndex = new Map<string, number>();
   playerOrder.forEach((player, i) => laneIndex.set(player, i));
   const laneCount = Math.max(1, playerOrder.length);
-  const laneGap = PLOT_HEIGHT / (laneCount + 1);
+  const laneGap = plotHeight / (laneCount + 1);
   function laneY(player: string): number {
     const i = laneIndex.get(player) ?? 0;
     return MARGIN_TOP + laneGap * (i + 1);
@@ -306,7 +329,7 @@ function buildGraph(orderedRuns: ChallengePathRun[]): GraphLayout {
       n += 1;
     }
     weightedMeanFracByTitle.set(agg.title, weightTotal ? weightedSum / weightTotal : 0);
-    laneYByTitle.set(agg.title, n ? ySum / n : MARGIN_TOP + PLOT_HEIGHT / 2);
+    laneYByTitle.set(agg.title, n ? ySum / n : MARGIN_TOP + plotHeight / 2);
   }
 
   // Repair pass: a valid left-to-right ORDER for every node via longest-path
@@ -386,7 +409,7 @@ function buildGraph(orderedRuns: ChallengePathRun[]): GraphLayout {
     raws.push({
       agg,
       xFrac,
-      cy: laneYByTitle.get(agg.title) ?? MARGIN_TOP + PLOT_HEIGHT / 2,
+      cy: laneYByTitle.get(agg.title) ?? MARGIN_TOP + plotHeight / 2,
       visitorCount: agg.visitors.size,
     });
   }
@@ -662,6 +685,7 @@ function buildGraph(orderedRuns: ChallengePathRun[]): GraphLayout {
     finisherCount,
     targetGlowOpacity,
     entranceTotalMs,
+    svgHeight,
   };
 }
 
@@ -1101,8 +1125,8 @@ export default function ChallengePathGraph({ runs }: { runs: ChallengePathRun[] 
         <div className="cpg-scroll" ref={scrollRef} onScroll={scrollMode ? handleScroll : undefined}>
           <svg
             className="cpg-svg"
-            viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
-            {...(useOverview ? {} : { width: SVG_WIDTH, height: SVG_HEIGHT })}
+            viewBox={`0 0 ${SVG_WIDTH} ${graph.svgHeight}`}
+            {...(useOverview ? {} : { width: SVG_WIDTH, height: graph.svgHeight })}
             style={
               useOverview
                 ? { width: "100%", height: "auto", display: "block" }
@@ -1122,7 +1146,7 @@ export default function ChallengePathGraph({ runs }: { runs: ChallengePathRun[] 
             </defs>
 
             {/* Empty-canvas tap dismisses the on-canvas callout (A6c). */}
-            <rect x={0} y={0} width={SVG_WIDTH} height={SVG_HEIGHT} fill="transparent" onClick={() => setCallout(null)} />
+            <rect x={0} y={0} width={SVG_WIDTH} height={graph.svgHeight} fill="transparent" onClick={() => setCallout(null)} />
 
             <g>
               {graph.edgesByPlayer.map(({ player, edges }) => {
@@ -1351,7 +1375,7 @@ export default function ChallengePathGraph({ runs }: { runs: ChallengePathRun[] 
                 default left-to-right "x = time/clicks" assumption. */}
             <text
               x={MARGIN_LEFT}
-              y={SVG_HEIGHT - 12}
+              y={graph.svgHeight - 12}
               fontSize={11}
               fill="var(--muted, #9fb8bd)"
               opacity={0.8}

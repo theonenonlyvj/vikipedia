@@ -112,6 +112,15 @@ function ChallengePathGraphDialog({
     <ModalDialog
       className="graph-modal"
       onClose={onClose}
+      // GX-1: every board surface mounts this button inside a clip-path'd
+      // panel (`.leaderboard-panel`/`.board-snippet`'s panel ancestors) -
+      // clip-path creates a stacking context, which traps an inline
+      // `.modal-backdrop`'s z-index inside that panel instead of the whole
+      // page (see ModalDialog's own doc comment for the full mechanism).
+      // Portaling to <body> is what actually makes this modal render as a
+      // full-viewport overlay instead of losing the paint order battle to
+      // whatever comes after the panel in the DOM.
+      portal
       returnFocusRef={returnFocusRef}
       titleId="challenge-graph-title"
     >

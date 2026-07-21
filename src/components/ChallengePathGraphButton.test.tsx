@@ -105,6 +105,40 @@ describe("ChallengePathGraphButton", () => {
     expect(getChallengePaths).toHaveBeenCalledTimes(2);
   });
 
+  // GX-1: every call site (Challenge Detail, Boards, Home, Results) mounts
+  // this button inside a clip-path'd panel, which creates a stacking
+  // context and traps an inline `.modal-backdrop`'s z-index inside that
+  // panel - later page content then paints over the "modal" instead of the
+  // other way around (diagnosed with a real browser repro; see ModalDialog's
+  // own doc comment for the full mechanism). The fix portals the backdrop
+  // straight to `document.body`, so its own parent is `document.body`
+  // itself rather than whatever ancestor happened to host the trigger.
+  it("portals the modal backdrop to document.body, escaping any clip-path'd ancestor panel", async () => {
+    const getChallengePaths = vi.fn().mockResolvedValue(fixture);
+    const user = userEvent.setup();
+    const { container } = render(
+      <div className="leaderboard-panel">
+        <ChallengePathGraphButton
+          apiClient={mockApiClient(getChallengePaths)}
+          challengeId="challenge-0001"
+          identityToken="viewer-token"
+          unlocked
+        />
+      </div>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /^view graph$/i }));
+    await screen.findByRole("dialog", { name: /everyone's path/i });
+
+    // Not inside the render container (i.e. not a descendant of the
+    // clip-path'd `.leaderboard-panel` it was triggered from)...
+    expect(container.querySelector(".modal-backdrop")).toBeNull();
+    // ...but mounted directly on document.body instead.
+    const backdrop = document.body.querySelector(":scope > .modal-backdrop");
+    expect(backdrop).not.toBeNull();
+    expect(backdrop?.querySelector('[role="dialog"]')).toHaveClass("graph-modal");
+  });
+
   it("closes via the explicit close button and returns focus to the trigger", async () => {
     const getChallengePaths = vi.fn().mockResolvedValue({ runs: [], totalRuns: 0 });
     const user = userEvent.setup();

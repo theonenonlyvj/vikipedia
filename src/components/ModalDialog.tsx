@@ -5,6 +5,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 
 /**
  * The app's one shared dialog shell (focus trap, Escape-to-close, scroll
@@ -12,12 +13,47 @@ import {
  * prompt, End Run confirm), now extracted so other app-shell-level dialogs
  * (the teaching gate's "how to play" popup - UX redesign spec) reuse the
  * exact same pattern instead of re-implementing focus management.
+ *
+ * GX-1: `portal` (opt-in, default off) renders `.modal-backdrop` straight
+ * into `document.body` instead of inline wherever the trigger happens to
+ * live. Every call site relies on `position: fixed` + a high z-index alone
+ * to "escape" into a full-viewport overlay - which works ONLY when no
+ * ancestor between the trigger and <body> creates its own stacking context.
+ * `ChallengePathGraphButton` (the graph modal) is mounted inside
+ * `.leaderboard-panel`/`.board-snippet`'s panel ancestors (styles.css),
+ * which carry a `clip-path` - and `clip-path: <not none>` creates a new
+ * stacking context per spec, same family as transform/filter/opacity/
+ * isolation. That doesn't change `.modal-backdrop`'s CONTAINING BLOCK (it's
+ * still `position: fixed` against the viewport - confirmed with
+ * getBoundingClientRect during diagnosis, the box geometry was correct),
+ * but it DOES trap the backdrop's z-index INSIDE the panel's local stacking
+ * order: the backdrop can only out-rank its OWN preceding siblings within
+ * that panel, and loses outright to any later sibling elsewhere on the page
+ * (e.g. Challenge Detail's "Your history" panel right below it), which
+ * paints over it in normal DOM order regardless of the backdrop's
+ * z-index: 80. Portaling to `document.body` makes `.modal-backdrop` a
+ * direct child of body - the same level every other top-level stacking
+ * context on the page competes at - so its z-index finally applies
+ * globally, the way this call site already assumed it did.
+ *
+ * Default stays inline (no portal): the identity/End Run/teaching-gate/
+ * ghost-guard dialogs aren't nested inside any clip-path'd (or otherwise
+ * stacking-context-forming) ancestor today, and PKG-12's inert-siblings
+ * effect below deliberately keys off `.modal-backdrop`'s OWN DOM parent so
+ * it can generically background whichever app-shell-vs-RaceFlow siblings
+ * are actually mounted - portaling every dialog to `<body>` would collapse
+ * that down to a single `#root` sibling and break the specific
+ * `.shell-topbar`/`.content-shell`/`.site-footer`/`.race-takeover`
+ * assertions those dialogs' own tests already lock in. Scoping the portal
+ * to an opt-in prop fixes the one call site that actually needs it without
+ * touching that contract.
  */
 export default function ModalDialog({
   busy = false,
   children,
   className,
   onClose,
+  portal = false,
   returnFocusRef,
   titleId,
 }: {
@@ -25,6 +61,7 @@ export default function ModalDialog({
   children: ReactNode;
   className: string;
   onClose: () => void;
+  portal?: boolean;
   returnFocusRef: RefObject<HTMLElement | null>;
   titleId: string;
 }) {
@@ -119,7 +156,7 @@ export default function ModalDialog({
     }
   }
 
-  return (
+  const dialog = (
     <div className="modal-backdrop" ref={backdropRef} role="presentation">
       <section
         aria-labelledby={titleId}
@@ -134,6 +171,8 @@ export default function ModalDialog({
       </section>
     </div>
   );
+
+  return portal ? createPortal(dialog, document.body) : dialog;
 }
 
 function focusableElements(container: HTMLElement | null): HTMLElement[] {
