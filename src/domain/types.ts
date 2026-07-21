@@ -187,6 +187,49 @@ export interface ServerPathStep {
   createdAt: string;
 }
 
+/**
+ * GR-1 ("View graph"): one hop within `ChallengePathRunEntry.steps`, shaped
+ * 1:1 with the visualize-graph prototype's `graph-fixture.json` (and the
+ * component's own local `ChallengePathStep`, src/components/
+ * ChallengePathGraph.tsx) - a deliberately narrower shape than
+ * `ServerPathStep` (just the two titles + hop index), since the merged
+ * graph only ever needs the article chain, not click provenance/timing.
+ */
+export interface ChallengePathStepEntry {
+  n: number;
+  from: string;
+  to: string;
+}
+
+/**
+ * GR-1: one counted run's full path, for `GET
+ * /api/v2/challenges/{id}/paths` - the bulk source `ChallengePathGraph`
+ * merges into one graph. One entry per account's best counted run on the
+ * challenge (same best-attempt dedup `listChallengePlacements`/
+ * `listChallengeDnfs` already use for the public board - a repeat
+ * completion or DNF would otherwise draw the same player twice), ordered
+ * finishers-fastest-first then DNFs. Gated server-side by the same FB-4
+ * viewer-finished guard `getPublicRunPath` uses (d1TrackingRepository.ts).
+ */
+export interface ChallengePathRunEntry {
+  player: string;
+  status: "completed" | "abandoned";
+  elapsedMs: number;
+  clicks: number;
+  steps: ChallengePathStepEntry[];
+}
+
+/**
+ * GR-1: `totalRuns` is the real (uncapped) count of eligible deduped runs
+ * on the challenge - `runs` itself is capped at `CHALLENGE_PATHS_LIMIT`
+ * (d1TrackingRepository.ts) so a very popular challenge's graph stays
+ * legible instead of drawing dozens of strands.
+ */
+export interface ChallengePathsResult {
+  runs: ChallengePathRunEntry[];
+  totalRuns: number;
+}
+
 export interface ServerLeaderboardRow {
   runId: string;
   challengeId: string;

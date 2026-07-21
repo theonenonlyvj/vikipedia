@@ -6,6 +6,7 @@ import type {
   AuthorizedAccount,
   Challenge,
   ChallengeOutcomeEntry,
+  ChallengePathsResult,
   ChallengeSummaryEntry,
   DailyTrendRankedEntry,
   DailyTrendUnrankedEntry,
@@ -364,6 +365,23 @@ export interface RunProtocolRepository extends TrackingRepository {
     runId: string,
     viewerAccount: AuthorizedAccount,
   ): Promise<ServerPathStep[]>;
+  /**
+   * GR-1 ("View graph" - a merged, all-players visualization of every
+   * counted path through a challenge): the bulk source `ChallengePathGraph`
+   * consumes. Same FB-4 viewer-finished guard as `getPublicRunPath` above
+   * (shared SQL fragment, see d1TrackingRepository.ts) - disclosing every
+   * player's route in one response is a bigger spoiler than one row at a
+   * time, so it's enforced server-side here too, never just hidden
+   * client-side. One entry per account's best counted run (same dedup
+   * `listChallengePlacements`/`listChallengeDnfs` use for the public
+   * board), finishers-fastest-first then DNFs, capped at
+   * `CHALLENGE_PATHS_LIMIT` with `totalRuns` carrying the real, uncapped
+   * count.
+   */
+  getChallengePaths(
+    challengeId: string,
+    viewerAccount: AuthorizedAccount,
+  ): Promise<ChallengePathsResult>;
   /**
    * Browse's per-card aggregate (Increment 5, unauthenticated, like
    * `listChallenges`): one entry per active challenge, in no particular

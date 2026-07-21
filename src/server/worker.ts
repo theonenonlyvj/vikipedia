@@ -517,6 +517,22 @@ async function dispatchV2(
     );
   }
 
+  const pathsMatch = url.pathname.match(
+    /^\/api\/v2\/challenges\/([^/]+)\/paths$/,
+  );
+  if (request.method === "GET" && pathsMatch?.[1]) {
+    // GR-1 ("View graph"): authenticated, unlike `/board` above - the
+    // repository's own FB-4 viewer-finished guard (shared with
+    // `getPublicRunPath`) needs a real account, not just a challenge id.
+    const account = await tracking.authorize(request);
+    await enforceAccountReadRateLimit(env, account.accountId, "paths");
+    return json(
+      await protocol(tracking).getChallengePaths(decodeURIComponent(pathsMatch[1]), account),
+      { headers: noStoreHeaders() },
+      corsHeaders,
+    );
+  }
+
   if (request.method === "GET" && url.pathname === "/api/v2/boards/trends") {
     return json(
       await tracking.handlers.getBoardsTrends(url.searchParams.get("window"), centralDateKey(now)),
@@ -1204,7 +1220,15 @@ async function enforceClickRateLimit(env: Env, accountId: string): Promise<void>
 async function enforceAccountReadRateLimit(
   env: Env,
   accountId: string,
-  route: "active" | "recovery-path" | "path" | "stats" | "capabilities" | "outcomes" | "suggestion",
+  route:
+    | "active"
+    | "recovery-path"
+    | "path"
+    | "paths"
+    | "stats"
+    | "capabilities"
+    | "outcomes"
+    | "suggestion",
 ): Promise<void> {
   if (!env.ACCOUNT_READ_RATE_LIMITER) {
     throw new ApiError(

@@ -3685,6 +3685,339 @@ describe("Task 4 D1 projections", () => {
   });
 });
 
+describe("getChallengePaths (GR-1 \"View graph\")", () => {
+  it("refuses when the viewer has no eligible completed run on this challenge (FB-4 guard, shared with getPublicRunPath)", async () => {
+    await insertCompletedV2({
+      id: "gr1-guard-other-run",
+      accountId: "other-account",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    const { repository } = fixture();
+    await expect(repository.getChallengePaths("challenge-0001", account)).rejects.toMatchObject({
+      code: "challenge_paths_not_found", status: 404,
+    });
+
+    // A DNF alone doesn't unlock it either (invariant 2/5: only a
+    // completion counts as "played") - same rule getPublicRunPath enforces.
+    await insertLegacyRun({ id: "gr1-guard-viewer-dnf", accountId: account.accountId });
+    await env.VWIKI_RACE_DB.prepare(
+      `UPDATE runs SET status='abandoned', protocol_version=2, click_count=2,
+         abandoned_at='2026-07-14T01:02:15.000Z', elapsed_ms=3000
+       WHERE id='gr1-guard-viewer-dnf'`,
+    ).run();
+    await expect(repository.getChallengePaths("challenge-0001", account)).rejects.toMatchObject({
+      code: "challenge_paths_not_found", status: 404,
+    });
+  });
+
+  it("once the viewer has finished, returns every counted run's full path, finishers-fastest-first then DNFs", async () => {
+    await insertCompletedV2({
+      id: "gr1-fast-run",
+      accountId: "fast-account",
+      elapsedMs: 3_000,
+      completedAt: "2026-07-14T01:00:03.000Z",
+    });
+    await insertPathSteps("gr1-fast-run", [
+      { n: 1, from: "Moon", to: "Orbit" },
+      { n: 2, from: "Orbit", to: "Gravity" },
+    ]);
+    await insertCompletedV2({
+      id: "gr1-viewer-run",
+      accountId: account.accountId,
+      elapsedMs: 5_000,
+      completedAt: "2026-07-14T01:00:05.000Z",
+    });
+    await insertPathSteps("gr1-viewer-run", [{ n: 1, from: "Moon", to: "Gravity" }]);
+    await insertAbandonedV2({
+      id: "gr1-dnf-run",
+      accountId: "dnf-account",
+      clickCount: 2,
+      elapsedMs: 9_000,
+      abandonedAt: "2026-07-14T01:00:09.000Z",
+    });
+    await insertPathSteps("gr1-dnf-run", [
+      { n: 1, from: "Moon", to: "Space" },
+      { n: 2, from: "Space", to: "Orbit" },
+    ]);
+    await insertAccountProfile("fast-account", "Fast Runner");
+    await insertAccountProfile("dnf-account", "Almost");
+    await insertAccountProfile(account.accountId, "Casey");
+
+    const { repository } = fixture();
+    const result = await repository.getChallengePaths("challenge-0001", account);
+
+    expect(result.totalRuns).toBe(3);
+    expect(result.runs).toEqual([
+      {
+        player: "Fast Runner",
+        status: "completed",
+        elapsedMs: 3_000,
+        clicks: 1,
+        steps: [
+          { n: 1, from: "Moon", to: "Orbit" },
+          { n: 2, from: "Orbit", to: "Gravity" },
+        ],
+      },
+      {
+        player: "Casey",
+        status: "completed",
+        elapsedMs: 5_000,
+        clicks: 1,
+        steps: [{ n: 1, from: "Moon", to: "Gravity" }],
+      },
+      {
+        player: "Almost",
+        status: "abandoned",
+        elapsedMs: 9_000,
+        clicks: 2,
+        steps: [
+          { n: 1, from: "Moon", to: "Space" },
+          { n: 2, from: "Space", to: "Orbit" },
+        ],
+      },
+    ]);
+  });
+
+  it("FB-7 (owner ruling, 2026-07-19): a sub-threshold (1-click) DNF gets no strand - not board-visible anywhere", async () => {
+    await insertCompletedV2({
+      id: "gr1-fb7-viewer-run",
+      accountId: account.accountId,
+      elapsedMs: 5_000,
+      completedAt: "2026-07-14T01:00:05.000Z",
+    });
+    await insertAbandonedV2({
+      id: "gr1-fb7-subthreshold-dnf",
+      accountId: "subthreshold-account",
+      clickCount: 1,
+      elapsedMs: 1_000,
+      abandonedAt: "2026-07-14T01:00:01.000Z",
+    });
+
+    const { repository } = fixture();
+    const result = await repository.getChallengePaths("challenge-0001", account);
+
+    expect(result.totalRuns).toBe(1);
+    expect(result.runs.map((r) => r.status)).toEqual(["completed"]);
+  });
+
+  it("omits a board-excluded run from the merged graph, same as the public board", async () => {
+    await insertCompletedV2({
+      id: "gr1-excl-viewer-run",
+      accountId: account.accountId,
+      elapsedMs: 5_000,
+      completedAt: "2026-07-14T01:00:05.000Z",
+    });
+    await insertCompletedV2({
+      id: "gr1-excl-other-run",
+      accountId: "excluded-account",
+      elapsedMs: 2_000,
+      completedAt: "2026-07-14T01:00:02.000Z",
+    });
+    const { repository } = fixture();
+    await repository.setRunBoardExclusion("gr1-excl-other-run", true);
+
+    const result = await repository.getChallengePaths("challenge-0001", account);
+
+    expect(result.totalRuns).toBe(1);
+    expect(result.runs.map((r) => r.elapsedMs)).toEqual([5_000]);
+  });
+
+  it("resolves both the viewer-finished guard AND each run's player through canonical account aliases", async () => {
+    await insertCompletedV2({
+      id: "gr1-alias-run",
+      accountId: "account-before-claim",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO account_aliases (alias_account_id, canonical_account_id, updated_at)
+       VALUES ('account-before-claim', ?, '2026-07-14T01:00:00.000Z')`,
+    ).bind(account.accountId).run();
+    await insertAccountProfile(account.accountId, "Casey Claimed");
+
+    const { repository } = fixture();
+    const result = await repository.getChallengePaths("challenge-0001", account);
+
+    expect(result.runs).toEqual([
+      expect.objectContaining({ player: "Casey Claimed", status: "completed", elapsedMs: 4_000 }),
+    ]);
+  });
+
+  it("dedupes repeat runs to each account's single best (the fast completion, not an earlier slow one or a DNF)", async () => {
+    await insertCompletedV2({
+      id: "gr1-dedupe-viewer-run",
+      accountId: account.accountId,
+      elapsedMs: 5_000,
+      completedAt: "2026-07-14T01:00:05.000Z",
+    });
+    await insertCompletedV2({
+      id: "gr1-dedupe-slow",
+      accountId: "repeat-account",
+      elapsedMs: 9_000,
+      completedAt: "2026-07-14T01:00:09.000Z",
+    });
+    await insertCompletedV2({
+      id: "gr1-dedupe-fast",
+      accountId: "repeat-account",
+      elapsedMs: 3_000,
+      completedAt: "2026-07-14T01:00:03.000Z",
+    });
+    // invariant 2: a completion supersedes the SAME account's own DNF too.
+    await insertAbandonedV2({
+      id: "gr1-dedupe-then-completed-dnf",
+      accountId: "redemption-account",
+      clickCount: 4,
+      elapsedMs: 6_000,
+      abandonedAt: "2026-07-14T01:00:06.000Z",
+    });
+    await insertCompletedV2({
+      id: "gr1-dedupe-then-completed-win",
+      accountId: "redemption-account",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+
+    const { repository } = fixture();
+    const result = await repository.getChallengePaths("challenge-0001", account);
+
+    expect(result.totalRuns).toBe(3); // viewer + repeat-account (best only) + redemption-account (win only)
+    expect(result.runs.every((r) => r.status === "completed")).toBe(true);
+    expect(result.runs.map((r) => r.elapsedMs).sort((a, b) => a - b)).toEqual([3_000, 4_000, 5_000]);
+  });
+
+  it("caps returned runs at the documented limit (12) while totalRuns reports the real, uncapped count", async () => {
+    await insertCompletedV2({
+      id: "gr1-cap-viewer-run",
+      accountId: account.accountId,
+      elapsedMs: 1_000,
+      completedAt: "2026-07-14T01:00:01.000Z",
+    });
+    for (let i = 0; i < 12; i += 1) {
+      const second = String(2 + i).padStart(2, "0");
+      await insertCompletedV2({
+        id: `gr1-cap-run-${i}`,
+        accountId: `gr1-cap-account-${i}`,
+        elapsedMs: 2_000 + i * 100,
+        completedAt: `2026-07-14T01:00:${second}.000Z`,
+      });
+    }
+
+    const { repository } = fixture();
+    const result = await repository.getChallengePaths("challenge-0001", account);
+
+    // 13 counted runs total (the viewer + 12 others); only 12 fit the cap.
+    expect(result.totalRuns).toBe(13);
+    expect(result.runs).toHaveLength(12);
+    // The 13th-fastest (i.e. slowest, elapsedMs 3_100) is the one dropped -
+    // the cap keeps the BEST 12, not an arbitrary 12.
+    expect(result.runs.some((r) => r.elapsedMs === 3_100)).toBe(false);
+    expect(result.runs.some((r) => r.elapsedMs === 1_000)).toBe(true);
+  });
+});
+
+describe("GET /api/v2/challenges/:id/paths", () => {
+  it("GR-1: requires a viewer, enforces the FB-4 guard end to end, and returns the merged graph payload", async () => {
+    await insertCompletedV2({
+      id: "gr1-route-other-run",
+      accountId: "other-account",
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    await insertPathSteps("gr1-route-other-run", [{ n: 1, from: "Moon", to: "Gravity" }]);
+
+    const { repository } = fixture();
+    const authorize = vi.fn(async (request: Request) => {
+      if (request.headers.get("Authorization") !== "Bearer viewer-token") {
+        throw new ApiError("unauthorized", "Sign in to view this graph.", 401);
+      }
+      return account;
+    });
+    const accountReadLimit = vi.fn(async () => ({ success: true }));
+    const worker = createWorker({
+      createTracking: () => ({
+        handlers: createApiHandlers(repository),
+        identity: {},
+        runProtocol: repository,
+        authorize,
+      } as unknown as WorkerTracking),
+    });
+    const route = "https://worker.example/api/v2/challenges/challenge-0001/paths";
+    const routeWorkerEnv = {
+      VWIKI_RACE_DB: env.VWIKI_RACE_DB,
+      VGAMES_URL: "https://vgames.example",
+      CLICK_RATE_LIMITER: { limit: async () => ({ success: true }) },
+      ACCOUNT_READ_RATE_LIMITER: { limit: accountReadLimit },
+      CHALLENGE_CREATE_RATE_LIMITER: { limit: async () => ({ success: true }) },
+    };
+
+    const unauthorized = await worker.fetch(new Request(route), routeWorkerEnv);
+    expect(unauthorized.status).toBe(401);
+    expect(accountReadLimit).not.toHaveBeenCalled();
+
+    const blocked = await worker.fetch(new Request(route, {
+      headers: { Authorization: "Bearer viewer-token" },
+    }), routeWorkerEnv);
+    expect(blocked.status).toBe(404);
+    await expect(blocked.json()).resolves.toMatchObject({
+      error: { code: "challenge_paths_not_found" },
+    });
+    expect(accountReadLimit).toHaveBeenCalledWith({ key: "paths:account-canonical" });
+
+    await insertCompletedV2({
+      id: "gr1-route-viewer-run",
+      accountId: account.accountId,
+      elapsedMs: 6_000,
+      completedAt: "2026-07-14T01:00:06.000Z",
+    });
+
+    const allowed = await worker.fetch(new Request(route, {
+      headers: { Authorization: "Bearer viewer-token" },
+    }), routeWorkerEnv);
+    expect(allowed.status).toBe(200);
+    await expect(allowed.json()).resolves.toEqual({
+      totalRuns: 2,
+      runs: [
+        expect.objectContaining({
+          status: "completed",
+          elapsedMs: 4_000,
+          steps: [{ n: 1, from: "Moon", to: "Gravity" }],
+        }),
+        expect.objectContaining({ status: "completed", elapsedMs: 6_000, steps: [] }),
+      ],
+    });
+  });
+
+  it("GR-1: rate-limits like the other account-read routes", async () => {
+    await insertCompletedV2({
+      id: "gr1-limit-viewer-run",
+      accountId: account.accountId,
+      elapsedMs: 4_000,
+      completedAt: "2026-07-14T01:00:04.000Z",
+    });
+    const { repository } = fixture();
+    const worker = createWorker({
+      createTracking: () => ({
+        handlers: createApiHandlers(repository),
+        identity: {},
+        runProtocol: repository,
+        authorize: async () => account,
+      } as unknown as WorkerTracking),
+    });
+    const response = await worker.fetch(
+      new Request("https://worker.example/api/v2/challenges/challenge-0001/paths", {
+        headers: { Authorization: "Bearer test" },
+      }),
+      { ...workerEnv(), ACCOUNT_READ_RATE_LIMITER: { limit: async () => ({ success: false }) } },
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "account_read_rate_limited" },
+    });
+  });
+});
+
 describe("board exclusion (migration 0006)", () => {
   it("omits excluded runs from listLeaderboard", async () => {
     const fasterRunId = "faster-excluded";
@@ -6430,6 +6763,24 @@ async function insertAccountProfile(accountId: string, publicName: string): Prom
     `INSERT INTO account_profiles (account_id, public_name, identity_status, updated_at)
      VALUES (?, ?, 'claimed', '2026-07-14T00:00:00.000Z')`,
   ).bind(accountId, publicName).run();
+}
+
+// GR-1: bulk-inserts a run's `run_path_steps` rows (source/destination
+// titles + step number, matching `ChallengePathStepEntry`'s `{n, from, to}`
+// - clicked_anchor_text/destination_page_id/elapsed_since_start_ms are
+// dummy values, since `getChallengePaths` never reads them).
+async function insertPathSteps(
+  runId: string,
+  steps: Array<{ n: number; from: string; to: string }>,
+): Promise<void> {
+  for (const step of steps) {
+    await env.VWIKI_RACE_DB.prepare(
+      `INSERT INTO run_path_steps
+         (run_id, step_number, source_title, clicked_anchor_text, destination_title,
+          destination_page_id, elapsed_since_start_ms, created_at)
+       VALUES (?, ?, ?, 'link', ?, 1, ?, '2026-07-14T01:00:00.000Z')`,
+    ).bind(runId, step.n, step.from, step.to, step.n * 1000).run();
+  }
 }
 
 async function runStatus(runId: string): Promise<string | undefined> {

@@ -20,6 +20,9 @@ import type {
   AllPlayersRosterEntry,
   AuthorizedAccount,
   Challenge,
+  ChallengePathRunEntry,
+  ChallengePathStepEntry,
+  ChallengePathsResult,
   DailyTrendRankedEntry,
   DailyTrendUnrankedEntry,
   LeaderboardContext,
@@ -2868,28 +2871,177 @@ export function createD1TrackingRepository(options: {
            OR (r.status = 'abandoned' AND r.click_count >= ?
              AND r.abandoned_at IS NOT NULL)
          )
-         AND EXISTS (
-           SELECT 1
-           FROM runs vr
-           LEFT JOIN account_aliases va
-             ON va.alias_account_id = coalesce(vr.canonical_account_id, vr.account_id)
-           WHERE vr.challenge_id = r.challenge_id
-             AND vr.board_excluded = 0
-             AND vr.status = 'completed'
-             AND vr.elapsed_ms IS NOT NULL
-             AND vr.completed_at IS NOT NULL
-             AND ((vr.protocol_version = 2 AND vr.ranked_eligible = 1) OR vr.protocol_version = 1)
-             AND (
-               coalesce(vr.canonical_account_id, vr.account_id) IN (SELECT account_id FROM receipt_ids)
-               OR va.canonical_account_id IN (SELECT account_id FROM receipt_ids)
-             )
-         )
+         AND ${viewerFinishedChallengeExistsSql("r.challenge_id")}
          ORDER BY p.step_number`,
       ).bind(...receipt.bindings, runId, MIN_COUNTED_DNF_CLICKS).all<PathStepRow>();
       if (!results.length) {
         throw new ApiError("run_path_not_found", "That completed ranked run was not found.", 404);
       }
       return results.map(mapPathStepRow);
+    },
+
+    async getChallengePaths(challengeIdInput, viewerAccountInput) {
+      // GR-1 ("View graph"): the merged-path visualization's bulk source -
+      // see the doc comments on `ChallengePathsResult`/`getChallengePaths`
+      // (domain/types.ts, trackingRepository.ts) for the shape/guard
+      // contract. Two queries, not a single JOIN: the first resolves WHICH
+      // runs count and in what order (same best-per-account dedup as
+      // `listChallengePlacements`/`listChallengeDnfs`, unioned into one
+      // finishers-then-DNFs ranking and capped); the second fetches every
+      // step for exactly those (<= `CHALLENGE_PATHS_LIMIT`) run ids. A
+      // single JOINed query would multiply each run's row count by its own
+      // step count, which breaks the `count(*) OVER ()` used for
+      // `totalRuns` and the `rank <= ?` cap - both need to operate at
+      // run-grain, not step-grain.
+      const challengeId = requireValue(challengeIdInput, "invalid_challenge_id");
+      const viewer = normalizeAuthorizedAccount(viewerAccountInput);
+      const receipt = receiptIdsCte(viewer);
+      const { results } = await db.prepare(
+        `WITH ${receipt.sql},
+           resolved AS (
+             SELECT r.id, r.status,
+                    coalesce(a.canonical_account_id, r.canonical_account_id, r.account_id) account_id,
+                    r.elapsed_ms, r.click_count, r.completed_at, r.abandoned_at,
+                    r.protocol_version, r.ranked_eligible
+             FROM runs r
+             LEFT JOIN account_aliases a
+               ON a.alias_account_id = coalesce(r.canonical_account_id, r.account_id)
+             WHERE r.challenge_id = ? AND r.board_excluded = 0
+           ),
+           completed_eligible AS (
+             SELECT *, 0 AS result_group
+             FROM resolved
+             WHERE status = 'completed' AND elapsed_ms IS NOT NULL
+               AND completed_at IS NOT NULL
+               AND ((protocol_version = 2 AND ranked_eligible = 1) OR protocol_version = 1)
+           ),
+           completed_accounts AS (
+             SELECT DISTINCT account_id FROM completed_eligible
+           ),
+           dnf_eligible AS (
+             -- FB-7 (owner ruling, 2026-07-19): same >= MIN_COUNTED_DNF_CLICKS
+             -- gate as listChallengeDnfs/getPublicRunPath - a sub-threshold
+             -- DNF isn't board-visible anywhere, so it doesn't draw a strand
+             -- here either. Also excludes any account that DOES have a
+             -- completed run (invariant 2: a completion supersedes a DNF),
+             -- same as listChallengeDnfs.
+             SELECT *, 1 AS result_group
+             FROM resolved
+             WHERE status = 'abandoned' AND click_count >= ?
+               AND elapsed_ms IS NOT NULL AND abandoned_at IS NOT NULL
+               AND account_id NOT IN (SELECT account_id FROM completed_accounts)
+           ),
+           unioned AS (
+             SELECT * FROM completed_eligible
+             UNION ALL
+             SELECT * FROM dnf_eligible
+           ),
+           best AS (
+             -- One strand per account on the graph: a repeat completion or
+             -- DNF would otherwise draw the same player twice. Same
+             -- best-attempt dedup listChallengePlacements/listChallengeDnfs
+             -- use for the public board, applied here to the UNION of both
+             -- result kinds at once.
+             SELECT *, row_number() OVER (
+               PARTITION BY account_id
+               ORDER BY result_group,
+                 CASE WHEN result_group = 0 THEN elapsed_ms END ASC,
+                 CASE WHEN result_group = 0 THEN click_count END ASC,
+                 CASE WHEN result_group = 0 THEN completed_at END ASC,
+                 CASE WHEN result_group = 1 THEN click_count END DESC,
+                 CASE WHEN result_group = 1 THEN elapsed_ms END DESC,
+                 CASE WHEN result_group = 1 THEN abandoned_at END ASC,
+                 id
+             ) attempt_rank
+             FROM unioned
+           ),
+           ranked AS (
+             SELECT *, row_number() OVER (
+               ORDER BY result_group,
+                 CASE WHEN result_group = 0 THEN elapsed_ms END ASC,
+                 CASE WHEN result_group = 0 THEN click_count END ASC,
+                 CASE WHEN result_group = 0 THEN completed_at END ASC,
+                 CASE WHEN result_group = 1 THEN click_count END DESC,
+                 CASE WHEN result_group = 1 THEN elapsed_ms END DESC,
+                 CASE WHEN result_group = 1 THEN abandoned_at END ASC,
+                 id
+             ) rank,
+             count(*) OVER () AS total_runs
+             FROM best
+             WHERE attempt_rank = 1
+           )
+         SELECT ranked.id, ranked.status, ranked.elapsed_ms, ranked.click_count,
+                ranked.total_runs, p.public_name AS display_name
+         FROM ranked
+         LEFT JOIN account_profiles p ON p.account_id = ranked.account_id
+         WHERE ranked.rank <= ?
+           AND ${viewerFinishedChallengeExistsSql("?")}
+         ORDER BY ranked.rank`,
+      ).bind(
+        ...receipt.bindings,
+        challengeId,
+        MIN_COUNTED_DNF_CLICKS,
+        CHALLENGE_PATHS_LIMIT,
+        challengeId,
+      ).all<ChallengePathsRunRow>();
+
+      // A guard failure and "genuinely zero counted runs" collapse into the
+      // identical outcome (same anti-enumeration shape `getPublicRunPath`
+      // already uses) - and in practice they're the same case here: a
+      // viewer who passes the guard has, by definition, their own eligible
+      // completed run on THIS challenge, which is itself always one of the
+      // rows above, so an empty result only happens when the guard failed.
+      if (!results.length) {
+        throw new ApiError(
+          "challenge_paths_not_found",
+          "No viewable paths for this challenge.",
+          404,
+        );
+      }
+
+      const totalRuns = Number(results[0]?.total_runs ?? results.length);
+      const runIds = results.map((row) => row.id);
+      const placeholders = runIds.map(() => "?").join(", ");
+      const { results: stepRows } = await db.prepare(
+        `SELECT run_id, step_number, source_title, destination_title
+         FROM run_path_steps
+         WHERE run_id IN (${placeholders})
+         ORDER BY run_id, step_number`,
+      ).bind(...runIds).all<ChallengePathsStepRow>();
+
+      const stepsByRunId = new Map<string, ChallengePathStepEntry[]>();
+      for (const row of stepRows) {
+        const list = stepsByRunId.get(row.run_id) ?? [];
+        list.push({
+          n: Number(row.step_number),
+          from: row.source_title,
+          to: row.destination_title,
+        });
+        stepsByRunId.set(row.run_id, list);
+      }
+
+      const runs: ChallengePathRunEntry[] = results.map((row) => ({
+        player: row.display_name ?? "Unknown",
+        status: row.status === "completed" ? "completed" : "abandoned",
+        elapsedMs: Number(row.elapsed_ms),
+        clicks: Number(row.click_count),
+        steps: stepsByRunId.get(row.id) ?? [],
+      }));
+
+      // GR-1: documents the cap in the logs, not just in code - a challenge
+      // whose real field ever exceeds `CHALLENGE_PATHS_LIMIT` is visible in
+      // the tail rather than silently truncated.
+      if (totalRuns > runs.length) {
+        console.info("challenge_paths_capped", JSON.stringify({
+          challengeId,
+          totalRuns,
+          served: runs.length,
+          limit: CHALLENGE_PATHS_LIMIT,
+        }));
+      }
+
+      const result: ChallengePathsResult = { runs, totalRuns };
+      return result;
     },
 
     async getRecoveryRunPath(accountInput, runIdInput) {
@@ -3734,6 +3886,44 @@ function receiptIdsCte(account: AuthorizedAccount): {
     bindings,
   };
 }
+
+/**
+ * FB-4 shared guard (council 2026-07-19, owner decision 10; shared with
+ * GR-1's `getChallengePaths` below): an `EXISTS` SQL fragment - not a full
+ * query, and it binds no parameters of its own - true only when the viewer
+ * has an eligible completed run on the given challenge. Requires a
+ * `receipt_ids` CTE (see `receiptIdsCte`) already in scope in the same
+ * statement's `WITH` clause. `challengeIdExpr` lets callers compose it
+ * either against a correlated column (`getPublicRunPath` passes
+ * `"r.challenge_id"`, looked up per target run, no extra bind) or a bound
+ * literal (`getChallengePaths` passes `"?"`, since it already knows the
+ * fixed challenge id) - either way this stays the ONE place the guard's SQL
+ * is written, so the two endpoints can't independently drift on it.
+ */
+function viewerFinishedChallengeExistsSql(challengeIdExpr: string): string {
+  return `EXISTS (
+    SELECT 1
+    FROM runs vr
+    LEFT JOIN account_aliases va
+      ON va.alias_account_id = coalesce(vr.canonical_account_id, vr.account_id)
+    WHERE vr.challenge_id = ${challengeIdExpr}
+      AND vr.board_excluded = 0
+      AND vr.status = 'completed'
+      AND vr.elapsed_ms IS NOT NULL
+      AND vr.completed_at IS NOT NULL
+      AND ((vr.protocol_version = 2 AND vr.ranked_eligible = 1) OR vr.protocol_version = 1)
+      AND (
+        coalesce(vr.canonical_account_id, vr.account_id) IN (SELECT account_id FROM receipt_ids)
+        OR va.canonical_account_id IN (SELECT account_id FROM receipt_ids)
+      )
+  )`;
+}
+
+// GR-1: a sane cap on the merged-graph payload - a popular challenge could
+// otherwise draw dozens of strands, which stops being legible long before
+// it stops being valid data. `getChallengePaths` also returns the real,
+// uncapped `totalRuns` and logs whenever the cap actually bites.
+const CHALLENGE_PATHS_LIMIT = 12;
 
 async function ingestAuthorizedAccount(
   db: D1DatabaseLike,
@@ -5389,4 +5579,20 @@ interface PathStepRow {
   destination_page_id?: number | null;
   elapsed_since_start_ms?: number | null;
   created_at: string;
+}
+
+interface ChallengePathsRunRow {
+  id: string;
+  status: string;
+  elapsed_ms: number;
+  click_count: number;
+  total_runs: number;
+  display_name: string | null;
+}
+
+interface ChallengePathsStepRow {
+  run_id: string;
+  step_number: number;
+  source_title: string;
+  destination_title: string;
 }

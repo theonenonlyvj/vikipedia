@@ -8,6 +8,7 @@ import type {
   ChallengeBoardDnfRow,
   ChallengeBoardPlacement,
   ChallengeOutcomeEntry,
+  ChallengePathRunEntry,
   ChallengeSummaryEntry,
   DailyTrendRankedEntry,
   DailyTrendUnrankedEntry,
@@ -162,6 +163,17 @@ export interface BoardsTrendsResponse {
 
 export interface RunPathResponse {
   path: ServerPathStep[];
+}
+
+/**
+ * GR-1 ("View graph"): `GET /api/v2/challenges/{id}/paths` - the merged
+ * graph's bulk source. See `ChallengePathsResult`/`ChallengePathRunEntry`
+ * (domain/types.ts) for the shape contract and the FB-4 viewer-finished
+ * guard this shares with `RunPathResponse` above.
+ */
+export interface ChallengePathsResponse {
+  runs: ChallengePathRunEntry[];
+  totalRuns: number;
 }
 
 export interface ActiveRunResponse {
