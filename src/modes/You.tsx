@@ -99,18 +99,25 @@ function AccountBlock({
   onSwitchAccount: () => void;
 }) {
   if (!identitySession) {
-    // State A - signed-out/never-played: chip is a button, no status line,
-    // no other actions, no cross-game line (spec §1).
+    // State A - signed-out/never-played (NV-1, owner feedback: the old bare
+    // "Guest" chip gave no visible way in - its tap-to-open-the-sheet
+    // behavior was undiscoverable). Explicit status line + a primary "Log
+    // in" CTA (opens the identity sheet straight on the Log In tab, same
+    // onClaimIdentity("login") preferredMode call every other entry point
+    // uses) + "Create account" as a secondary .link-button + one muted
+    // reassurance line that an account isn't required to play.
     return (
       <div className="account-block">
-        <button
-          aria-label="Guest - tap to manage"
-          className="account-chip"
-          onClick={() => onClaimIdentity("create")}
-          type="button"
-        >
-          Guest
-        </button>
+        <p className="account-status-line">Not logged in.</p>
+        <div className="account-actions">
+          <button type="button" onClick={() => onClaimIdentity("login")}>
+            Log in
+          </button>
+          <button className="link-button" type="button" onClick={() => onClaimIdentity("create")}>
+            Create account
+          </button>
+        </div>
+        <p className="muted">Or just play — no account needed.</p>
       </div>
     );
   }

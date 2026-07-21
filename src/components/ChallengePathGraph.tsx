@@ -884,7 +884,8 @@ export default function ChallengePathGraph({ runs }: { runs: ChallengePathRun[] 
         }
         .cpg-legend-badge {
           font-size: 0.68rem;
-          font-weight: 700;
+          /* NV-1: chip/badge chrome, capped at 600 (was 700). */
+          font-weight: 600;
           letter-spacing: 0.04em;
           border: 1px solid currentColor;
           border-radius: 999px;
@@ -893,7 +894,8 @@ export default function ChallengePathGraph({ runs }: { runs: ChallengePathRun[] 
         }
         .cpg-dnf-pill {
           font-size: 0.68rem;
-          font-weight: 700;
+          /* NV-1: chip/badge chrome, capped at 600 (was 700). */
+          font-weight: 600;
           letter-spacing: 0.04em;
           color: ${DNF_MARK_COLOR};
           border: 1px solid ${DNF_MARK_COLOR};
@@ -1253,7 +1255,9 @@ export default function ChallengePathGraph({ runs }: { runs: ChallengePathRun[] 
                         y={node.cy + 3.4}
                         textAnchor="middle"
                         fontSize={10}
-                        fontWeight={700}
+                        // NV-1: capped at 600 (was 700) - this is Fredoka
+                        // (--viota-ui-font), not the display font.
+                        fontWeight={600}
                         fill="var(--ink, #061014)"
                         fontFamily="var(--viota-ui-font, Fredoka, sans-serif)"
                         pointerEvents="none"
@@ -1270,7 +1274,8 @@ export default function ChallengePathGraph({ runs }: { runs: ChallengePathRun[] 
                         fontSize={12}
                         fill="var(--ink, #061014)"
                         fontFamily="var(--viota-ui-font, Fredoka, sans-serif)"
-                        fontWeight={700}
+                        // NV-1: capped at 600 (was 700).
+                        fontWeight={600}
                         pointerEvents="none"
                       >
                         {"★"}

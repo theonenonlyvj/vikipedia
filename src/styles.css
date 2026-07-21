@@ -96,7 +96,11 @@ button {
   background: var(--cyan);
   color: #061214;
   cursor: pointer;
-  font-weight: 700;
+  /* NV-1 (owner feedback, "all the bold looks tacky for that font"): base
+     button weight dropped from 700 to the file's UI-emphasis ceiling (500).
+     Active nav items and primary CTAs get their own explicit 600 override
+     below - everything else (including this default) sits at 500. */
+  font-weight: 500;
   min-height: 38px;
   padding: 9px 14px;
   /* QF-08 (round-2 quickfix, owner-proxy ruling): color/background-color
@@ -593,7 +597,8 @@ h1 {
   color: var(--muted);
   font-size: 0.64rem;
   font-style: normal;
-  font-weight: 700;
+  /* NV-1: chip/badge chrome, capped at 600 (was 700). */
+  font-weight: 600;
   line-height: 1;
   padding: 3px 5px;
   text-transform: uppercase;
@@ -680,8 +685,9 @@ h1 {
      pill (`.run-metrics div`/`.account-chip` base rule above - border +
      background + padding), i.e. actual chip chrome (HUD stat readout /
      account chip), not body copy - same exemption bucket as
-     buttons/nav/badges. */
-  font-weight: 700;
+     buttons/nav/badges. NV-1: capped at 600 (was 700) along with every
+     other chip/badge in this file. */
+  font-weight: 600;
 }
 
 .run-metrics dd {
@@ -709,7 +715,8 @@ h1 {
   background: var(--coral);
   color: #170908;
   min-height: 44px;
-  font-weight: 700;
+  /* NV-1: primary/commit CTA - capped at 600 (was 700). */
+  font-weight: 600;
 }
 
 .end-run-button:not(:disabled):hover {
@@ -856,8 +863,8 @@ h1 {
   grid-column: 1;
   grid-row: 1;
   /* FB-8 judgment call: kept bold - a disclosure-toggle glyph (+/-), not
-     body copy. */
-  font-weight: 700;
+     body copy. NV-1: capped at 600 (was 700). */
+  font-weight: 600;
 }
 
 .target-reference[open] summary::after {
@@ -944,7 +951,9 @@ h1 {
   border-color: transparent;
   color: var(--muted);
   font-size: 0.78rem;
-  font-weight: 700;
+  /* NV-1: an inactive nav item is "everything else" - 500. The active item
+     keeps the 600 emphasis ceiling below. */
+  font-weight: 500;
   text-transform: none;
 }
 
@@ -978,7 +987,9 @@ h1 {
    Start/End Run) is dropped with no color substitute standing in for it. */
 .mode-nav button.active {
   color: var(--text);
-  font-weight: 700;
+  /* NV-1: active nav item is the one tab-bar exception allowed to keep the
+     600 emphasis ceiling (was 700). */
+  font-weight: 600;
 }
 
 .error-banner,
@@ -1210,7 +1221,10 @@ h1 {
   min-height: 44px;
   background: var(--ink-soft);
   color: var(--muted);
-  font-weight: 700;
+  /* NV-1: this is a nav-tab pattern, same treatment as `.mode-nav button` -
+     inactive segments are "everything else" (500), the active segment below
+     keeps the 600 emphasis ceiling (was a uniform 700). */
+  font-weight: 500;
   white-space: nowrap;
   scroll-snap-align: start;
 }
@@ -1222,6 +1236,9 @@ h1 {
   background: rgba(13, 235, 215, 0.12);
   border-color: var(--cyan);
   color: var(--cyan);
+  /* NV-1: active tab - same 500->600 emphasis bump as `.mode-nav
+     button.active`. */
+  font-weight: 600;
 }
 
 /* PKG-10 remainder fix (2026-07-19): the spacer's only job (below, Bug B) is
@@ -1425,7 +1442,8 @@ h1 {
   background: transparent;
   border-color: transparent;
   color: var(--cyan);
-  font-weight: 700;
+  /* NV-1: a tertiary nav link, not a primary CTA - 500 (was 700). */
+  font-weight: 500;
   padding: 6px 0;
   clip-path: none;
 }
@@ -1662,7 +1680,8 @@ h1 {
   min-height: 48px;
   margin-top: 18px;
   font-size: 1.05rem;
-  font-weight: 700;
+  /* NV-1: primary CTA - capped at 600 (was 700). */
+  font-weight: 600;
 }
 
 .start-race-button:not(:disabled):hover {
@@ -1677,7 +1696,8 @@ h1 {
   min-height: 48px;
   margin-top: 18px;
   font-size: 1.05rem;
-  font-weight: 700;
+  /* NV-1: primary CTA - capped at 600 (was 700). */
+  font-weight: 600;
 }
 
 .link-button {
@@ -1805,8 +1825,11 @@ h1 {
   font-size: 0.92rem;
   /* FB-8: out of scope - raw Wikipedia-chrome mimicry (explicit
      `sans-serif`, not Fredoka/`--viota-ui-font`), the one place the spec
-     says native Wikipedia styling stands. */
-  font-weight: 700;
+     says native Wikipedia styling stands. NV-1's acceptance bar ("nothing
+     above 600 outside --viota-display-font scopes") is unconditional and
+     doesn't carve out this exception the way FB-8 did, so it's capped at
+     600 too - visually inert here since this isn't Fredoka anyway. */
+  font-weight: 600;
   min-height: 42px;
   padding: 10px 18px;
 }
@@ -1977,8 +2000,10 @@ h1 {
 .article-content th {
   background: #eaecf0;
   /* FB-8: out of scope - raw in-race Wikipedia article rendering, the one
-     place the spec says native styling stands. */
-  font-weight: 700;
+     place the spec says native styling stands. NV-1: capped at 600 anyway
+     per its unconditional file-wide acceptance bar (see
+     .article-navigation-pending above for the same call). */
+  font-weight: 600;
 }
 
 .article-content .infobox {
@@ -2143,8 +2168,9 @@ h1 {
   align-items: baseline;
   color: var(--text);
   /* FB-8 judgment call: kept bold - an interactive disclosure toggle
-     (cursor: pointer, acts like `.link-button`), not body copy. */
-  font-weight: 700;
+     (cursor: pointer, acts like `.link-button`), not body copy. NV-1:
+     capped at 600 (was 700). */
+  font-weight: 600;
   list-style: none;
 }
 
@@ -2155,8 +2181,9 @@ h1 {
 .path-recap .link-affordance {
   color: var(--cyan);
   font-size: 0.8rem;
-  /* FB-8: a link affordance, not body copy - kept bold. */
-  font-weight: 700;
+  /* FB-8: a link affordance, not body copy - kept bold. NV-1: capped at 600
+     (was 700). */
+  font-weight: 600;
 }
 
 .path-recap .winning-path {
@@ -2279,8 +2306,8 @@ h1 {
   color: var(--cyan);
   cursor: pointer;
   /* FB-8 judgment call: kept bold - underlined link-style disclosure
-     toggle chrome, not body copy. */
-  font-weight: 700;
+     toggle chrome, not body copy. NV-1: capped at 600 (was 700). */
+  font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -2582,7 +2609,8 @@ h1 {
   background: var(--ink);
   color: var(--text-bright);
   font-size: 0.66rem;
-  font-weight: 700;
+  /* NV-1: chip/badge chrome, capped at 600 (was 700). */
+  font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1;
   padding: 4px 6px;
@@ -2710,8 +2738,9 @@ h1 {
 .provenance-badge {
   padding: 1px 5px;
   font-size: 0.64rem;
-  /* FB-8: a badge, not body copy - chrome, kept bold. */
-  font-weight: 700;
+  /* FB-8: a badge, not body copy - chrome, kept bold. NV-1: capped at 600
+     (was 700). */
+  font-weight: 600;
   line-height: 1.25;
   text-transform: uppercase;
 }
@@ -2737,8 +2766,9 @@ h1 {
   color: var(--cyan);
   cursor: pointer;
   /* FB-8 judgment call: kept bold - link-style disclosure toggle chrome
-     (same as `.board-snippet .path-disclosure summary`), not body copy. */
-  font-weight: 700;
+     (same as `.board-snippet .path-disclosure summary`), not body copy.
+     NV-1: capped at 600 (was 700). */
+  font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -2840,8 +2870,9 @@ h1 {
   color: #ffffff;
   font-size: 1.28rem;
   /* FB-8 judgment call: kept bold - the stat's numeric value inside the
-     bordered `.stat-grid div` tile (chip chrome), not body copy. */
-  font-weight: 700;
+     bordered `.stat-grid div` tile (chip chrome), not body copy. NV-1:
+     capped at 600 (was 700). */
+  font-weight: 600;
   margin-top: 2px;
 }
 
@@ -3046,8 +3077,8 @@ h1 {
   font-size: 0.95rem;
   /* FB-8 judgment call: kept bold - the classifier score's numeric value,
      same "value stays bold, label doesn't" pattern as `.stat-grid`/
-     `.run-metrics` above. */
-  font-weight: 700;
+     `.run-metrics` above. NV-1: capped at 600 (was 700). */
+  font-weight: 600;
   margin: 2px 0 0;
 }
 

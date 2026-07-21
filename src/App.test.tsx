@@ -2306,9 +2306,11 @@ describe("VWiki Race app", () => {
     await user.click(screen.getByRole("button", { name: /^you$/i }));
 
     await waitFor(() => expect(storage.getItem("vwiki-race:vgames-session")).toBeNull());
-    // "Honest You": a cleared identity lands in State A - the chip is now a
-    // "Guest" button, not a static "Current player" status readout.
-    expect(screen.getByRole("button", { name: /^guest - tap to manage$/i })).toHaveTextContent("Guest");
+    // "Honest You": a cleared identity lands in State A - NV-1's explicit
+    // status line + Log in/Create account pair, not a static "Current
+    // player" status readout (and no more bare "Guest" chip either).
+    expect(screen.getByText("Not logged in.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /guest - tap to manage/i })).toBeNull();
     expect(screen.queryByText("7")).toBeNull();
   });
 
@@ -3616,7 +3618,8 @@ describe("VWiki Race app", () => {
       const user = userEvent.setup();
       render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 
-      await user.click(await screen.findByRole("button", { name: "You" }));
+      // NV-1: signed-out nav reads "Log In", not "You".
+      await user.click(await screen.findByRole("button", { name: "Log In" }));
 
       expect(screen.getByText(/play your first race to start building stats/i)).toBeVisible();
       // Zero repeated "No data yet." strings - not the old 7-tile grid +
@@ -3678,24 +3681,51 @@ describe("Honest You: account UX (session states, logout, ghost guards)", () => 
   }
 
   describe("State A - signed-out / never-played", () => {
-    it("account block always renders; chip is a button that opens the sheet on Create; no logged-in-only actions", async () => {
+    // NV-1 (owner feedback, two screenshots): the old bare "Guest" chip gave
+    // no visible way to log in - its tap-to-open-the-sheet behavior was
+    // undiscoverable, and the nav's own "You" tab read as if there were
+    // already an account to see. Nav now reads "Log In" while signed out,
+    // and the account block is an explicit status line + Log in/Create
+    // account pair, not a chip.
+    it("nav reads 'Log In'; account block is an explicit status line + Log in/Create account pair, no logged-in-only actions", async () => {
       const user = userEvent.setup();
       render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 
-      await user.click(await screen.findByRole("button", { name: "You" }));
-      expect(document.querySelector(".account-block")).not.toBeNull();
+      const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+      expect(within(nav).queryByRole("button", { name: "You" })).toBeNull();
+      const navLogIn = within(nav).getByRole("button", { name: "Log In" });
 
-      const chip = screen.getByRole("button", { name: "Guest - tap to manage" });
-      expect(chip).toHaveTextContent("Guest");
-      expect(screen.queryByRole("button", { name: /^log out$/i })).toBeNull();
-      expect(screen.queryByRole("button", { name: /^switch account$/i })).toBeNull();
-      expect(screen.queryByRole("button", { name: /play as someone else/i })).toBeNull();
+      await user.click(navLogIn);
+      const accountBlock = document.querySelector(".account-block") as HTMLElement;
+      expect(accountBlock).not.toBeNull();
+
+      expect(within(accountBlock).getByText("Not logged in.")).toBeVisible();
+      expect(within(accountBlock).queryByRole("button", { name: /guest - tap to manage/i })).toBeNull();
+      expect(within(accountBlock).queryByRole("button", { name: /^log out$/i })).toBeNull();
+      expect(within(accountBlock).queryByRole("button", { name: /^switch account$/i })).toBeNull();
+      expect(within(accountBlock).queryByRole("button", { name: /play as someone else/i })).toBeNull();
+      expect(within(accountBlock).getByText(/or just play.*no account needed/i)).toBeVisible();
       // QF-09 empty state, unchanged.
       expect(screen.getByText(/play your first race to start building stats/i)).toBeVisible();
 
-      await user.click(chip);
-      const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
-      expect(within(dialog).getByLabelText(/vgames username/i)).toBeVisible();
+      // "Create account" is a secondary .link-button beside the primary
+      // "Log in" - both route to the shared identity sheet, on their
+      // respective tabs. Scoped to the account block: the nav's own tab is
+      // ALSO named "Log In" while signed out (case-differs, but scoping
+      // avoids relying on that alone).
+      const createAccount = within(accountBlock).getByRole("button", { name: /^create account$/i });
+      expect(createAccount).toHaveClass("link-button");
+      await user.click(createAccount);
+      const createDialog = await screen.findByRole("dialog", { name: /save your stats/i });
+      expect(within(createDialog).getByLabelText(/vgames username/i)).toBeVisible();
+      await user.click(within(createDialog).getByRole("button", { name: /close identity prompt/i }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      const logIn = within(accountBlock).getByRole("button", { name: /^log in$/i });
+      await user.click(logIn);
+      const loginDialog = await screen.findByRole("dialog", { name: /save your stats/i });
+      expect(within(loginDialog).getByLabelText(/^password$/i)).toBeVisible();
+      expect(within(loginDialog).queryByLabelText(/vgames username/i)).toBeNull();
     });
   });
 
@@ -3757,7 +3787,11 @@ describe("Honest You: account UX (session states, logout, ghost guards)", () => 
       expect(await screen.findByText("Logged out - other devices stay logged in.")).toBeVisible();
       expect(storage.getItem("vwiki-race:vgames-session")).toBeNull();
       expect(storage.getItem("vwiki-race:vgames-device-credential")).toBe("device-abc");
-      expect(screen.getByRole("button", { name: "Guest - tap to manage" })).toBeVisible();
+      // NV-1: State A's explicit login prompt, not the old bare chip - and
+      // the nav tab itself relabels to "Log In" now that there's no session.
+      expect(screen.getByText("Not logged in.")).toBeVisible();
+      const nav = screen.getByRole("navigation", { name: /vwiki race views/i });
+      expect(within(nav).getByRole("button", { name: "Log In" })).toBeVisible();
       expect(screen.queryByText("5")).toBeNull();
     });
   });
@@ -3999,7 +4033,8 @@ describe("Honest You: account UX (session states, logout, ghost guards)", () => 
     it("renders only in State B - never in State A or State C", async () => {
       const userA = userEvent.setup();
       render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
-      await userA.click(await screen.findByRole("button", { name: "You" }));
+      // NV-1: State A's nav tab reads "Log In", not "You".
+      await userA.click(await screen.findByRole("button", { name: "Log In" }));
       expect(screen.queryByRole("button", { name: /play as someone else/i })).toBeNull();
     });
 
@@ -4145,7 +4180,9 @@ describe("Honest You: account UX (session states, logout, ghost guards)", () => 
 
     it("is absent for a signed-out session, a claimed session, unresolved stats, and a resolved zero-stakes ghost", async () => {
       render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
-      expect(await screen.findByRole("button", { name: "You" })).toBeVisible();
+      // NV-1: signed-out reads "Log In" (never "You") - still exactly one
+      // nav item there, so the dot-free exact name match holds the same way.
+      expect(await screen.findByRole("button", { name: "Log In" })).toBeVisible();
     });
 
     it("is absent for a claimed session even with attempts/streak", async () => {

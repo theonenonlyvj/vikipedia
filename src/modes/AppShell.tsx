@@ -28,6 +28,11 @@ const AdminDailies = lazy(() => import("../components/AdminDailies"));
 // user-visible label only - the mode key stays "boards" (internal
 // identifiers/routes/files are unchanged; renaming those would be churn
 // without benefit, per the owner-proxy ruling).
+//
+// NV-1 (owner feedback, two screenshots): the "you" item's static "You"
+// label here is now only the SIGNED-IN copy (ghost or claimed) - the render
+// loop below swaps in "Log In" whenever identitySession === null, so a
+// signed-out visitor never lands on a tab that already claims to be theirs.
 const MODE_ITEMS: { key: ModeKey; label: string }[] = [
   { key: "home", label: "Home" },
   { key: "boards", label: "Stats" },
@@ -251,7 +256,11 @@ export default function AppShell({
               onClick={() => onSelectMode(key)}
               type="button"
             >
-              {label}
+              {/* NV-1 (owner feedback, two screenshots): a signed-out
+                  visitor's "you" tab reads "Log In", not "You" - there's no
+                  account yet to claim that label. Any real session (ghost or
+                  claimed) still reads "You" unchanged. */}
+              {key === "you" && identitySession === null ? "Log In" : label}
               {/* "Honest You" at-risk dot (spec §3): warn-state, not
                   reassurance - silence means safe. `aria-hidden` on the dot
                   itself; the visually-hidden span is what actually carries
