@@ -15,6 +15,7 @@ import {
 } from "./domain/challengeSelection";
 import { msUntilNextCentralDrop } from "./domain/dailyCountdown";
 import type { CreateChallengeOutcome } from "./domain/dailyEditorial";
+import { ghostGuardRequired } from "./domain/identityStakes";
 import { describeRandomChallengeError, type PlayAnotherSuggestionState } from "./domain/playAnother";
 import type {
   AccountStats,
@@ -87,7 +88,27 @@ type AuthPromptIntent =
   | {
       type: "create";
       input: CreateChallengeInput;
-    };
+    }
+  // "Honest You" (spec §2.3/§2.4): covers both "Play as someone else"
+  // (freshName: true - forces the Guest form's name input open even though
+  // a session exists) and "Switch account" (freshName: false - opens
+  // straight on Log in). `resumeAfterIdentity` treats this as a no-op, same
+  // as "claim" - there is no pending action to resume, the identity swap
+  // itself was the whole point.
+  | { type: "switch"; freshName: boolean };
+
+// "Honest You" (spec §2.2/§2.3): which destructive-path entry point
+// triggered the ghost-loss guard. Two entries, not a bare boolean, so the
+// guard's waiver (§2.2 "hasn't been waived this sheet-opening") can be
+// scoped per entry rather than per sheet-opening as a whole - a fresh-entry
+// waiver ("Start fresh anyway") must never silently suppress a later,
+// same-opening pivot to the Log in tab (the guest-form's "Log in instead"
+// link, §2.6) against the same at-stake ghost, and vice versa.
+type GhostGuardEntry = "login" | "fresh";
+interface GhostGuardState {
+  entry: GhostGuardEntry;
+  pendingLogin?: LoginFormInput;
+}
 
 const defaultFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
 const defaultNow = () => performance.now();
@@ -184,6 +205,17 @@ export default function App({
   const [authPrompt, setAuthPrompt] = useState<AuthPromptIntent | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("create");
   const [authBusy, setAuthBusy] = useState(false);
+  // "Honest You" (spec §2.2/§2.3): non-null while the ghost-loss guard
+  // dialog is showing INSTEAD of the identity sheet (§8 "Dialog layering" -
+  // `authPrompt && ghostGuard` renders the guard, never both at once).
+  const [ghostGuard, setGhostGuard] = useState<GhostGuardState | null>(null);
+  // Per-entry waiver (judge amendment, 2026-07-20 - scoped by entry type,
+  // not by sheet-opening as a whole): cleared whenever the sheet opens or
+  // fully closes (openAuthPrompt/closeAuthPrompt below), consulted per
+  // entry so a "Start fresh anyway" waiver can never suppress the login
+  // guard for a same-opening pivot to Log in against the same ghost.
+  const [ghostGuardWaivedFor, setGhostGuardWaivedFor] =
+    useState<ReadonlySet<GhostGuardEntry>>(new Set());
   const [identitySession, setIdentitySession] =
     useState<VGamesIdentitySession | null>(
       () => readCachedIdentitySession(storage, injectedIdentityRepository),
@@ -381,8 +413,15 @@ export default function App({
       accountStatsProjection?.token === identitySession.token
     ? accountStatsProjection.stats
     : null;
-  const displayNameIsReady =
-    (identitySession?.displayName ?? displayNameDraft).trim().length > 0;
+  // "Play as someone else" (spec §2.3) forces the Guest form's name input
+  // open even though `identitySession` already holds a name - readiness
+  // must key off the freshly-typed draft, not the OLD session's name, or
+  // the submit button would stay enabled with an empty (blanked-on-open)
+  // input.
+  const forceGuestNameEntry = authPrompt?.type === "switch" && authPrompt.freshName;
+  const displayNameIsReady = forceGuestNameEntry
+    ? displayNameDraft.trim().length > 0
+    : (identitySession?.displayName ?? displayNameDraft).trim().length > 0;
   const isBusy = ["preparing", "syncing", "abandoning"].includes(modeState) || authBusy;
 
   // Re-syncs identitySession when the *memoized* identityRepository instance
@@ -986,8 +1025,17 @@ export default function App({
       : null;
     setError(null);
     setAuthPrompt(intent);
+    // A brand-new sheet-opening never carries a prior waiver forward (§2.2:
+    // "cleared whenever authPrompt closes/reopens").
+    setGhostGuard(null);
+    setGhostGuardWaivedFor(new Set());
     setPasswordDraft("");
     setConfirmPasswordDraft("");
+    if (intent.type === "switch" && intent.freshName) {
+      // "Play as someone else" (spec §2.3): the old name must not pre-fill
+      // the Guest form's name input.
+      setDisplayNameDraft("");
+    }
     if (preferredMode) {
       setAuthMode(preferredMode);
     } else {
@@ -1005,6 +1053,16 @@ export default function App({
     }
   }
 
+  // Closes the sheet AND the guard together (§2.2: "waiver resets when
+  // authPrompt closes/reopens") - used on every path out of the identity
+  // flow (the X/backdrop close, and every success path below) so a
+  // half-finished guard never survives into the next sheet-opening.
+  function closeAuthPrompt() {
+    setAuthPrompt(null);
+    setGhostGuard(null);
+    setGhostGuardWaivedFor(new Set());
+  }
+
   async function continueAsGuest() {
     if (!authPrompt || continueAsGuestLock.current) {
       return;
@@ -1013,8 +1071,13 @@ export default function App({
     continueAsGuestLock.current = true;
     try {
       const prompt = authPrompt;
+      // "Play as someone else" (spec §2.3): forces a NEW guest session even
+      // though `identitySession` already holds the old ghost - the existing
+      // short-circuit below (reusing `nextIdentitySession = identitySession`)
+      // is exactly the behavior this must bypass.
+      const forceNameEntry = prompt.type === "switch" && prompt.freshName;
       let nextIdentitySession = identitySession;
-      if (!nextIdentitySession) {
+      if (!nextIdentitySession || forceNameEntry) {
         const displayName = displayNameDraft.trim();
         if (!displayName) {
           setError("Choose a display name before continuing as guest.");
@@ -1028,6 +1091,11 @@ export default function App({
             displayName,
           });
           persistIdentitySession(nextIdentitySession);
+          if (forceNameEntry) {
+            // Per-tab DNF memory belongs to the account that raced (§2.1) -
+            // a fresh guest name must not inherit the old ghost's.
+            setSessionDnfChallengeIds(new Set());
+          }
         } catch (caught) {
           setError(vgamesIdentityErrorMessage(caught, "Could not start a guest session."));
           setAuthBusy(false);
@@ -1042,7 +1110,7 @@ export default function App({
         return;
       }
 
-      setAuthPrompt(null);
+      closeAuthPrompt();
       try {
         await resumeAfterIdentity(prompt, nextIdentitySession);
       } finally {
@@ -1092,7 +1160,7 @@ export default function App({
         password,
       });
       persistIdentitySession(claimedSession);
-      setAuthPrompt(null);
+      closeAuthPrompt();
       await resumeAfterIdentity(prompt, claimedSession);
     } catch (caught) {
       setError(vgamesIdentityErrorMessage(caught, "Could not create that VGames account."));
@@ -1102,7 +1170,24 @@ export default function App({
     }
   }
 
-  async function login(input: LoginFormInput) {
+  // "Honest You" (spec §2.2): the universal interception point - every
+  // entry into the Log in form (You's claim-CTA "Log in", the sheet's Log
+  // in tab reached from any auth-prompt intent, and the guest-form's "Log
+  // in instead" link, §2.6) submits through this one function, so the
+  // ghost-loss guard covers all of them for free. Only interposes on
+  // SUBMIT, never on merely opening the tab.
+  function login(input: LoginFormInput) {
+    if (!authPrompt || loginRequestLock.current) {
+      return;
+    }
+    if (ghostGuardRequired(identitySession, accountStats) && !ghostGuardWaivedFor.has("login")) {
+      setGhostGuard({ entry: "login", pendingLogin: input });
+      return;
+    }
+    void performLogin(input);
+  }
+
+  async function performLogin(input: LoginFormInput) {
     if (!authPrompt || loginRequestLock.current) {
       return;
     }
@@ -1124,14 +1209,66 @@ export default function App({
         password,
       });
       persistIdentitySession(loggedInSession);
-      setAuthPrompt(null);
+      // Every login replaces the active account - a later session must
+      // never inherit the previous one's per-tab DNF memory (§2.1/§2.2).
+      setSessionDnfChallengeIds(new Set());
+      closeAuthPrompt();
       await resumeAfterIdentity(prompt, loggedInSession);
     } catch (caught) {
       setError(vgamesIdentityErrorMessage(caught, "Could not log in."));
+      // Login FAILURE (§2.2): the sheet re-opens on the Log in tab with
+      // this error - `authPrompt` was never cleared, so it's already
+      // showing. The guard stays waived for this entry for the rest of
+      // this sheet-opening (ghostGuardWaivedFor is untouched here), so a
+      // resubmit doesn't re-trigger it.
+      setGhostGuard(null);
+      setAuthMode("login");
     } finally {
       loginRequestLock.current = false;
       setAuthBusy(false);
     }
+  }
+
+  // Guard button 1 (§2.2/§2.3, both entries): close the guard, switch the
+  // sheet to Create with password drafts cleared so a typed login password
+  // never pre-fills the new-password fields - `usernameDraft` keeps its
+  // `suggestUsername` prefill. `authPrompt` itself is untouched, so the
+  // ORIGINAL auth-prompt intent (not the abandoned login/switch intent)
+  // resumes via `resumeAfterIdentity` after a successful claim.
+  function confirmGhostGuardClaimFirst() {
+    setGhostGuard(null);
+    setAuthMode("create");
+    setPasswordDraft("");
+    setConfirmPasswordDraft("");
+  }
+
+  // Guard button 2, login entry ("Log in anyway", coral - this IS the
+  // destructive commit, §2.2): waive the login guard for the rest of this
+  // sheet-opening FIRST, then fire immediately with the stashed
+  // credentials - no re-entry.
+  function confirmGhostGuardLoginAnyway() {
+    if (!ghostGuard?.pendingLogin) return;
+    const pendingLogin = ghostGuard.pendingLogin;
+    setGhostGuardWaivedFor((current) => new Set(current).add("login"));
+    setGhostGuard(null);
+    void performLogin(pendingLogin);
+  }
+
+  // Guard button 2, fresh entry ("Start fresh anyway", coral, §2.3): unlike
+  // the login-anyway path, this does NOT fire a network call immediately -
+  // cancel-safety means the old ghost session stays untouched until a new
+  // guest name is actually submitted. The sheet is already open underneath
+  // the guard (on the Guest tab, forceNameEntry, opened by
+  // requestPlayAsSomeoneElse below) - dismissing the guard just reveals it.
+  function confirmGhostGuardStartFreshAnyway() {
+    setGhostGuardWaivedFor((current) => new Set(current).add("fresh"));
+    setGhostGuard(null);
+  }
+
+  // Guard button 3 (§2.2/§2.3, both entries): re-show the sheet with drafts
+  // intact - drafts already live in App state, nothing to restore.
+  function cancelGhostGuard() {
+    setGhostGuard(null);
   }
 
   function persistIdentitySession(nextSession: VGamesIdentitySession) {
@@ -1149,7 +1286,13 @@ export default function App({
     setUsernameDraft(suggestUsername(nextSession.displayName));
   }
 
-  function clearStaleIdentity(intent?: AuthPromptIntent) {
+  // "Honest You" (spec §2.1, amendment 1): the shared core clearStaleIdentity
+  // and `logOut` both need - local session teardown with no network call
+  // (no revocation endpoint exists; bearer JWTs can't be invalidated
+  // server-side, so this is local-only BY DESIGN, not a gap). Device
+  // credential (`vwiki-race:vgames-device-credential`) is deliberately KEPT
+  // - it's a device identifier, not a session.
+  function resetIdentityState() {
     identityRepository.clearSession();
     recoveredToken.current = null;
     statsRequest.current += 1;
@@ -1159,9 +1302,53 @@ export default function App({
     setUsernameDraft("");
     setPasswordDraft("");
     setConfirmPasswordDraft("");
+    // Per-tab DNF memory belongs to the account that raced (§2.1) - a later
+    // login (including a fresh guest attaching by device credential) must
+    // not inherit it.
+    setSessionDnfChallengeIds(new Set());
+  }
+
+  function clearStaleIdentity(intent?: AuthPromptIntent) {
+    resetIdentityState();
     if (intent) {
       openAuthPrompt(intent, "login");
     }
+  }
+
+  // "Honest You" (spec §2.1, State C's "Log out"): unlike `clearStaleIdentity`,
+  // this must NOT open the login prompt - it's a deliberate, player-chosen
+  // exit, not a stale-session recovery. Local, synchronous, reversible
+  // ("Log back in anytime") - a 2026-07-20 judge amendment cut the brief's
+  // confirm-dialog hardening for exactly that reason: gating a fully
+  // reversible, non-destructive action behind a modal is friction this
+  // package doesn't need to add. The device-scope caveat that dialog would
+  // have carried lives in this notice instead.
+  function logOut() {
+    resetIdentityState();
+    setRunNotice("Logged out - other devices stay logged in.");
+  }
+
+  // "Honest You" (spec §2.3, State B's ghost exit): if the ghost has real
+  // stakes, interpose the SAME guard dialog as login-over-ghost, with the
+  // fresh-entry body/verb. Either way, this always opens the sheet on the
+  // Guest tab with forceNameEntry - the guard (when shown) simply renders
+  // on top of that already-open sheet (§8 layering) rather than gating the
+  // open itself, so dismissing the guard costs no extra step.
+  function requestPlayAsSomeoneElse() {
+    openAuthPrompt({ type: "switch", freshName: true }, "guest");
+    if (ghostGuardRequired(identitySession, accountStats)) {
+      setGhostGuard({ entry: "fresh" });
+    }
+  }
+
+  // "Honest You" (spec §2.4, State C's "Switch account"): opens straight on
+  // Log in, no pre-clear (amendment 2, §9) - Cancel/close leaves the player
+  // exactly as they were, still logged in. No guard: a claimed session's
+  // guard predicate is always false (ghostGuardRequired requires a ghost),
+  // matching "a claimed account's stats live server-side; nothing is at
+  // stake."
+  function requestSwitchAccount() {
+    openAuthPrompt({ type: "switch", freshName: false }, "login");
   }
 
   async function resumeAfterIdentity(
@@ -1188,6 +1375,13 @@ export default function App({
       // CTA: there is no pending action to resume -
       // continueAsGuest/createVGamesAccount/login already upgraded the
       // identity and persisted it. Nothing further to do.
+      return;
+    }
+
+    if (prompt.type === "switch") {
+      // "Honest You" (spec §2.3/§2.4): "Play as someone else"/"Switch
+      // account" - the identity swap itself was the whole point, same as
+      // "claim" above. Nothing further to resume.
       return;
     }
 
@@ -1501,9 +1695,12 @@ export default function App({
           onDismissStorageNotice={() => setStorageNoticeDismissed(true)}
           onExitAdmin={exitAdmin}
           onGoToBoardsFor={goToBoardsFor}
+          onLogOut={logOut}
           onOpenChallengeDetail={(challengeId) => void openChallengeDetail(challengeId)}
+          onPlayAsSomeoneElse={requestPlayAsSomeoneElse}
           onRaceChallenge={openRacePreviewFor}
           onSelectMode={selectMode}
+          onSwitchAccount={requestSwitchAccount}
           playAnotherSuggestion={playAnotherSuggestion}
           previewWikipediaGateway={previewWikipediaGateway}
           randomChallengeBusy={randomChallengeBusy}
@@ -1517,24 +1714,40 @@ export default function App({
         />
       )}
 
-      {authPrompt ? (
+      {/* "Honest You" (spec §8 "Dialog layering"): the guard and the sheet
+          never render simultaneously - `ghostGuard` (when set) renders
+          INSTEAD of `IdentityPrompt`, on top of the same already-open
+          `authPrompt`. Cancel just nulls `ghostGuard`, which brings the
+          sheet back with every draft intact. */}
+      {authPrompt && ghostGuard ? (
+        <GhostGuardDialog
+          busy={authBusy}
+          entry={ghostGuard.entry}
+          name={identitySession?.displayName ?? ""}
+          onCancel={cancelGhostGuard}
+          onClaimFirst={confirmGhostGuardClaimFirst}
+          onProceed={ghostGuard.entry === "login" ? confirmGhostGuardLoginAnyway : confirmGhostGuardStartFreshAnyway}
+          returnFocusRef={identityTrigger}
+        />
+      ) : authPrompt ? (
         <IdentityPrompt
           authBusy={authBusy}
           authMode={authMode}
           confirmPasswordDraft={confirmPasswordDraft}
           displayNameDraft={displayNameDraft}
           displayNameIsReady={displayNameIsReady}
+          forceNameEntry={forceGuestNameEntry}
           identitySession={identitySession}
           error={visibleError}
           onCreate={() => void createVGamesAccount()}
           onClose={() => {
             if (!authBusy) {
-              setAuthPrompt(null);
+              closeAuthPrompt();
             }
           }}
           onContinueAsGuest={() => void continueAsGuest()}
           onDisplayNameChange={setDisplayNameDraft}
-          onLogin={(input) => void login(input)}
+          onLogin={(input) => login(input)}
           onPasswordChange={setPasswordDraft}
           onConfirmPasswordChange={setConfirmPasswordDraft}
           onSetAuthMode={(mode) => {
@@ -1590,6 +1803,7 @@ function IdentityPrompt({
   displayNameDraft,
   displayNameIsReady,
   error,
+  forceNameEntry,
   identitySession,
   onCreate,
   onClose,
@@ -1610,6 +1824,10 @@ function IdentityPrompt({
   displayNameDraft: string;
   displayNameIsReady: boolean;
   error: string | null;
+  // "Honest You" (spec §2.3): "Play as someone else" - shows the Guest
+  // form's name input EVEN THOUGH a session already exists (normally
+  // short-circuited to "Playing as {name}" below).
+  forceNameEntry: boolean;
   identitySession: VGamesIdentitySession | null;
   onCreate: () => void;
   onClose: () => void;
@@ -1719,7 +1937,7 @@ function IdentityPrompt({
               onContinueAsGuest();
             }}
           >
-            {!identitySession ? (
+            {!identitySession || forceNameEntry ? (
               <label className="name-control">
                 <span>Display name</span>
                 <input
@@ -1743,11 +1961,29 @@ function IdentityPrompt({
               </div>
             )}
             <button
-              disabled={authBusy || (!identitySession && !displayNameIsReady)}
+              disabled={authBusy || ((!identitySession || forceNameEntry) && !displayNameIsReady)}
               type="submit"
             >
               Continue as guest
             </button>
+            {/* "Honest You" (spec §2.6): always rendered, regardless of
+                forceNameEntry - closes the federated-player hole (a
+                viota/vjaipur account holder landing on the guest-first
+                default minting a throwaway duplicate ghost). Routes through
+                the same universal `login()` interception point as every
+                other Log in entry, so the ghost-loss guard covers this one
+                too. */}
+            <p className="guest-form-cross-link">
+              Already have a VGames account?{" "}
+              <button
+                className="link-button"
+                disabled={authBusy}
+                onClick={() => onSetAuthMode("login")}
+                type="button"
+              >
+                Log in instead.
+              </button>
+            </p>
           </form>
         ) : null}
 
@@ -1851,6 +2087,66 @@ function IdentityPrompt({
             </button>
           </form>
         ) : null}
+    </ModalDialog>
+  );
+}
+
+/**
+ * "Honest You" (spec §2.2/§2.3): the ghost-loss guard - one dialog, two
+ * parametrized entries (amendment 4, §9). Renders INSTEAD of `IdentityPrompt`
+ * while open (§8 layering), on the same `returnFocusRef` the sheet itself
+ * uses, so focus lands back on the original trigger once the whole flow
+ * closes, not on some intermediate element.
+ */
+function GhostGuardDialog({
+  busy,
+  entry,
+  name,
+  onCancel,
+  onClaimFirst,
+  onProceed,
+  returnFocusRef,
+}: {
+  busy: boolean;
+  entry: "login" | "fresh";
+  name: string;
+  onCancel: () => void;
+  onClaimFirst: () => void;
+  onProceed: () => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
+}) {
+  const body = entry === "login"
+    ? `${name}'s streak and stats live only on this device. Logging in won't bring them along - claim this name first if you want to keep them.`
+    : `${name}'s streak and stats live only on this device. A new name won't bring them along - claim this name first if you want to keep them.`;
+  // Copy is worst-case honest ON PURPOSE (spec §2.2): the identity design
+  // spec's login ghost-fold "should" merge the device ghost, but the
+  // council confirmed orphaning happens in practice - never promise
+  // recovery the backend doesn't guarantee.
+  const proceedLabel = entry === "login" ? "Log in anyway" : "Start fresh anyway";
+
+  return (
+    <ModalDialog
+      busy={busy}
+      className="ghost-guard-dialog"
+      onClose={onCancel}
+      returnFocusRef={returnFocusRef}
+      titleId="ghost-guard-title"
+    >
+      <h2 id="ghost-guard-title">{`Leave ${name} behind?`}</h2>
+      <p>{body}</p>
+      <div className="ghost-guard-actions">
+        <button disabled={busy} type="button" onClick={onClaimFirst}>
+          {`Claim ${name} first`}
+        </button>
+        {/* This IS the destructive commit - coral, matching the end-run
+            dialog grammar (§2.2). */}
+        <button className="end-run-button" disabled={busy} type="button" onClick={onProceed}>
+          {proceedLabel}
+        </button>
+        <button className="link-button" disabled={busy} type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
     </ModalDialog>
   );
 }

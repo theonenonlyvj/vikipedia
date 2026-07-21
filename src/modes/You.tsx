@@ -4,17 +4,26 @@ import type { VGamesIdentitySession } from "../services/vgamesIdentity";
 
 /**
  * You (profile/stats). Ports the old StatsPanel/StatsList unchanged, plus
- * the account chip that used to live in the always-visible app header (now
- * You-owned, per the redesign's "You (profile/stats)... For guests, this is
- * where the persistent claim/log-in affordance lives"). Unclaimed sessions
- * (no identity yet, or a guest ghost) get a standing "Claim your stats" CTA
- * here - distinct from Results' one-shot claim CTA (already shipped), this
- * one persists for as long as the account stays unclaimed.
+ * the account block that used to be a bare, always-hidden-behind-a-claim-CTA
+ * chip - now the "Honest You" (Option B, hardened) three-state account
+ * block (spec: acct-option-b.json), ALWAYS rendered as the first child of
+ * `.you-panel`, in all three session states:
+ *
+ *  - State A - signed-out / never-played: `identitySession === null`.
+ *  - State B - named guest (ghost): `identitySession.status === "ghost"`.
+ *  - State C - logged in (claimed): `identitySession.status === "claimed"`.
+ *
+ * State C is the "missing state" the old chip never addressed - a static
+ * (non-tappable, amendment 3) status readout with its own Log out/Switch
+ * account actions and the cross-game transparency line, instead of nothing.
  */
 export default function You({
   identitySession,
   onClaimIdentity,
   onGoHome,
+  onLogOut,
+  onPlayAsSomeoneElse,
+  onSwitchAccount,
   stats,
 }: {
   identitySession: VGamesIdentitySession | null;
@@ -29,47 +38,33 @@ export default function You({
   // onSelectMode("home")}` wiring pattern AppShell.tsx already uses for
   // Browse.
   onGoHome: () => void;
+  // "Honest You" (State C): local, synchronous, no confirm dialog (2026-07-20
+  // judge amendment cut the brief's confirm-dialog hardening - a fully
+  // reversible, non-destructive action doesn't earn a modal interrupt; the
+  // device-scope caveat lives in the post-logout run notice instead).
+  onLogOut: () => void;
+  // "Honest You" (State B's ghost exit): routed through the ghost-loss guard
+  // in App.tsx when the ghost has real stakes.
+  onPlayAsSomeoneElse: () => void;
+  // "Honest You" (State C): opens the sheet on Log in, no pre-clear.
+  onSwitchAccount: () => void;
   stats: AccountStats | null;
 }) {
-  const isUnclaimed = !identitySession || identitySession.status === "ghost";
-
-  // QF-09 (owner-proxy ruling, 2026-07-19): the single-empty-state collapse
-  // is scoped to the one unambiguous case - a true guest who has never even
-  // started an identity, i.e. no identitySession AND stats hasn't resolved.
-  // `stats === null` alone conflates guest/loading/error (App.tsx's
-  // accountStatsProjection - see PKG-11's own note above), so a claimed
-  // account whose stats fetch is still loading or has errored keeps today's
-  // per-tile "No data yet." grid this pass, not this new empty state; only
-  // widening the null-stats signal to distinguish those cases is left as
-  // its own ticket, per the ruling.
-  const isNeverPlayedGuest = stats === null && identitySession === null;
+  // State A (spec §1): identitySession === null implies accountStats is
+  // necessarily null too (the projection is token-gated on the session -
+  // App.tsx ~380) - the old `isNeverPlayedGuest` predicate's `stats === null`
+  // clause was redundant and is dropped here.
+  const isNeverPlayedGuest = identitySession === null;
 
   return (
     <section className="you-panel">
-      <div className="account-chip" role="status" aria-label="Current player">
-        {identitySession?.displayName ?? "Guest"}
-      </div>
-
-      {isUnclaimed && !isNeverPlayedGuest ? (
-        <section className="claim-cta" aria-label="Claim your stats">
-          <p>
-            {identitySession
-              ? `You're on the board as ${identitySession.displayName}. Claim it so it stays yours.`
-              : "Playing as a guest. Claim your name so your stats stay yours."}
-          </p>
-          {/* PKG-11 remainder fix: mirrors RaceResults.tsx's `ClaimCta` -
-              the same "Create account"/"Log in" pair every other account
-              entry point uses, not a third claim-framed verb. */}
-          <div className="claim-cta-actions">
-            <button type="button" onClick={() => onClaimIdentity("create")}>
-              Create account
-            </button>
-            <button className="link-button" type="button" onClick={() => onClaimIdentity("login")}>
-              Log in
-            </button>
-          </div>
-        </section>
-      ) : null}
+      <AccountBlock
+        identitySession={identitySession}
+        onClaimIdentity={onClaimIdentity}
+        onLogOut={onLogOut}
+        onPlayAsSomeoneElse={onPlayAsSomeoneElse}
+        onSwitchAccount={onSwitchAccount}
+      />
 
       {isNeverPlayedGuest ? (
         // QF-09: one warm message instead of the 7-tile grid + 3 list
@@ -87,6 +82,104 @@ export default function You({
         <StatsPanel stats={stats} />
       )}
     </section>
+  );
+}
+
+function AccountBlock({
+  identitySession,
+  onClaimIdentity,
+  onLogOut,
+  onPlayAsSomeoneElse,
+  onSwitchAccount,
+}: {
+  identitySession: VGamesIdentitySession | null;
+  onClaimIdentity: (mode: "create" | "login") => void;
+  onLogOut: () => void;
+  onPlayAsSomeoneElse: () => void;
+  onSwitchAccount: () => void;
+}) {
+  if (!identitySession) {
+    // State A - signed-out/never-played: chip is a button, no status line,
+    // no other actions, no cross-game line (spec §1).
+    return (
+      <div className="account-block">
+        <button
+          aria-label="Guest - tap to manage"
+          className="account-chip"
+          onClick={() => onClaimIdentity("create")}
+          type="button"
+        >
+          Guest
+        </button>
+      </div>
+    );
+  }
+
+  if (identitySession.status === "ghost") {
+    const name = identitySession.displayName;
+    return (
+      <div className="account-block">
+        <button
+          aria-label={`${name}, guest - tap to manage`}
+          className="account-chip"
+          onClick={() => onClaimIdentity("create")}
+          type="button"
+        >
+          {name} · Guest
+        </button>
+
+        {/* Claim CTA, copy and buttons unchanged from today (You.tsx:53-72) -
+            plus the new "Play as someone else" tertiary exit underneath. */}
+        <section className="claim-cta" aria-label="Claim your stats">
+          <p>{`You're on the board as ${name}. Claim it so it stays yours.`}</p>
+          <div className="claim-cta-actions">
+            <button type="button" onClick={() => onClaimIdentity("create")}>
+              Create account
+            </button>
+            <button className="link-button" type="button" onClick={() => onClaimIdentity("login")}>
+              Log in
+            </button>
+          </div>
+          {/* NEW tertiary action (spec §1 State B): routes through the
+              ghost-loss guard in App.tsx when this ghost has real stakes.
+              Never labeled "Log out" - a guest has no credentials to return
+              with, the opposite risk profile from State C's Log out. */}
+          <button className="link-button" type="button" onClick={onPlayAsSomeoneElse}>
+            Play as someone else
+          </button>
+        </section>
+      </div>
+    );
+  }
+
+  // State C - logged in (the missing state). Chip is a static status
+  // element, not a button (amendment 3, §9): its management actions render
+  // directly beneath it, so a "tap to manage" button that opens nothing
+  // would be a dead tap.
+  const name = identitySession.displayName;
+  return (
+    <div className="account-block">
+      <div aria-label={`${name}, logged in`} className="account-chip" role="status">
+        {name}
+      </div>
+      <p className="account-status-line">Logged in on this device.</p>
+      <div className="account-actions">
+        {/* Standard solid button - NOT coral. Coral stays reserved for
+            commit/destructive actions and the brand kicker; nothing is
+            destroyed by logging out (it's local-only, reversible - see
+            App.tsx's `logOut`). */}
+        <button type="button" onClick={onLogOut}>
+          Log out
+        </button>
+        <button className="link-button" type="button" onClick={onSwitchAccount}>
+          Switch account
+        </button>
+      </div>
+      {/* Cross-game transparency (spec §4): the identity sheet's already-
+          shipped sentence, verbatim, reused rather than a second copy of it
+          to keep in sync. */}
+      <p className="account-cross-game muted">One account works across every VGames title.</p>
+    </div>
   );
 }
 

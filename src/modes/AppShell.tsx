@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import TeachingGate, { TeachingGatePopup } from "../components/TeachingGate";
 import { selectHomeHeroChallenge } from "../domain/challengeSelection";
+import { guestHasStakes } from "../domain/identityStakes";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import { shouldShowTeachingGate } from "../domain/teachingGate";
 import type { CreateChallengeInput } from "./challenges/Browse";
@@ -75,9 +76,12 @@ export default function AppShell({
   onDismissStorageNotice,
   onExitAdmin,
   onGoToBoardsFor,
+  onLogOut,
   onOpenChallengeDetail,
+  onPlayAsSomeoneElse,
   onRaceChallenge,
   onSelectMode,
+  onSwitchAccount,
   playAnotherSuggestion,
   previewWikipediaGateway,
   randomChallengeBusy,
@@ -115,9 +119,17 @@ export default function AppShell({
   onDismissStorageNotice: () => void;
   onExitAdmin: () => void;
   onGoToBoardsFor: () => void;
+  // "Honest You" (State C, spec §2.1): local-only, synchronous - see
+  // App.tsx's `logOut`.
+  onLogOut: () => void;
   onOpenChallengeDetail: (challengeId: string) => void;
+  // "Honest You" (State B, spec §2.3): routes through the ghost-loss guard.
+  onPlayAsSomeoneElse: () => void;
   onRaceChallenge: (challengeId: string) => void;
   onSelectMode: (mode: ModeKey) => void;
+  // "Honest You" (State C, spec §2.4): opens the sheet on Log in, no
+  // pre-clear.
+  onSwitchAccount: () => void;
   // Increment 5: centrally fetched/owned in App.tsx - see Home.tsx's doc
   // comment on the identically-named prop.
   playAnotherSuggestion: PlayAnotherSuggestionState;
@@ -154,6 +166,13 @@ export default function AppShell({
     () => selectHomeHeroChallenge(challenges, todayCentral),
     [challenges, todayCentral],
   );
+
+  // "Honest You" at-risk nav dot (spec §3): computed locally - AppShell
+  // already receives both identitySession and accountStats, so this needs
+  // no new prop. Positive-knowledge only (guestHasStakes, not the fail-safe
+  // ghostGuardRequired) - ambient chrome stays silent while stats are
+  // unresolved; only the destructive-path guard (App.tsx) fails safe.
+  const showAtRiskDot = guestHasStakes(identitySession, accountStats);
 
   // QF-05: the footer's permanent "How to play" link - the rules strip
   // above (TeachingGate) stops rendering for good once the account has a
@@ -233,6 +252,17 @@ export default function AppShell({
               type="button"
             >
               {label}
+              {/* "Honest You" at-risk dot (spec §3): warn-state, not
+                  reassurance - silence means safe. `aria-hidden` on the dot
+                  itself; the visually-hidden span is what actually carries
+                  the signal to the accessible name ("You Unsaved guest
+                  stats"). Never renders for the other three nav items. */}
+              {key === "you" && showAtRiskDot ? (
+                <>
+                  <span aria-hidden="true" className="nav-dot" />
+                  <span className="visually-hidden"> Unsaved guest stats</span>
+                </>
+              ) : null}
             </button>
           ))}
         </nav>
@@ -337,6 +367,9 @@ export default function AppShell({
             identitySession={identitySession}
             onClaimIdentity={onClaimIdentity}
             onGoHome={() => onSelectMode("home")}
+            onLogOut={onLogOut}
+            onPlayAsSomeoneElse={onPlayAsSomeoneElse}
+            onSwitchAccount={onSwitchAccount}
             stats={accountStats}
           />
         ) : null}

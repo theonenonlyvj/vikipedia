@@ -10,6 +10,10 @@
   --paper-soft: #f8f9fa;
   --cyan: #18e3cf;
   --coral: #ff765f;
+  /* "Honest You" (spec §3): the at-risk nav dot's one color - warn-state,
+     never coral (coral stays reserved for commit/destructive actions and
+     the brand kicker only). */
+  --amber: #f0b429;
   --text: #eef7f8;
   /* PKG-04 token cleanup: this token was defined but unused, at a hex value
      (#a8c2c6) nothing in the file actually painted with - the app's real
@@ -36,6 +40,23 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* Standard visually-hidden utility (clip, not display:none - stays in the
+   accessibility tree and the page's tab order semantics while disappearing
+   visually). "Honest You" (spec §3) uses this for the at-risk nav dot's
+   accessible-name text ("You" + " Unsaved guest stats"). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 body {
@@ -275,6 +296,38 @@ ol {
   padding-left: 10px;
 }
 
+/* "Honest You" (spec §2.2/§2.3): the ghost-loss guard - same register as
+   `.end-run-dialog` (a coral-bordered commit dialog), but three buttons
+   (solid primary / coral destructive / bare link) instead of two, so a
+   single-column stack reads better than that dialog's 2-up grid. */
+.ghost-guard-dialog {
+  width: min(460px, 100%);
+  border: 1px solid rgba(255, 118, 95, 0.72);
+  background: var(--ink-raised);
+  color: var(--text);
+  padding: 20px;
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.46);
+  clip-path: polygon(16px 0, 100% 0, 100% calc(100% - 16px), calc(100% - 16px) 100%, 0 100%, 0 16px);
+  font-family: var(--viota-ui-font);
+}
+
+.ghost-guard-dialog h2 {
+  font-family: var(--viota-display-font);
+  font-size: 2.2rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.ghost-guard-dialog p {
+  color: var(--muted);
+}
+
+.ghost-guard-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
 .identity-dialog-heading {
   display: flex;
   gap: 14px;
@@ -422,6 +475,15 @@ ol {
      bold). */
   font-weight: 400;
   text-transform: uppercase;
+}
+
+/* "Honest You" (spec §2.6): the guest-form cross-game link - a plain
+   paragraph wrapping the inline `.link-button`, not its own bordered card
+   (this is a low-emphasis aside, not a CTA). */
+.guest-form-cross-link {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .identity-current-name strong {
@@ -865,6 +927,7 @@ h1 {
 }
 
 .mode-nav button {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -876,6 +939,21 @@ h1 {
   font-size: 0.78rem;
   font-weight: 700;
   text-transform: none;
+}
+
+/* "Honest You" (spec §3): the at-risk nav dot - 6px, no animation, no
+   count. Same element at both breakpoints (`.mode-nav` is one element that
+   just changes layout, not two) - positioned relative to whichever nav
+   button it's inside, top-right of the label. `aria-hidden` on the dot
+   itself; the accessible signal is the sibling `.visually-hidden` span. */
+.nav-dot {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
 }
 
 /* A real hover affordance (the base button's cyan glow + lift, from the
@@ -1334,13 +1412,44 @@ h1 {
   gap: 14px;
 }
 
+/* "Honest You" (spec §1): the three-state account block - ALWAYS the first
+   child of `.you-panel`, in all three session states. */
+.account-block {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+
 .you-panel .account-chip {
   justify-self: start;
+  /* State A/B's chip is a real <button> now (State C stays a static status
+     div) - strip native button chrome so it reads as the same chip look
+     either way, not a browser default button shape underneath. The base
+     `button` rule (top of file) already supplies `cursor: pointer` for the
+     real-button states; this div (State C) keeps the browser default. */
+  appearance: none;
 }
 
 .you-panel .claim-cta {
   border: 1px solid rgba(255, 125, 102, 0.35);
   padding: 14px;
+}
+
+.account-status-line {
+  margin: 0;
+  color: var(--muted);
+}
+
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-cross-game {
+  margin: 0;
+  font-size: 0.82rem;
 }
 
 /* QF-09: a never-played guest's single-message empty state, reusing the
@@ -3101,7 +3210,8 @@ h1 {
 
   .identity-dialog,
   .end-run-dialog,
-  .teaching-gate-dialog {
+  .teaching-gate-dialog,
+  .ghost-guard-dialog {
     max-height: calc(100vh - 20px);
     max-height: calc(100dvh - 20px);
     overflow-y: auto;

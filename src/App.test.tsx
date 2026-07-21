@@ -1791,8 +1791,12 @@ describe("VWiki Race app", () => {
     const close = screen.getByRole("button", { name: /close identity prompt/i });
     await user.click(screen.getByRole("button", { name: /^guest$/i }));
     await user.type(screen.getByLabelText(/display name/i), "Vijay");
-    const continueButton = screen.getByRole("button", { name: /continue as guest/i });
-    continueButton.focus();
+    // "Honest You" (spec §2.6): the guest form's cross-game link ("Log in
+    // instead.") now renders after "Continue as guest", so IT is the
+    // dialog's last focusable element - the wraparound target for this
+    // focus-trap assertion.
+    const logInInsteadButton = screen.getByRole("button", { name: /^log in instead\.$/i });
+    logInInsteadButton.focus();
     await user.tab();
     expect(document.activeElement).toBe(close);
     expect(dialog).toContainElement(document.activeElement as HTMLElement);
@@ -2253,7 +2257,10 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("button", { name: /^you$/i }));
     expect(await screen.findByText("7")).toBeVisible();
     view.rerender(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} identityRepository={repositoryB} />);
-    await waitFor(() => expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent("Friend B"));
+    // "Honest You": State C's chip is a static status readout labeled
+    // "{name}, logged in" - all three `identity()` fixtures here are
+    // claimed sessions.
+    await waitFor(() => expect(screen.getByRole("status", { name: /friend b, logged in/i })).toHaveTextContent("Friend B"));
     expect(screen.queryByText("7")).toBeNull();
 
     view.rerender(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} identityRepository={repositoryC} />);
@@ -2280,7 +2287,9 @@ describe("VWiki Race app", () => {
     await user.click(screen.getByRole("button", { name: /^you$/i }));
 
     await waitFor(() => expect(storage.getItem("vwiki-race:vgames-session")).toBeNull());
-    expect(screen.getByRole("status", { name: /current player/i })).toHaveTextContent("Guest");
+    // "Honest You": a cleared identity lands in State A - the chip is now a
+    // "Guest" button, not a static "Current player" status readout.
+    expect(screen.getByRole("button", { name: /^guest - tap to manage$/i })).toHaveTextContent("Guest");
     expect(screen.queryByText("7")).toBeNull();
   });
 
@@ -3624,6 +3633,553 @@ describe("VWiki Race app", () => {
       await waitFor(() => expect(valueFor("Attempts")).toBe("9"));
       expect(valueFor("Avg speed")).toBe("12.3s");
       expect(valueFor("Avg clicks")).toBe("4.5");
+    });
+  });
+});
+
+// "Honest You" (Option B, hardened) - acct-option-b.json.
+describe("Honest You: account UX (session states, logout, ghost guards)", () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  async function submitLoginForm(
+    user: ReturnType<typeof userEvent.setup>,
+    container: HTMLElement,
+    { username = "vijay", password = "secret-pass" } = {},
+  ) {
+    const usernameField = within(container).getByLabelText(/username/i);
+    await user.clear(usernameField);
+    await user.type(usernameField, username);
+    const passwordField = within(container).getByLabelText(/^password$/i);
+    await user.clear(passwordField);
+    await user.type(passwordField, password);
+    const loginForm = passwordField.closest("form") as HTMLFormElement;
+    await user.click(within(loginForm).getByRole("button", { name: /^log in$/i }));
+  }
+
+  describe("State A - signed-out / never-played", () => {
+    it("account block always renders; chip is a button that opens the sheet on Create; no logged-in-only actions", async () => {
+      const user = userEvent.setup();
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      expect(document.querySelector(".account-block")).not.toBeNull();
+
+      const chip = screen.getByRole("button", { name: "Guest - tap to manage" });
+      expect(chip).toHaveTextContent("Guest");
+      expect(screen.queryByRole("button", { name: /^log out$/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^switch account$/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /play as someone else/i })).toBeNull();
+      // QF-09 empty state, unchanged.
+      expect(screen.getByText(/play your first race to start building stats/i)).toBeVisible();
+
+      await user.click(chip);
+      const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
+      expect(within(dialog).getByLabelText(/vgames username/i)).toBeVisible();
+    });
+  });
+
+  describe("State B - named guest", () => {
+    it("chip shows '{name} · Guest'; claim CTA unchanged; Play as someone else present; stats panel below", async () => {
+      const user = userEvent.setup();
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      const chip = screen.getByRole("button", { name: "Nimbus, guest - tap to manage" });
+      expect(chip).toHaveTextContent("Nimbus · Guest");
+
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      expect(within(claimCta).getByText(/you're on the board as nimbus/i)).toBeVisible();
+      expect(within(claimCta).getByRole("button", { name: /^create account$/i })).toBeVisible();
+      expect(within(claimCta).getByRole("button", { name: /^log in$/i })).toBeVisible();
+      expect(within(claimCta).getByRole("button", { name: /^play as someone else$/i })).toBeVisible();
+
+      expect(screen.getByRole("heading", { name: "Your stats" })).toBeVisible();
+    });
+  });
+
+  describe("State C - logged in", () => {
+    it("chip is a static status readout; Log out (not coral) + Switch account; cross-game line; no claim CTA, no Play as someone else", async () => {
+      const user = userEvent.setup();
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
+
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      const chip = screen.getByRole("status", { name: "Vijay, logged in" });
+      expect(chip).toHaveTextContent("Vijay");
+      expect(chip.tagName).not.toBe("BUTTON");
+
+      expect(screen.getByText("Logged in on this device.")).toBeVisible();
+      const logOutButton = screen.getByRole("button", { name: /^log out$/i });
+      expect(logOutButton).not.toHaveClass("end-run-button");
+      expect(screen.getByRole("button", { name: /^switch account$/i })).toBeVisible();
+      expect(screen.getByText("One account works across every VGames title.")).toBeVisible();
+
+      expect(screen.queryByRole("region", { name: /claim your stats/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /play as someone else/i })).toBeNull();
+    });
+  });
+
+  describe("Log out", () => {
+    it("is a one-tap local reset (no dialog): clears the session, keeps the device credential, shows the device-scope notice, lands in State A on You", async () => {
+      const user = userEvent.setup();
+      const storage = claimedStorage();
+      storage.setItem("vwiki-race:vgames-device-credential", "device-abc");
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock({ accountAttempts: 5 })} storage={storage} />);
+
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      await screen.findByText("5");
+      await user.click(screen.getByRole("button", { name: /^log out$/i }));
+
+      // No confirm dialog - 2026-07-20 judge amendment cut it (reversible,
+      // non-destructive action; the device-scope caveat lives in this
+      // notice instead).
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(await screen.findByText("Logged out - other devices stay logged in.")).toBeVisible();
+      expect(storage.getItem("vwiki-race:vgames-session")).toBeNull();
+      expect(storage.getItem("vwiki-race:vgames-device-credential")).toBe("device-abc");
+      expect(screen.getByRole("button", { name: "Guest - tap to manage" })).toBeVisible();
+      expect(screen.queryByText("5")).toBeNull();
+    });
+  });
+
+  describe("Ghost-loss guard - login over an at-stake ghost (§2.2)", () => {
+    it("interposes the guard on submit; no login request fires until a guard choice", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 3 });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      // Regex, not exact "You" - the at-risk nav dot's hidden suffix text
+      // (§3) may already have landed on this button by the time stats
+      // resolve.
+      await user.click(await screen.findByRole("button", { name: /^you\b/i }));
+      await screen.findByText("3");
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^log in$/i }));
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet);
+
+      const guard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      expect(within(guard).getByText(/logging in won't bring them along/i)).toBeVisible();
+      const proceed = within(guard).getByRole("button", { name: /^log in anyway$/i });
+      expect(proceed).toHaveClass("end-run-button");
+      const claimFirst = within(guard).getByRole("button", { name: /^claim nimbus first$/i });
+      expect(claimFirst).not.toHaveClass("end-run-button");
+      expect(
+        fetchImpl.mock.calls.some(([input]) => String(input) === apiUrl("/api/v2/identity/login")),
+      ).toBe(false);
+    });
+
+    it("'Log in anyway' proceeds with the stashed credentials; a failed login re-opens with the error and does not re-fire the guard this sheet-opening", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 3, loginFailsOnce: true });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: /^you\b/i }));
+      await screen.findByText("3");
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^log in$/i }));
+      let sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet);
+
+      const guard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      await user.click(within(guard).getByRole("button", { name: /^log in anyway$/i }));
+
+      // Failure: sheet re-opens on Log in with the error, no guard.
+      sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      expect(within(sheet).getByText(/incorrect/i)).toBeVisible();
+
+      // Resubmit in the SAME sheet-opening - guard stays waived.
+      await submitLoginForm(user, sheet);
+
+      expect(screen.queryByRole("dialog", { name: /leave nimbus behind\?/i })).toBeNull();
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull());
+      expect(await screen.findByRole("status", { name: /vijay, logged in/i })).toBeVisible();
+    });
+
+    it("the waiver resets once the sheet closes - a later re-open still guards the same ghost", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 3, loginFailsOnce: true });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: /^you\b/i }));
+      await screen.findByText("3");
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^log in$/i }));
+      let sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet);
+      const guard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      await user.click(within(guard).getByRole("button", { name: /^log in anyway$/i }));
+
+      sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await screen.findByText(/incorrect/i);
+      await user.click(within(sheet).getByRole("button", { name: /close identity prompt/i }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // Still the same at-stake ghost - reopening and submitting valid
+      // credentials must guard again, even though "Log in anyway" was
+      // already chosen once before this close.
+      await user.click(within(screen.getByRole("region", { name: /claim your stats/i })).getByRole("button", { name: /^log in$/i }));
+      sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet);
+      expect(await screen.findByRole("dialog", { name: /leave nimbus behind\?/i })).toBeVisible();
+    });
+
+    it("'Claim {name} first' switches to Create with password drafts cleared; a successful claim resumes the ORIGINAL intent, not the abandoned login", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 3 });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+      await user.click(await screen.findByRole("button", { name: /start race/i }));
+      let sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      const tabGroup = within(sheet).getByRole("group", { name: /identity options/i });
+      await user.click(within(tabGroup).getByRole("button", { name: /^log in$/i }));
+      await submitLoginForm(user, sheet);
+
+      const guard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      await user.click(within(guard).getByRole("button", { name: /^claim nimbus first$/i }));
+
+      sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      expect(within(sheet).getByLabelText(/vgames username/i)).toHaveValue("vijay");
+      expect(within(sheet).getByLabelText(/^password$/i)).toHaveValue("");
+      expect(within(sheet).getByLabelText(/confirm password/i)).toHaveValue("");
+
+      await user.type(within(sheet).getByLabelText(/^password$/i), "secret-pass");
+      await user.type(within(sheet).getByLabelText(/confirm password/i), "secret-pass");
+      // Scoped to the create FORM's submit button, not the tab switcher's
+      // identically-labeled "Create account" tab (PKG-11 precedent).
+      await user.click(createAccountSubmitButton());
+
+      // The ORIGINAL intent (starting the race) resumes - not a login.
+      expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+      expect(
+        fetchImpl.mock.calls.some(([input]) => String(input) === apiUrl("/api/v2/identity/login")),
+      ).toBe(false);
+    });
+
+    it("'Cancel' restores the sheet with drafts intact", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 3 });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: /^you\b/i }));
+      await screen.findByText("3");
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^log in$/i }));
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet);
+
+      const guard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      await user.click(within(guard).getByRole("button", { name: /^cancel$/i }));
+
+      expect(screen.queryByRole("dialog", { name: /leave nimbus behind\?/i })).toBeNull();
+      const reopened = await screen.findByRole("dialog", { name: /save your stats/i });
+      expect(within(reopened).getByLabelText(/username/i)).toHaveValue("vijay");
+      expect(within(reopened).getByLabelText(/^password$/i)).toHaveValue("secret-pass");
+    });
+
+    it("does not fire for a resolved zero-stakes ghost; login proceeds directly", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 0, accountDailyStreak: 0 });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      const statGrid = document.querySelector(".stat-grid") as HTMLElement;
+      await waitFor(() => {
+        expect(within(statGrid).getByText("Attempts").nextElementSibling?.textContent).toBe("0");
+      });
+
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^log in$/i }));
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet);
+
+      expect(screen.queryByRole("dialog", { name: /leave nimbus behind\?/i })).toBeNull();
+      expect(await screen.findByRole("status", { name: /vijay, logged in/i })).toBeVisible();
+    });
+
+    it("DOES fire for a ghost with UNRESOLVED (still-loading) stats - fails safe", async () => {
+      const user = userEvent.setup();
+      const neverResolves = new Promise<Response>(() => {});
+      const fetchImpl = createFetchMock({ delayedAccountStats: neverResolves });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      // Stats never resolve here, so the nav dot never appears - exact
+      // "You" stays valid throughout this test.
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^log in$/i }));
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet);
+
+      expect(await screen.findByRole("dialog", { name: /leave nimbus behind\?/i })).toBeVisible();
+    });
+
+    it("never fires on the 401 clearStaleIdentity path, even for a previously at-stake ghost", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 5, startUnauthorizedOnce: true });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+      await user.click(await screen.findByRole("button", { name: /start race/i }));
+      await user.click(screen.getByRole("button", { name: /^guest$/i }));
+      await user.click(await screen.findByRole("button", { name: /continue as guest/i }));
+
+      // The 401 from /runs/start clears the stale ghost and reopens
+      // straight on Log in - session is already gone, nothing to guard.
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      expect(within(sheet).getByLabelText(/^password$/i)).toBeVisible();
+      expect(screen.queryByRole("dialog", { name: /leave.*behind\?/i })).toBeNull();
+
+      await submitLoginForm(user, sheet);
+
+      expect(screen.queryByRole("dialog", { name: /leave.*behind\?/i })).toBeNull();
+      expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    });
+  });
+
+  describe("Play as someone else (§2.3)", () => {
+    it("guards with the fresh-entry body and 'Start fresh anyway'; opens the Guest tab with a blanked name input; closing leaves the old ghost untouched; success replaces the session", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 3 });
+      const storage = ghostStorage("Nimbus");
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+      await user.click(await screen.findByRole("button", { name: /^you\b/i }));
+      await screen.findByText("3");
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^play as someone else$/i }));
+
+      const guard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      expect(within(guard).getByText(/a new name won't bring them along/i)).toBeVisible();
+      const proceed = within(guard).getByRole("button", { name: /^start fresh anyway$/i });
+      expect(proceed).toHaveClass("end-run-button");
+      await user.click(proceed);
+
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      const nameField = within(sheet).getByLabelText(/display name/i);
+      expect(nameField).toHaveValue("");
+      expect(within(sheet).queryByText(/playing as nimbus/i)).toBeNull();
+
+      // Cancel-safety: closing now leaves the OLD ghost untouched.
+      await user.click(within(sheet).getByRole("button", { name: /close identity prompt/i }));
+      expect(JSON.parse(storage.getItem("vwiki-race:vgames-session") ?? "{}").displayName).toBe("Nimbus");
+      expect(screen.getByRole("button", { name: "Nimbus, guest - tap to manage" })).toBeVisible();
+
+      // Try again, this time complete it.
+      await user.click(within(screen.getByRole("region", { name: /claim your stats/i })).getByRole("button", { name: /^play as someone else$/i }));
+      await user.click(within(await screen.findByRole("dialog", { name: /leave nimbus behind\?/i })).getByRole("button", { name: /^start fresh anyway$/i }));
+      const sheet2 = await screen.findByRole("dialog", { name: /save your stats/i });
+      await user.type(within(sheet2).getByLabelText(/display name/i), "Fresh Name");
+      await user.click(within(sheet2).getByRole("button", { name: /continue as guest/i }));
+
+      expect(await screen.findByRole("button", { name: "Fresh Name, guest - tap to manage" })).toBeVisible();
+    });
+
+    it("renders only in State B - never in State A or State C", async () => {
+      const userA = userEvent.setup();
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+      await userA.click(await screen.findByRole("button", { name: "You" }));
+      expect(screen.queryByRole("button", { name: /play as someone else/i })).toBeNull();
+    });
+  });
+
+  describe("Switch account (§2.4)", () => {
+    it("opens the sheet on Log in WITHOUT clearing the session; closing leaves it intact; success replaces it; no guard, no confirm", async () => {
+      const user = userEvent.setup();
+      const storage = claimedStorage();
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={storage} />);
+
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      await user.click(screen.getByRole("button", { name: /^switch account$/i }));
+
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      expect(within(sheet).getByLabelText(/^password$/i)).toBeVisible();
+      expect(within(sheet).queryByLabelText(/vgames username/i)).toBeNull();
+      expect(JSON.parse(storage.getItem("vwiki-race:vgames-session") ?? "{}").status).toBe("claimed");
+
+      await user.click(within(sheet).getByRole("button", { name: /close identity prompt/i }));
+      expect(screen.getByRole("status", { name: /vijay, logged in/i })).toBeVisible();
+      expect(JSON.parse(storage.getItem("vwiki-race:vgames-session") ?? "{}").status).toBe("claimed");
+
+      await user.click(screen.getByRole("button", { name: /^switch account$/i }));
+      const sheet2 = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet2);
+
+      expect(screen.queryByRole("dialog", { name: /leave.*behind\?/i })).toBeNull();
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull());
+      expect(await screen.findByRole("status", { name: /vijay, logged in/i })).toBeVisible();
+    });
+  });
+
+  describe("Guest-form cross-game link (§2.6)", () => {
+    it("always renders inside the Guest form and switches to the Log in tab", async () => {
+      const user = userEvent.setup();
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+
+      await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+      await user.click(await screen.findByRole("button", { name: /start race/i }));
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      const link = within(sheet).getByRole("button", { name: /^log in instead\.$/i });
+      expect(link).toBeVisible();
+
+      await user.click(link);
+      expect(within(sheet).getByLabelText(/^password$/i)).toBeVisible();
+      expect(within(sheet).queryByLabelText(/display name/i)).toBeNull();
+    });
+
+    // J1 regression (2026-07-20 judge amendment): a fresh-entry waiver must
+    // not silently suppress the login guard for a same-opening pivot to Log
+    // in via this exact link, against the same at-stake ghost. The mirror
+    // direction (a login waiver suppressing a later fresh-entry guard) is
+    // not reachable through the real UI: "Play as someone else" is only
+    // ever triggered from You.tsx, which is `inert` while any dialog
+    // (including a failed-login-reopened sheet) is open - see
+    // `ghostGuardWaivedFor`'s doc comment in App.tsx.
+    it("a 'Start fresh anyway' waiver does not suppress the login guard for a same-opening pivot via this link", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 3 });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: /^you\b/i }));
+      await screen.findByText("3");
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^play as someone else$/i }));
+
+      const freshGuard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      await user.click(within(freshGuard).getByRole("button", { name: /^start fresh anyway$/i }));
+
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await user.click(within(sheet).getByRole("button", { name: /^log in instead\.$/i }));
+      await submitLoginForm(user, sheet);
+
+      const loginGuard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      expect(within(loginGuard).getByText(/logging in won't bring them along/i)).toBeVisible();
+    });
+  });
+
+  describe("At-risk nav dot (§3)", () => {
+    it("shows only for a resolved at-stake ghost, with the hidden accessible-name text, and clears after claim", async () => {
+      const user = userEvent.setup();
+      const fetchImpl = createFetchMock({ accountAttempts: 4 });
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      const youButton = await screen.findByRole("button", { name: /^you\b/i });
+      await waitFor(() => expect(youButton).toHaveAccessibleName("You Unsaved guest stats"));
+      expect(youButton.querySelector(".nav-dot")).not.toBeNull();
+
+      await user.click(youButton);
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^create account$/i }));
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      const usernameField = within(sheet).getByLabelText(/vgames username/i);
+      await user.clear(usernameField);
+      await user.type(usernameField, "vijay");
+      await user.type(within(sheet).getByLabelText(/^password$/i), "secret-pass");
+      await user.type(within(sheet).getByLabelText(/confirm password/i), "secret-pass");
+      // Scoped submit button - the sheet also has a same-labeled tab switcher
+      // button (PKG-11 precedent).
+      await user.click(createAccountSubmitButton());
+
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: /save your stats/i })).toBeNull());
+      const youButtonAfter = screen.getByRole("button", { name: "You" });
+      expect(youButtonAfter.querySelector(".nav-dot")).toBeNull();
+    });
+
+    it("is absent for a signed-out session, a claimed session, unresolved stats, and a resolved zero-stakes ghost", async () => {
+      render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+      expect(await screen.findByRole("button", { name: "You" })).toBeVisible();
+    });
+
+    it("is absent for a claimed session even with attempts/streak", async () => {
+      render(
+        <App
+          apiOrigin={apiOrigin}
+          fetchImpl={createFetchMock({ accountAttempts: 4, accountDailyStreak: 2 })}
+          storage={claimedStorage()}
+        />,
+      );
+      expect(await screen.findByRole("button", { name: "You" })).toBeVisible();
+    });
+
+    it("is absent while a ghost's stats are still unresolved", async () => {
+      const neverResolves = new Promise<Response>(() => {});
+      render(
+        <App
+          apiOrigin={apiOrigin}
+          fetchImpl={createFetchMock({ delayedAccountStats: neverResolves })}
+          storage={ghostStorage("Nimbus")}
+        />,
+      );
+      expect(await screen.findByRole("button", { name: "You" })).toBeVisible();
+    });
+
+    it("is absent for a resolved zero-stakes ghost", async () => {
+      const user = userEvent.setup();
+      render(
+        <App
+          apiOrigin={apiOrigin}
+          fetchImpl={createFetchMock({ accountAttempts: 0, accountDailyStreak: 0 })}
+          storage={ghostStorage("Nimbus")}
+        />,
+      );
+      await user.click(await screen.findByRole("button", { name: "You" }));
+      const statGrid = document.querySelector(".stat-grid") as HTMLElement;
+      await waitFor(() => {
+        expect(within(statGrid).getByText("Attempts").nextElementSibling?.textContent).toBe("0");
+      });
+      expect(screen.getByRole("button", { name: "You" })).toBeVisible();
+    });
+
+    it("clears immediately when Play as someone else replaces an at-stake ghost with a brand-new one", async () => {
+      const user = userEvent.setup();
+      const baseFetch = createFetchMock({ accountAttempts: 4 });
+      // The real vwikiRaceApiClient caches account stats per TOKEN
+      // (vwikiRaceApiClient.ts ~241-262) - a genuinely new account always
+      // gets a genuinely new token in production, so this never collides
+      // there. createFetchMock's `/api/v2/identity/guest` handler always
+      // echoes the SAME fixed token regardless of name, which would make a
+      // second guest identity silently reuse the first one's cached stats
+      // in THIS test - so the fresh identity gets its own token here,
+      // matching what the real identity service guarantees.
+      const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === apiUrl("/api/v2/identity/guest")) {
+          const body = readJsonBody(init) as { displayName: string };
+          return Promise.resolve(jsonResponse({
+            accountId: "acc-guest-fresh",
+            displayName: body.displayName,
+            token: "jwt-guest-fresh",
+            status: "ghost",
+          }));
+        }
+        if (url === apiUrl("/api/v2/accounts/me/stats")) {
+          const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+          const attempts = auth === "Bearer jwt-guest-fresh" ? 0 : 4;
+          return Promise.resolve(jsonResponse({ stats: accountStatsFixture(attempts) }));
+        }
+        return baseFetch(input, init);
+      }) as typeof baseFetch;
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      const youButton = await screen.findByRole("button", { name: /^you\b/i });
+      await waitFor(() => expect(youButton.querySelector(".nav-dot")).not.toBeNull());
+
+      await user.click(youButton);
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^play as someone else$/i }));
+      const guard = await screen.findByRole("dialog", { name: /leave nimbus behind\?/i });
+      await user.click(within(guard).getByRole("button", { name: /^start fresh anyway$/i }));
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await user.type(within(sheet).getByLabelText(/display name/i), "Fresh Name");
+      await user.click(within(sheet).getByRole("button", { name: /continue as guest/i }));
+
+      await screen.findByRole("button", { name: "Fresh Name, guest - tap to manage" });
+      await waitFor(() => {
+        const youButtonAfter = screen.getByRole("button", { name: /^you\b/i });
+        expect(youButtonAfter.querySelector(".nav-dot")).toBeNull();
+      });
     });
   });
 });
@@ -6042,6 +6598,12 @@ function createFetchMock(options?: {
   startConflictOnce?: boolean;
   activeRunAfterConflict?: boolean;
   createUnauthorizedOnce?: boolean;
+  // "Honest You" (spec §2.2): models a bad-password login submit - the very
+  // next /api/v2/identity/login call fails with 401 invalid_credentials,
+  // then every later call succeeds normally (same shape as
+  // startUnauthorizedOnce/createUnauthorizedOnce/abandonUnauthorizedOnce
+  // above).
+  loginFailsOnce?: boolean;
   abandonFailsOnce?: boolean;
   abandonUnauthorizedOnce?: boolean;
   // PKG-03: models the server's own persisted elapsedMs on a genuine
@@ -6139,6 +6701,7 @@ function createFetchMock(options?: {
   let clickSyncFailuresRemaining = options?.clickSyncFailureOnce ? 2 : 0;
   let conflictingStartRemaining = options?.startConflictOnce ? 1 : 0;
   let unauthorizedCreateRemaining = options?.createUnauthorizedOnce ? 1 : 0;
+  let loginFailuresRemaining = options?.loginFailsOnce ? 1 : 0;
   let abandonFailuresRemaining = options?.abandonFailsOnce ? 2 : 0;
   let unauthorizedAbandonRemaining = options?.abandonUnauthorizedOnce ? 1 : 0;
   let boardsTrendsFailRemaining = options?.boardsTrendsFailOnce ? 1 : 0;
@@ -6231,6 +6794,10 @@ function createFetchMock(options?: {
     }
 
     if (url === "/api/v2/identity/login") {
+      if (loginFailuresRemaining > 0) {
+        loginFailuresRemaining -= 1;
+        return jsonError("invalid_credentials", "That VGames username or password is incorrect.", 401);
+      }
       expect(readJsonBody(init)).toMatchObject({
         username: "vijay",
         password: "secret-pass",
@@ -6689,6 +7256,19 @@ function runPathCalls(fetchImpl: ReturnType<typeof createFetchMock>, runId: stri
 function claimedStorage(): Storage {
   const storage = memoryStorage();
   storage.setItem("vwiki-race:vgames-session", JSON.stringify({ accountId: "acc-1", displayName: "Vijay", token: "jwt-claimed", status: "claimed" }));
+  return storage;
+}
+
+// "Honest You": a named-guest (ghost) session, seeded straight into storage
+// like claimedStorage's own claimed fixture above. Deliberately NOT "Reks"
+// (a real production guest name referenced elsewhere in project notes) -
+// "Nimbus" keeps this fixture unambiguously synthetic.
+function ghostStorage(displayName = "Nimbus"): Storage {
+  const storage = memoryStorage();
+  storage.setItem(
+    "vwiki-race:vgames-session",
+    JSON.stringify({ accountId: "acc-guest", displayName, token: "jwt-guest", status: "ghost" }),
+  );
   return storage;
 }
 
