@@ -274,7 +274,7 @@ describe("Boards: FB-4 path comparison (council 2026-07-19, owner decision 10)",
 
     await screen.findByText("Ari");
     expect(screen.getByText(/paths hidden until you've played/i)).toBeVisible();
-    expect(screen.queryByText(/view winning path/i)).toBeNull();
+    expect(screen.queryByText(/view path/i)).toBeNull();
   });
 
   it("discloses any placement's winning path (not just your own), and never a DNF row's, once you've finished this board's challenge", async () => {
@@ -294,17 +294,17 @@ describe("Boards: FB-4 path comparison (council 2026-07-19, owner decision 10)",
 
     const ariRow = screen.getByText("Ari").closest("li");
     expect(ariRow).not.toBeNull();
-    await user.click(within(ariRow as HTMLElement).getByText("View winning path"));
+    await user.click(within(ariRow as HTMLElement).getByText("View path"));
     expect(onDisclosePath).toHaveBeenCalledWith("run-ari");
 
     // Your own row is disclosable too, off the same board.
     const yourRow = screen.getByText("Vijay").closest("li");
-    expect(within(yourRow as HTMLElement).getByText("View winning path")).toBeVisible();
+    expect(within(yourRow as HTMLElement).getByText("View path")).toBeVisible();
 
     // DNF rows never get the affordance - `ChallengeBoardDnfRow` carries no
     // `runId` to disclose.
     const dnfSection = screen.getByRole("region", { name: "DNF" });
     expect(within(dnfSection).getByText("Sam")).toBeVisible();
-    expect(within(dnfSection).queryByText(/view winning path/i)).toBeNull();
+    expect(within(dnfSection).queryByText(/view path/i)).toBeNull();
   });
 });

@@ -1526,15 +1526,16 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
 
     // Path disclosure lives on Challenge Detail now, not Boards (Increment 3
-    // rebuild removed per-run path disclosure from Boards entirely). Scoped
-    // to "Your history" - PKG-03 remainder fix also surfaces a "View
-    // winning path" disclosure on the main Leaderboard panel now that
-    // acc-1's own board row carries a runId too, so an unscoped query would
-    // be ambiguous (both panels show the same account's one run here).
+    // rebuild removed per-run path disclosure from Boards entirely). DT-1:
+    // acc-1's lone completed row is ALSO its board placement here (same
+    // runId, the mock's default board-from-leaderboard derivation), so "Your
+    // history" hides itself entirely (pure duplication) - scope to the main
+    // Leaderboard panel instead, the one place the disclosure still renders.
     await user.click(await screen.findByRole("button", { name: "Challenges" }));
     await user.click(await screen.findByRole("button", { name: /challenge #2/i }));
-    const historyRegion = await screen.findByRole("region", { name: /your history/i });
-    expect(within(historyRegion).getByText(/view winning path/i)).toBeVisible();
+    const board = await screen.findByRole("region", { name: "Leaderboard placements" });
+    expect(within(board).getByText(/view path/i)).toBeVisible();
+    expect(screen.queryByRole("region", { name: /your history/i })).toBeNull();
     await user.click(screen.getByRole("button", { name: /^home$/i }));
     await user.click(screen.getByRole("button", { name: /▶ race/i }));
     await user.click(await screen.findByRole("button", { name: /start race/i }));
@@ -1547,7 +1548,7 @@ describe("VWiki Race app", () => {
     expect(screen.queryByRole("button", { name: /^boards$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^challenges$/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^you$/i })).toBeNull();
-    expect(screen.queryByText(/view winning path/i)).toBeNull();
+    expect(screen.queryByText(/view path/i)).toBeNull();
   });
 
   it("always shows this run's server-provided placement, personal best or not", async () => {
@@ -2007,20 +2008,23 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("button", { name: "Challenges" }));
     await user.click(await screen.findByRole("button", { name: /challenge #1/i }));
     expect(runPathCalls(fetchImpl, "run-ranked")).toBe(0);
-    // PKG-03 remainder fix: the viewer's own single run now surfaces a "View
-    // winning path" disclosure in BOTH "Your history" AND the main
-    // Leaderboard panel (their board row carries the same runId) - scope to
-    // "Your history" so the query stays unambiguous; this test is about
-    // disclosure/memoization mechanics, not which panel renders it.
-    const history = screen.getByRole("region", { name: /your history/i });
-    const disclosure = within(history).getByText(/view winning path/i);
+    // PKG-03 remainder fix: the viewer's own single run surfaces a "View
+    // path" disclosure on the main Leaderboard panel (their board row
+    // carries the same runId). DT-1: "Your history" hides itself entirely
+    // for exactly this shape (one attempt, already the board placement) -
+    // scope to "Leaderboard placements" instead, which stays unambiguous
+    // (not the route-header's own "Apple → Fruit" title) and is the only
+    // panel left rendering it; this test is about disclosure/memoization
+    // mechanics, not which panel renders it.
+    const board = screen.getByRole("region", { name: "Leaderboard placements" });
+    const disclosure = within(board).getByText(/view path/i);
     await user.click(disclosure);
     // Single-chain rendering (owner feedback 2026-07-20): the start article
     // plain, then the target on its own line prefixed with the arrow - scoped
-    // to "Your history" so this can't coincidentally match the unrelated
+    // to the board so this can't coincidentally match the unrelated
     // "Apple → Fruit" route-header title, which shares the same text.
-    expect(await within(history).findByText("Apple")).toBeVisible();
-    expect(within(history).getByText(/→ Fruit/)).toBeVisible();
+    expect(await within(board).findByText("Apple")).toBeVisible();
+    expect(within(board).getByText(/→ Fruit/)).toBeVisible();
     await user.click(disclosure);
     await user.click(disclosure);
     expect(runPathCalls(fetchImpl, "run-ranked")).toBe(1);
@@ -2116,13 +2120,16 @@ describe("VWiki Race app", () => {
     const board = screen.getByRole("region", { name: "Leaderboard placements" });
     expect(await within(board).findAllByRole("listitem")).toHaveLength(1);
     expect(within(board).getByText("#1")).toBeVisible();
-    expect(screen.getByRole("region", { name: "DNF" })).toHaveTextContent(/no dnfs/i);
+    // DT-1: a zero-DNF board renders no "DNF" region at all now (was a
+    // heading over a lone "No DNFs." line).
+    expect(screen.queryByRole("region", { name: "DNF" })).toBeNull();
 
     const history = screen.getByRole("region", { name: /your history/i });
     expect(within(history).getByText("#1")).toBeVisible();
     expect(within(history).getByText("DNF")).toBeVisible();
-    expect(within(history).getByText("View winning path")).toBeVisible();
-    expect(within(history).getByText("View path")).toBeVisible();
+    // DT-1: "View winning path" -> "View path" everywhere - both this
+    // account's rows (the completed one and the DNF) now read identically.
+    expect(within(history).getAllByText("View path")).toHaveLength(2);
     expect(screen.queryByText(/repeat run/i)).toBeNull();
     expect(screen.queryByText(/server tracked/i)).toBeNull();
     // Invariant 5: once you've finished the challenge, the anti-spoiler
@@ -2138,8 +2145,10 @@ describe("VWiki Race app", () => {
     // panel (any account) becomes disclosable, keyed off the deduped
     // board's `runId` (added this fix - see ChallengeBoardPlacement's doc
     // comment, domain/types.ts). Ari never appears in "Your history" (that
-    // strip only ever shows the viewer's own attempts) - her disclosure
-    // only exists on the main board.
+    // strip only ever shows the viewer's own attempts) - her disclosure only
+    // exists on the main board; DT-1 also hides "Your history" outright here
+    // (Vijay's own lone attempt duplicates his board placement), so there's
+    // no panel left to even ambiguously conflate her with.
     const fetchImpl = createFetchMock({
       leaderboardRows: [
         leaderboardRow({ accountId: "acc-other", displayName: "Ari", runId: "run-ranked", rank: 1, elapsedMs: 20_000, clickCount: 3 }),
@@ -2157,7 +2166,7 @@ describe("VWiki Race app", () => {
     const ariRow = (await within(board).findByText("Ari")).closest("li");
     expect(ariRow).not.toBeNull();
     expect(runPathCalls(fetchImpl, "run-ranked")).toBe(0);
-    await user.click(within(ariRow as HTMLElement).getByText("View winning path"));
+    await user.click(within(ariRow as HTMLElement).getByText("View path"));
     // Single-chain rendering (owner feedback 2026-07-20): the start article
     // plain, then the target on its own line prefixed with the arrow -
     // "Apple → Fruit" is no longer one combined text node.
@@ -2165,10 +2174,12 @@ describe("VWiki Race app", () => {
     expect(within(ariRow as HTMLElement).getByText(/→ Fruit/)).toBeVisible();
     expect(runPathCalls(fetchImpl, "run-ranked")).toBe(1);
 
-    // Ari never shows up in "Your history" - that strip is the viewer's own
-    // attempts only.
-    const history = screen.getByRole("region", { name: /your history/i });
-    expect(within(history).queryByText("Ari")).toBeNull();
+    // DT-1: Vijay's own lone completed row is also his board placement here
+    // (same runId, the mock's default board-from-leaderboard derivation), so
+    // "Your history" hides itself entirely as pure duplication - nothing
+    // left to conflate Ari with (she was never in it either way, but now
+    // there's no panel at all to check).
+    expect(screen.queryByRole("region", { name: /your history/i })).toBeNull();
   });
 
   it("hides all path disclosure and shows the anti-spoiler copy for a never-played challenge", async () => {
@@ -6591,7 +6602,6 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
     // path disclosure (added this package - see the FB-4 test below) stays
     // hidden the same as it always has for a never-played challenge.
     expect(within(board).queryByText(/view path/i)).toBeNull();
-    expect(within(board).queryByText(/view winning path/i)).toBeNull();
   });
 
   it("FB-4: once the viewer has finished today's daily, Boards discloses ANY placement's winning path (not just your own)", async () => {
@@ -6629,7 +6639,7 @@ describe("Boards v1: Today/Yesterday daily views (Increment 3)", () => {
     const ariRow = screen.getByText("Ari").closest("li");
     expect(ariRow).not.toBeNull();
     expect(runPathCalls(fetchImpl, "run-ranked")).toBe(0);
-    await user.click(within(ariRow as HTMLElement).getByText("View winning path"));
+    await user.click(within(ariRow as HTMLElement).getByText("View path"));
     // Single-chain rendering (owner feedback 2026-07-20): the start article
     // plain, then the target on its own line prefixed with the arrow -
     // "Apple → Fruit" is no longer one combined text node.

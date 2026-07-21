@@ -23,6 +23,13 @@
      competing grey token. */
   --muted: #9fb8bd;
   --text-bright: #dffbfb;
+  /* DT-1 (owner feedback): panel headings ("Leaderboard", "DNF - Did not
+     finish", "Your history", "Stats") read too close to `--text-bright`
+     ("winner white") - one-two shades down, between `--muted` (#9fb8bd) and
+     `--text` (#eef7f8). Named/promoted rather than adding a fresh value:
+     #b9d4d8 was already painted raw in ~4 places (result-panel/empty-state
+     body copy) sitting in exactly this gap. */
+  --text-dim: #b9d4d8;
   color: var(--text);
   background: var(--ink);
   font-family: var(--viota-ui-font);
@@ -192,7 +199,7 @@ ol {
 }
 
 .entry-gate p {
-  color: #b9d4d8;
+  color: var(--text-dim);
   margin-top: 10px;
 }
 
@@ -421,7 +428,7 @@ ol {
 }
 
 .identity-copy {
-  color: #b9d4d8;
+  color: var(--text-dim);
   margin-top: 10px;
 }
 
@@ -1383,6 +1390,36 @@ h1 {
   gap: 14px;
 }
 
+/* DT-1 (owner feedback, "anything else" (c) - "tighten the panel's internal
+   spacing so rows don't float in dead width at desktop"): Challenge Detail's
+   two `.leaderboard-panel`s (Leaderboard + Your history) used to stretch to
+   `.content-shell`'s full column width (up to 820px at desktop) while their
+   own row content - a compact rank/name/time/link line - stayed only a
+   couple hundred px wide, leaving a wide dead strip trailing every row.
+   Scoped to `.challenge-detail` specifically, not the bare `.leaderboard-
+   panel` class Boards' "Stats" screen also carries (`.boards-mode
+   .leaderboard-panel`) - that panel keeps its own established full-width
+   layout (it wasn't part of this owner screenshot, and it has its own
+   segmented tab control that wants the extra width). At mobile widths this
+   is a no-op (the panel's already narrower than 560px). */
+.challenge-detail .leaderboard-panel {
+  max-width: 560px;
+}
+
+/* DT-1 (owner feedback, "anything else" (a)): "View graph" docks into the
+   Leaderboard panel's own heading row, right-aligned, instead of dangling
+   below the DNF section (see ChallengeDetail.tsx). `align-items: center`
+   (not `baseline`) vertically centers "View graph" against the taller "h2" -
+   `.link-button`'s own 44px min-height (unchanged, kept for its tap target)
+   otherwise would set the row's own height with the heading text looking
+   top-pinned inside it. */
+.leaderboard-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .back-link {
   justify-self: start;
   background: transparent;
@@ -1697,7 +1734,7 @@ h1 {
 .target-preview-blurb {
   max-width: 68ch;
   margin-top: 18px;
-  color: #b9d4d8;
+  color: var(--text-dim);
   font-size: 1.08rem;
   line-height: 1.55;
 }
@@ -2139,14 +2176,39 @@ h1 {
   font-weight: 500;
 }
 
+/* DT-1 (owner feedback, heading hierarchy): `.board-snippet h3` ("DNF - Did
+   not finish", Boards' "Not yet ranked"/"Everyone who's played") drops from
+   the shared `--text` above to the dimmer `--text-dim` - declared after the
+   shared rule so it wins on source order at equal specificity. Scoped to
+   `.board-snippet` only, not its `.play-another-card`/`.claim-cta` rule-mates
+   above (a different, RaceResults-only family this ticket doesn't touch). */
+.board-snippet h3 {
+  color: var(--text-dim);
+}
+
 .board-snippet ol {
   display: grid;
   gap: 6px;
 }
 
+/* DT-1 (owner feedback, "ROWS AS A REAL GRID"): a 4th fixed track added for
+   the "View path" affordance (was an unconditional full-span 2nd line
+   underneath - see `.board-snippet .path-disclosure` below) so rank/name/
+   time/link genuinely share one line, in the same column order everywhere
+   this class renders (LeaderboardList's placements, Boards' Today/
+   Yesterday). `minmax(0, 1fr)` (not the desktop-only `max-content` this used
+   to switch to - see the `@media (min-width: 880px)` block - Detail's own
+   `.leaderboard-panel` is width-capped there instead, see `.challenge-detail
+   .leaderboard-panel`) is what actually fixes the owner's "gaps drift per
+   row" complaint: `max-content` sizes each `<li>`'s OWN grid independently
+   (every `<li>` here is its own separate grid formatting context, not a
+   shared/subgrid table), so the time column literally started at a
+   different x-position per row depending on that row's own name length.
+   `1fr` on a shared-width column instead makes every row compute the exact
+   same column widths, since every `<li>` is the same width. */
 .board-snippet li {
   display: grid;
-  grid-template-columns: 2.4em 1fr auto;
+  grid-template-columns: 2.4em minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: baseline;
   font-size: 0.88rem;
@@ -2170,28 +2232,43 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* DT-1 (FB-8 rule this row shape missed): names capped at the same 500
+     content-title ceiling every other row/card title in the app uses -
+     applies whether or not the row is also `.is-you` (that highlight is
+     color-only now, see `.board-snippet li.is-you` below). */
+  font-weight: 500;
 }
 
 .board-snippet:not(.board-trend-unranked):not(.board-roster) li > span:nth-child(3) {
   justify-self: end;
+  /* DT-1: times/meta are body copy, never bold - and tabular so the digits
+     themselves don't shift width mid-list (a 1-digit vs. 2-digit minute
+     count). Explicit rather than inherited so `.is-you` (600, just above)
+     can't cascade onto this span the way it used to. */
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 
 .board-snippet li.is-you {
+  /* DT-1 (owner feedback: "remove bold... it gets hard to read" - this is
+     the row FB-8's de-bold pass missed): used to set `font-weight: 600` on
+     the whole `<li>`, which - since font-weight inherits - bolded not just
+     the name but the TIME span too (nothing here ever gave the time span
+     its own override until the nth-child(3) rule above). Color alone is
+     sufficient row highlighting; the name's own weight ceiling comes from
+     the nth-child(2) rule above (matches every other row, "you" or not). */
   color: var(--cyan);
-  /* FB-8 judgment call (explicitly allowed by the brief): the "you" row
-     highlight - full 400 killed the row's visual distinction from its
-     neighbors, so this keeps 600 rather than going all the way to 400. */
-  font-weight: 600;
 }
 
 /* PKG-03 remainder fix (2026-07-19): Challenge Detail's main Leaderboard
-   panel reuses `.board-snippet` markup (see LeaderboardList.tsx), but its
-   `li` is a strict 3-column grid (rank/name/time) - a 4th child would either
-   overflow the row or silently claim a phantom 4th column. `grid-column: 1 /
-   -1` puts the disclosure on its own full-width row underneath instead,
-   same visual treatment "Your history"'s `.leaderboard .path-disclosure`
-   already uses (styles.css ~2168). */
-.board-snippet .path-disclosure {
+   panel reuses `.board-snippet` markup (see LeaderboardList.tsx). DT-1: used
+   to force `grid-column: 1 / -1` unconditionally, which is exactly the
+   "second full-width link row" the owner flagged ("View Path should be to
+   the right of the time, no?") - the closed/compact `<details>` now simply
+   auto-places into the 4th track the grid above already reserves for it,
+   sitting inline after time. Only the OPEN state (the revealed path chain
+   itself, which needs real room) spans the full row, below. */
+.board-snippet .path-disclosure[open] {
   grid-column: 1 / -1;
 }
 
@@ -2303,6 +2380,17 @@ h1 {
   font-weight: 500;
 }
 
+/* DT-1 (owner feedback, heading hierarchy): `.leaderboard-panel h2` -
+   Challenge Detail's "Leaderboard" AND Boards' "Stats" (same shared class,
+   `.boards-mode.leaderboard-panel` - "keep Stats consistent") - drops from
+   `--text` (inherited off the panel base rule, styles.css ~2005) to
+   `--text-dim`. Scoped off `.result-panel`/`.empty-state`/
+   `.challenge-browser`/`.stats-panel` (You.tsx's OWN, unrelated class,
+   despite the similar name) - a different family this ticket doesn't touch. */
+.leaderboard-panel h2 {
+  color: var(--text-dim);
+}
+
 /* PKG-04: Challenge Detail's "Your history" sub-heading, now that it sits
    inside `.leaderboard-panel` chrome (matches `.board-snippet h3`'s
    treatment elsewhere - a panel sub-section title, not the panel's own
@@ -2311,6 +2399,9 @@ h1 {
   margin: 0 0 8px;
   font-family: var(--viota-ui-font);
   font-size: 0.95rem;
+  /* DT-1: same heading-hierarchy demotion as `.leaderboard-panel h2`/
+     `.board-snippet h3` just above - "Your history" is this family too. */
+  color: var(--text-dim);
   /* FB-8: no author font-weight previously - rendered at UA bold. Sub-panel
      title, capped at 500. */
   font-weight: 500;
@@ -2319,7 +2410,7 @@ h1 {
 .result-panel p,
 .empty-state p {
   margin-top: 8px;
-  color: #b9d4d8;
+  color: var(--text-dim);
 }
 
 .muted {
@@ -2606,6 +2697,10 @@ h1 {
 
 .leaderboard-player > span:first-child {
   overflow-wrap: anywhere;
+  /* DT-1: the time·clicks text - body copy (never bold) with tabular digits,
+     same rule as `.board-snippet`'s own time column. */
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 
 /* PKG-03: "Server tracked"/"Repeat run" pills are gone entirely (the
@@ -3432,7 +3527,28 @@ h1 {
     width: min(820px, 100%);
   }
 
-  .board-snippet li,
+  /* DT-1: scoped to `.boards-mode` (Stats' own Today/Yesterday board) -
+     this is the "pack rank/name/score adjacent instead of edge-pinning"
+     desktop treatment from the original desktop-containment pass (still
+     right for Stats, unrelated to this ticket). Challenge Detail's own
+     `.board-snippet li` (LeaderboardList) now keeps the shared base rule's
+     `1fr` grid at every width instead - see that rule's own DT-1 comment for
+     why `max-content` here was exactly the "gaps drift per row" bug, and
+     `.challenge-detail .leaderboard-panel`'s own width cap (declared
+     earlier in this file) for how the "gulf" this desktop pass was
+     originally guarding against stays avoided without it. A 4th `auto`
+     track added (DT-1) for the same `.path-
+     disclosure` reason as the base rule: without an explicit 4th column,
+     CSS Grid's default `grid-auto-flow: row` wraps that 4th child onto a
+     NEW row reusing column 1's own (2.4em) width - not a 4th column on the
+     same row - so "View path" rendered squeezed into a track barely wider
+     than the rank glyph and wrapped mid-word. */
+  .boards-mode .board-snippet li {
+    grid-template-columns: 2.4em minmax(0, max-content) max-content auto;
+    justify-content: start;
+    column-gap: 16px;
+  }
+
   .trend-row-toggle {
     grid-template-columns: 2.4em minmax(0, max-content) max-content;
     justify-content: start;

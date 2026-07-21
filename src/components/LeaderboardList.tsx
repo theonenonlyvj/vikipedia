@@ -20,16 +20,17 @@ import type { ChallengeBoardDnfRow, ChallengeBoardPlacement, ServerPathStep } fr
  * information, and neither ever appeared in the ratified design mockup
  * (`mockup-browse-detail`: plain "1  FranTheGreat  1:02 · 8 clk" rows).
  *
- * "View winning path" (PKG-03 remainder fix, 2026-07-19): spec invariant 5
- * is "paths stay hidden until YOU'VE played," not "until each row's own
- * player has played" - once `pathsUnlocked` (the viewer has a completed run
- * on this challenge), every placement row's winning path becomes
- * disclosable, not just the viewer's own. `ChallengeBoardPlacement.runId`
- * (added this fix) carries the surviving best attempt's run id so this can
- * hang off the same public `GET /runs/{runId}/path` endpoint "Your history"
- * already uses - `row.runId` is optional (older/cached responses may lack
- * it), so the disclosure simply doesn't render for a row that has none
- * rather than erroring. This mirrors Boards' own inline board markup
+ * "View path" (PKG-03 remainder fix, 2026-07-19; renamed from "View winning
+ * path" per DT-1, 2026-07-20 owner feedback: "'winning' not necessary"):
+ * spec invariant 5 is "paths stay hidden until YOU'VE played," not "until
+ * each row's own player has played" - once `pathsUnlocked` (the viewer has a
+ * completed run on this challenge), every placement row's winning path
+ * becomes disclosable, not just the viewer's own. `ChallengeBoardPlacement.
+ * runId` (added this fix) carries the surviving best attempt's run id so
+ * this can hang off the same public `GET /runs/{runId}/path` endpoint "Your
+ * history" already uses - `row.runId` is optional (older/cached responses
+ * may lack it), so the disclosure simply doesn't render for a row that has
+ * none rather than erroring. This mirrors Boards' own inline board markup
  * (`.board-snippet`/`.board-dnf-section`) exactly, so the two screens can't
  * visually drift.
  */
@@ -70,7 +71,7 @@ export default function LeaderboardList({
                         if (event.currentTarget.open) onDisclosePath(row.runId!);
                       }}
                     >
-                      <summary>View winning path</summary>
+                      <summary>View path</summary>
                       {runPaths[row.runId] ? (
                         <WinningPathChain titles={pathStepsToChain(runPaths[row.runId])} />
                       ) : <p>Loading path...</p>}
@@ -85,12 +86,17 @@ export default function LeaderboardList({
         )}
       </section>
 
-      <section className="board-snippet board-dnf-section muted" aria-label="DNF">
-        {/* QF-05: spelled out - "DNF" alone is jargon to a first-time
-            player, and RaceResults' own kicker already expands it
-            identically ("DNF — Did not finish"). */}
-        <h3>DNF — Did not finish</h3>
-        {dnfs.length ? (
+      {/* DT-1 (owner feedback): "DNF should be hidden unless there's
+          actually an entry?" - the whole section (heading included) renders
+          nothing for a zero-DNF board rather than a heading over a lone "No
+          DNFs." line. Same rule applied to Boards' own inline Today/
+          Yesterday DNF section (Boards.tsx) so the two can't drift. */}
+      {dnfs.length ? (
+        <section className="board-snippet board-dnf-section muted" aria-label="DNF">
+          {/* QF-05: spelled out - "DNF" alone is jargon to a first-time
+              player, and RaceResults' own kicker already expands it
+              identically ("DNF — Did not finish"). */}
+          <h3>DNF — Did not finish</h3>
           <ol>
             {dnfs.map((row) => {
               const isYou = identityAccountId !== null && row.accountId === identityAccountId;
@@ -110,10 +116,8 @@ export default function LeaderboardList({
               );
             })}
           </ol>
-        ) : (
-          <p>No DNFs.</p>
-        )}
-      </section>
+        </section>
+      ) : null}
     </>
   );
 }

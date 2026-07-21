@@ -702,11 +702,12 @@ export default function Boards({
                       </span>
                       <span>{formatTimeAndClicks(row.elapsedMs, row.clickCount)}</span>
                       {/* FB-4: same disclosure affordance as Challenge
-                          Detail's LeaderboardList - a compact "View winning
-                          path" link on the row, not a new column. Any
-                          placement row (not just the viewer's own), once
-                          `pathsUnlocked`; DNF rows never get one (see the
-                          DNF section below - no `runId` to hang it off). */}
+                          Detail's LeaderboardList - a compact "View path"
+                          link on the row (DT-1: renamed from "View winning
+                          path"), not a new column. Any placement row (not
+                          just the viewer's own), once `pathsUnlocked`; DNF
+                          rows never get one (see the DNF section below - no
+                          `runId` to hang it off). */}
                       {pathsUnlocked && row.runId ? (
                         <details
                           className="path-disclosure"
@@ -714,7 +715,7 @@ export default function Boards({
                             if (event.currentTarget.open) onDisclosePath(row.runId!);
                           }}
                         >
-                          <summary>View winning path</summary>
+                          <summary>View path</summary>
                           {runPaths[row.runId] ? (
                             <WinningPathChain titles={pathStepsToChain(runPaths[row.runId])} />
                           ) : <p>Loading path...</p>}
@@ -729,12 +730,16 @@ export default function Boards({
             )}
           </section>
 
-          <section className="board-snippet board-dnf-section muted" aria-label="DNF">
-            {/* QF-05: spelled out - matches RaceResults' own kicker
-                ("DNF — Did not finish") and LeaderboardList's sibling
-                section, so a first-time player isn't left to guess. */}
-            <h3>DNF — Did not finish</h3>
-            {dnfs.length ? (
+          {/* DT-1 (owner feedback, applied here too for consistency - same
+              class, same rule): "DNF should be hidden unless there's
+              actually an entry?" - render nothing at all (not even the
+              heading) for a zero-DNF board. */}
+          {dnfs.length ? (
+            <section className="board-snippet board-dnf-section muted" aria-label="DNF">
+              {/* QF-05: spelled out - matches RaceResults' own kicker
+                  ("DNF — Did not finish") and LeaderboardList's sibling
+                  section, so a first-time player isn't left to guess. */}
+              <h3>DNF — Did not finish</h3>
               <ol>
                 {dnfs.map((row) => {
                   const isYou = row.accountId === identityAccountId;
@@ -754,10 +759,8 @@ export default function Boards({
                   );
                 })}
               </ol>
-            ) : (
-              <p>No DNFs.</p>
-            )}
-          </section>
+            </section>
+          ) : null}
 
           {!pathsUnlocked ? (
             <p className="muted board-footnote">Paths hidden until you&apos;ve played.</p>
