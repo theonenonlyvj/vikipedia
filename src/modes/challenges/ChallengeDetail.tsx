@@ -45,6 +45,7 @@ export default function ChallengeDetail({
   leaderboard,
   onBack,
   onDisclosePath,
+  onPlayTodaysDaily,
   onRaceThis,
   raceDisabled,
   runPaths,
@@ -59,6 +60,13 @@ export default function ChallengeDetail({
   leaderboard: RankedLeaderboardRow[];
   onBack: () => void;
   onDisclosePath: (runId: string) => void;
+  // Owner-approved URL policy, item 5 (approved polish): present only when
+  // AppShell has a genuine today's-daily to fund it (homeHero.kind ===
+  // "today-daily") - undefined otherwise, so a catalog with no real daily
+  // today simply shows no link rather than one that lies. Reuses App.tsx's
+  // openRacePreviewFor, the same entry point Home's hero and Boards' CTA
+  // already share.
+  onPlayTodaysDaily?: () => void;
   onRaceThis: () => void;
   raceDisabled: boolean;
   runPaths: Record<string, ServerPathStep[]>;
@@ -89,6 +97,12 @@ export default function ChallengeDetail({
   // the anti-spoiler copy up - only a completed row unlocks disclosure.
   const pathsUnlocked = yourRows.some((row) => row.status === "completed");
   const dailyBadge = dailyBadgeLabel(challenge, todayCentral);
+  // Owner-approved URL policy, item 5: "Today" is the only label
+  // `dailyBadgeLabel` ever gives the CURRENT day's daily - anything else
+  // that badge returns (a non-null "Daily M/D"/"Daily") is a past date, so a
+  // stale permalink (share link, bookmark, self-healing legacy tab) can
+  // funnel back into the ritual instead of dead-ending on an old board.
+  const isPastDaily = Boolean(dailyBadge) && dailyBadge !== "Today";
 
   return (
     <section className="challenge-detail" aria-label="Challenge detail">
@@ -112,6 +126,15 @@ export default function ChallengeDetail({
           </strong>
           {challenge.createdBy ? (
             <em>Created by {challenge.createdBy.displayName}</em>
+          ) : null}
+          {isPastDaily && onPlayTodaysDaily ? (
+            <button
+              className="link-button"
+              onClick={onPlayTodaysDaily}
+              type="button"
+            >
+              Play today&apos;s daily ›
+            </button>
           ) : null}
         </div>
 

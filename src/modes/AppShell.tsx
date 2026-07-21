@@ -337,6 +337,16 @@ export default function AppShell({
               leaderboard={leaderboard}
               onBack={onCloseChallengeDetail}
               onDisclosePath={onDisclosePath}
+              // Owner-approved URL policy, item 5: only offered when a real
+              // today's daily exists (PKG-01's homeHero, already computed
+              // above for Home/the teaching gate/Boards/Browse) - a
+              // pre-drop or broken-generation day has nothing honest to
+              // funnel back into.
+              onPlayTodaysDaily={
+                homeHero?.kind === "today-daily"
+                  ? () => onRaceChallenge(homeHero.challenge.id)
+                  : undefined
+              }
               onRaceThis={() => onRaceChallenge(selectedChallenge.id)}
               raceDisabled={!selectedChallenge || authBusy}
               runPaths={runPaths}

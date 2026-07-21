@@ -542,28 +542,41 @@ export default function App({
         const requestedIdHonored = Boolean(
           requestedChallengeId && nextChallenge && requestedChallengeId === nextChallenge.id,
         );
-        if (
-          nextChallenge &&
-          race.phase === "idle" &&
-          (requestedIdHonored || nextChallenge.origin === "daily")
-        ) {
+        if (nextChallenge && race.phase === "idle" && requestedIdHonored) {
           syncChallengeUrl(nextChallenge.id, "replace");
+        } else if (requestedChallengeId && race.phase === "idle") {
+          // Owner-approved URL policy (GRACEFUL DEGRADE): a ?challenge= that
+          // no longer resolves to a real, active challenge - expired,
+          // deactivated, or simply mistyped - degrades to Home instead of
+          // dangling. Replace-clear it so the address bar matches what's
+          // actually on screen; old links never error, they just self-heal.
+          // Leaves the in-app Back-ladder marker (item 8) unset - this
+          // lands on Home, not a step away from it.
+          clearChallengeUrl("replace");
         }
         // Migration note (iv): a challenge share link opens Challenges mode
         // -> Detail for that id. A plain load (no ?challenge=, or one that
         // doesn't match a real challenge) is unaffected - Home keeps
         // showing today's daily exactly as before.
         //
-        // B1 fix: initialUrlRouteApplied latches on the very FIRST catalog
-        // pass, whether or not that pass honored a requested id - not just
-        // inside the branch that does. A plain load of today's daily
-        // replace-syncs the URL to /?challenge=<daily-id> above; if this
-        // guard only latched when requestedIdHonored was true, that flag
-        // would stay false forever on a plain load, and the very next
-        // focus/visibilitychange-triggered catalog refresh would re-read
-        // that *app-synced* URL, see requestedIdHonored=true this time, and
-        // force-navigate to Challenges -> Detail out from under whatever the
-        // player is doing - including mid-race, under an active takeover.
+        // B1 fix (owner-approved URL policy): this used to also replace-sync
+        // the URL to /?challenge=<daily-id> whenever the resolved challenge
+        // simply happened to be today's daily, honored request or not - the
+        // single root cause of every reported symptom (a second refresh
+        // dumping the player into Detail, a bottom-nav tap leaking the param
+        // back in after a refresh, a stale tab self-syncing to yesterday's
+        // board forever). The rule is now the plain invariant this file
+        // enforces everywhere: ?challenge= sits in the address bar if and
+        // only if the player is on that challenge's own Detail (or a
+        // locked/recovering race) - so this effect only ever WRITES the URL
+        // when an explicit request was honored above, never merely because
+        // the selected challenge is a daily. initialUrlRouteApplied still
+        // latches on the very FIRST catalog pass, whether or not that pass
+        // honored a requested id - not just inside the branch that does - so
+        // a later focus/visibilitychange-triggered catalog refresh can't
+        // re-read a since-changed URL and force-navigate to Challenges ->
+        // Detail out from under whatever the player is doing, including
+        // mid-race, under an active takeover.
         if (!initialUrlRouteApplied.current) {
           initialUrlRouteApplied.current = true;
           if (requestedIdHonored) {
@@ -653,7 +666,15 @@ export default function App({
       }
       const requestedId = readChallengeIdFromUrl();
       const requested = challenges.find((challenge) => challenge.id === requestedId);
-      if (!requested) return;
+      if (!requested) {
+        // Owner-approved URL policy (PUSH/REPLACE DISCIPLINE): Detail's
+        // entry and its paired "<- Challenges" close both push, so a Back
+        // step landing on a URL with no resolvable challenge id is Back OUT
+        // of Detail - close it so the view visibly follows the URL instead
+        // of silently no-opping and leaving Detail stranded on screen.
+        if (challengesView === "detail") setChallengesView("browse");
+        return;
+      }
       race.resetCompleted();
       setSelectedChallengeId(requested.id);
       // Migration note (iv): back/forward through a challenge share link
@@ -667,7 +688,7 @@ export default function App({
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [challengeIsLocked, challenges, race.challenge, race.recoveryRun, selectedChallengeId]);
+  }, [challengeIsLocked, challenges, challengesView, race.challenge, race.recoveryRun, selectedChallengeId]);
 
   // Account stats are fetched proactively for ANY identified session - not
   // gated on "You" being open - because the app-shell teaching gate
@@ -804,6 +825,17 @@ export default function App({
   }
 
   function selectMode(nextMode: ModeKey) {
+    // Owner-approved URL policy: any bottom-nav tap enforces the iff-
+    // invariant (?challenge= present only on Detail or a locked/recovering
+    // race) - fixes the live leak (share link -> tap Stats -> refresh used
+    // to teleport back into Detail), covers the openRacePreviewFor-cancel
+    // residual, and is the one-visit self-heal for a tab still parked on a
+    // pre-deploy self-synced id. Skipped while a race is locked - the
+    // locked-race pin (App.tsx's own effect + popstate branch) owns the URL
+    // for the duration, same as everywhere else in this file.
+    if (!challengeLockRef.current && readChallengeIdFromUrl()) {
+      clearChallengeUrl("replace");
+    }
     setMode(nextMode);
     // Tapping the Challenges nav item always returns to its root (Browse) -
     // Detail is reached only via a share link/back-forward, never the nav.

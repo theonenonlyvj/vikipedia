@@ -329,7 +329,11 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
     expect(screen.getByText(/maraba coffee/i)).toBeVisible();
     expect(screen.getByText(/moon landing conspiracy theories/i)).toBeVisible();
-    expect(window.location.search).toBe("?challenge=challenge-0016");
+    // Owner-approved URL policy: selection is silent - a plain load never
+    // self-writes ?challenge= just because the resolved challenge is a
+    // daily. The app only ever writes the URL for an explicit request
+    // (share link/bookmark/paste) or a deliberate in-app action.
+    expect(window.location.search).toBe("");
   });
 
   it("does not reload the challenge catalog on every render with the default fetch", async () => {
@@ -415,12 +419,15 @@ describe("VWiki Race app", () => {
   });
 
   it("keeps a plain load on Home through a focus/visibilitychange catalog refresh (regression: B1 - was force-navigating to Challenges -> Detail)", async () => {
-    // A plain load of today's daily replace-syncs the URL to
-    // /?challenge=<daily-id> (unrelated to this bug, already covered by
-    // "selects and labels today's daily challenge..." above). B1: the
-    // *second* catalog pass (from this focus/visibilitychange refresh) must
-    // not misread that app-synced URL as a genuine share-link request and
-    // force-navigate into Challenges -> Detail.
+    // Owner-approved URL policy: a plain load of today's daily no longer
+    // self-syncs the URL to /?challenge=<daily-id> at all (the B1 root
+    // cause, removed - see App.tsx's catalog-load effect) - so there's no
+    // app-written URL left for a later catalog pass to misread as a genuine
+    // share-link request. This test now guards the same B1 regression
+    // (a focus/visibilitychange refresh force-navigating into Challenges ->
+    // Detail out from under the player) directly against that invariant:
+    // the URL stays bare through the whole flow, not just "Detail never
+    // opens".
     const fetchImpl = createFetchMock({
       challenges: [dailyChallenge("challenge-daily", { dailyDate: "2026-07-15" })],
     });
@@ -434,7 +441,7 @@ describe("VWiki Race app", () => {
     );
 
     expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
-    expect(window.location.search).toBe("?challenge=challenge-daily");
+    expect(window.location.search).toBe("");
     expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
 
     act(() => window.dispatchEvent(new Event("focus")));
@@ -443,6 +450,7 @@ describe("VWiki Race app", () => {
 
     expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
     expect(screen.getByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(window.location.search).toBe("");
   });
 
   it("does not silently move mode to Challenges -> Detail during an active race takeover, even after a focus/visibilitychange catalog refresh (regression: B1)", async () => {
@@ -5678,12 +5686,14 @@ describe("PKG-07 (council 2026-07-19, owner-proxy ruling): daily ritual identity
     expect(await first.findByText("0:02 left today")).toBeVisible();
     expect(first.queryByText(/new daily drops 5:00 am central\./i)).toBeNull();
     first.unmount();
-    // `first` mounting itself synced `?challenge=challenge-0001` onto the
-    // real, file-shared `window.location` (App's own syncChallengeUrl) -
-    // reset it, the same way `beforeEach` does before every test, so
-    // `second` below boots fresh on Home rather than reading that leftover
-    // query param as "the user navigated straight to Detail."
-    window.history.pushState({}, "", "/");
+    // Regression guard (owner-approved URL policy): `first` mounting used to
+    // self-sync `?challenge=challenge-0001` onto the real, file-shared
+    // `window.location` (App.tsx's old daily-origin disjunct, now removed) -
+    // a plain Home load must never acquire a challenge param on its own, so
+    // two consecutive plain-Home mounts stay on Home with a bare URL with no
+    // manual pushState("/") reset needed between them. If this assertion
+    // ever starts failing, the self-sync has regressed.
+    expect(window.location.search).toBe("");
 
     // A later "reload" (a fresh mount, standing in for App.tsx's own
     // remount-on-refresh) two seconds later reads a smaller remainder -
@@ -5698,6 +5708,7 @@ describe("PKG-07 (council 2026-07-19, owner-proxy ruling): daily ritual identity
       />,
     );
     expect(await second.findByText("24:00:00 left today")).toBeVisible();
+    expect(window.location.search).toBe("");
   });
 
   it("You shows a streak tile reusing accountStats.dailyStreak", async () => {
@@ -5753,6 +5764,132 @@ describe("PKG-07 (council 2026-07-19, owner-proxy ruling): daily ritual identity
     expect(
       within(dialog).getByText(/a new pair drops every day at 5:00 am central.*keep your streak alive/i),
     ).toBeVisible();
+  });
+});
+
+describe("Owner-approved URL policy (2026-07-21): ?challenge= is Detail's address", () => {
+  beforeEach(() => {
+    window.history.pushState({}, "", "/");
+  });
+
+  it("a stale-daily share link still opens Detail, honestly badged with its own date (entry intent always wins, no staleness second-guessing)", async () => {
+    const pastDaily = dailyChallenge("challenge-0011", { dailyDate: "2026-07-20", target: "Fruit" });
+    const todaysDaily = dailyChallenge("challenge-0012", { dailyDate: "2026-07-21", target: "Water" });
+    window.history.pushState({}, "", "/?challenge=challenge-0011");
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ challenges: [pastDaily, todaysDaily] })}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-21"}
+      />,
+    );
+
+    const detail = await screen.findByRole("region", { name: /challenge detail/i });
+    expect(within(detail).getByText("Daily 7/20")).toBeVisible();
+    expect(window.location.search).toBe("?challenge=challenge-0011");
+  });
+
+  it("item 5 (approved): a past-daily Detail offers 'Play today's daily' back into the ritual", async () => {
+    const pastDaily = dailyChallenge("challenge-0011", { dailyDate: "2026-07-20", target: "Fruit" });
+    const todaysDaily = dailyChallenge("challenge-0012", { dailyDate: "2026-07-21", target: "Water" });
+    window.history.pushState({}, "", "/?challenge=challenge-0011");
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ challenges: [pastDaily, todaysDaily] })}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-21"}
+      />,
+    );
+
+    const detail = await screen.findByRole("region", { name: /challenge detail/i });
+    expect(within(detail).getByText("Daily 7/20")).toBeVisible();
+    await user.click(within(detail).getByRole("button", { name: /play today's daily/i }));
+
+    expect(await screen.findByRole("button", { name: /start race/i })).toBeVisible();
+    expect(screen.getByText(/water/i)).toBeVisible();
+    expect(window.location.search).toBe("?challenge=challenge-0012");
+  });
+
+  it("a nav tap away from Detail clears ?challenge= so a later refresh lands on Home, not Detail (fixes the live leak)", async () => {
+    window.history.pushState({}, "", "/?challenge=challenge-0002");
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ challenges: twoChallenges() })}
+        storage={claimedStorage()}
+      />,
+    );
+
+    await screen.findByRole("region", { name: /challenge detail/i });
+    expect(window.location.search).toBe("?challenge=challenge-0002");
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    await user.click(within(nav).getByRole("button", { name: "Stats" }));
+    expect(window.location.search).toBe("");
+
+    // Simulates a "refresh" - a fresh mount reading whatever the real,
+    // file-shared window.location now holds.
+    unmount();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ challenges: twoChallenges() })}
+        storage={claimedStorage()}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
+    expect(window.location.search).toBe("");
+  });
+
+  it("a ?challenge= for a challenge that no longer resolves degrades to Home with the stale param replace-cleared, not a dangling URL", async () => {
+    window.history.pushState({}, "", "/?challenge=challenge-9999");
+    const todayChallenge = dailyChallenge("challenge-0001", { dailyDate: "2026-07-17" });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ challenges: [todayChallenge] })}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
+    await waitFor(() => expect(window.location.search).toBe(""));
+  });
+
+  it("Back from a Detail entered via Browse returns the view to Browse, following the URL (popstate no-op fix)", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ challenges: twoChallenges() })}
+        storage={claimedStorage()}
+      />,
+    );
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #2/i }));
+    await screen.findByRole("region", { name: /challenge detail/i });
+    expect(window.location.search).toBe("?challenge=challenge-0002");
+
+    // Simulates the browser's own Back step landing on the bare "/" URL
+    // Detail's entry push left behind - same pushState+popstate convention
+    // the locked-race popstate tests elsewhere in this file use.
+    window.history.pushState({}, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
+    });
+    expect(await screen.findByRole("button", { name: /challenge #2/i })).toBeVisible();
+    expect(window.location.search).toBe("");
   });
 });
 
