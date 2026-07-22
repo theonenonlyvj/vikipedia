@@ -160,6 +160,124 @@ describe("requestJson", () => {
     vi.useRealTimers();
   });
 
+  it("fails a stalled first attempt over to the retry at the shorter first-attempt leash", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: boolean[] = [];
+      const fetchImpl = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            const attempt = fetchImpl.mock.calls.length;
+            init?.signal?.addEventListener("abort", () => {
+              aborted.push(true);
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+            if (attempt === 2) {
+              resolve(Response.json({ challenges: [{ id: "challenge-1" }] }));
+            }
+          }),
+      );
+      const onRetry = vi.fn();
+
+      const request = requestJson(fetchImpl, requestUrl, {
+        ...requestOptions,
+        timeoutMs: 15_000,
+        firstAttemptTimeoutMs: 4_000,
+        retry: "idempotent-once",
+        idempotencyKey: "op-1",
+        onRetry,
+      });
+      const assertion = expect(request).resolves.toEqual({
+        challenges: [{ id: "challenge-1" }],
+      });
+
+      // First attempt aborts at the 4s leash, NOT the full 15s budget...
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(aborted).toHaveLength(1);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      // ...and the retry fires after the standard delay.
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the full timeout for the retry attempt after a short first leash", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      );
+
+      const request = requestJson(fetchImpl, requestUrl, {
+        ...requestOptions,
+        timeoutMs: 15_000,
+        firstAttemptTimeoutMs: 4_000,
+        retry: "idempotent-once",
+        idempotencyKey: "op-1",
+      });
+      const assertion = expect(request).rejects.toMatchObject({
+        code: "timeout",
+        status: 504,
+      });
+
+      await vi.advanceTimersByTimeAsync(4_250); // leash + retry delay
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      // The retry is still pending at what would have been a second 4s
+      // leash - it holds the full 15s window.
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(11_000);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores the first-attempt leash when no retry is armed", async () => {
+    vi.useFakeTimers();
+    try {
+      let rejected = false;
+      const fetchImpl = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      );
+
+      const request = requestJson(fetchImpl, requestUrl, {
+        ...requestOptions,
+        timeoutMs: 10_000,
+        firstAttemptTimeoutMs: 4_000,
+        retry: "never",
+      }).catch((error: ApiRequestError) => {
+        rejected = true;
+        throw error;
+      });
+      const assertion = expect(request).rejects.toMatchObject({ code: "timeout" });
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(rejected).toBe(false); // the lone attempt keeps its full window
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      await assertion;
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects a relative API URL before calling fetch", async () => {
     const fetchImpl = vi.fn();
 

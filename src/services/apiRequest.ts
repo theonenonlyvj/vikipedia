@@ -15,6 +15,16 @@ export type ApiRequestOptions<T> = {
   body?: unknown;
   token?: string;
   timeoutMs: number;
+  /** Shorter leash for the FIRST attempt only. When an automatic retry is
+   *  armed, a first request that has produced no response by this deadline
+   *  is almost certainly stalled (cold upstream, dead pooled connection) -
+   *  failing over to the retry quickly beats burning the whole `timeoutMs`
+   *  budget on it. Ignored when no retry is armed, so a lone attempt always
+   *  keeps the full window. */
+  firstAttemptTimeoutMs?: number;
+  /** Notified when an automatic retry is about to start - lets the caller
+   *  surface honest progress copy instead of an unchanging spinner. */
+  onRetry?: () => void;
   retry: "read-once" | "idempotent-once" | "never";
   idempotencyKey?: string;
   validate(value: unknown): value is T;
@@ -36,8 +46,12 @@ export async function requestJson<T>(
   const attempts = shouldRetry(options) ? 2 : 1;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const attemptTimeoutMs =
+      attempt === 0 && attempts > 1 && options.firstAttemptTimeoutMs !== undefined
+        ? options.firstAttemptTimeoutMs
+        : options.timeoutMs;
     try {
-      return await requestOnce(fetchImpl, url, options);
+      return await requestOnce(fetchImpl, url, options, attemptTimeoutMs);
     } catch (caught) {
       const error = toApiRequestError(caught);
       if (attempt + 1 >= attempts || !isRetryable(error, options)) {
@@ -47,6 +61,7 @@ export async function requestJson<T>(
       if (retryDelayMs > MAX_AUTOMATIC_RETRY_DELAY_MS) {
         throw error;
       }
+      options.onRetry?.();
       await delay(retryDelayMs);
     }
   }
@@ -74,9 +89,10 @@ async function requestOnce<T>(
   fetchImpl: typeof fetch,
   url: string,
   options: ApiRequestOptions<T>,
+  attemptTimeoutMs: number = options.timeoutMs,
 ): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), attemptTimeoutMs);
 
   try {
     const response = await fetchImpl(url, {

@@ -208,6 +208,10 @@ export default function App({
   const [authPrompt, setAuthPrompt] = useState<AuthPromptIntent | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("create");
   const [authBusy, setAuthBusy] = useState(false);
+  // True while the login request's single automatic retry is in flight -
+  // drives the honest "Still connecting..." button copy so a slow first
+  // attempt doesn't read as a silent hang.
+  const [authRetrying, setAuthRetrying] = useState(false);
   // "Honest You" (spec §2.2/§2.3): non-null while the ghost-loss guard
   // dialog is showing INSTEAD of the identity sheet (§8 "Dialog layering" -
   // `authPrompt && ghostGuard` renders the guard, never both at once).
@@ -1337,12 +1341,16 @@ export default function App({
 
     loginRequestLock.current = true;
     setAuthBusy(true);
+    setAuthRetrying(false);
     try {
-      const loggedInSession = await identityClient.login({
-        deviceCredential: identityRepository.getDeviceCredential(),
-        username,
-        password,
-      });
+      const loggedInSession = await identityClient.login(
+        {
+          deviceCredential: identityRepository.getDeviceCredential(),
+          username,
+          password,
+        },
+        { onRetry: () => setAuthRetrying(true) },
+      );
       persistIdentitySession(loggedInSession);
       // Every login replaces the active account - a later session must
       // never inherit the previous one's per-tab DNF memory (§2.1/§2.2).
@@ -1361,6 +1369,7 @@ export default function App({
     } finally {
       loginRequestLock.current = false;
       setAuthBusy(false);
+      setAuthRetrying(false);
     }
   }
 
@@ -1868,6 +1877,7 @@ export default function App({
       ) : authPrompt ? (
         <IdentityPrompt
           authBusy={authBusy}
+          authRetrying={authRetrying}
           authMode={authMode}
           confirmPasswordDraft={confirmPasswordDraft}
           displayNameDraft={displayNameDraft}
@@ -1934,6 +1944,7 @@ export default function App({
 
 function IdentityPrompt({
   authBusy,
+  authRetrying,
   authMode,
   confirmPasswordDraft,
   displayNameDraft,
@@ -1955,6 +1966,8 @@ function IdentityPrompt({
   usernameDraft,
 }: {
   authBusy: boolean;
+  // The login request's automatic retry is in flight (see performLogin).
+  authRetrying: boolean;
   authMode: AuthMode;
   confirmPasswordDraft: string;
   displayNameDraft: string;
@@ -2219,7 +2232,11 @@ function IdentityPrompt({
               />
             </label>
             <button disabled={authBusy} type="submit">
-              {authBusy ? "Logging in..." : "Log in"}
+              {authBusy
+                ? authRetrying
+                  ? "Still connecting..."
+                  : "Logging in..."
+                : "Log in"}
             </button>
           </form>
         ) : null}

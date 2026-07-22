@@ -280,6 +280,61 @@ describe("VGames identity client", () => {
     expect(secondHeaders["Idempotency-Key"]).toBe(firstHeaders["Idempotency-Key"]);
   });
 
+  it("fails a stalled first login attempt over to the retry at 4s and reports the retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = {
+        accountId: "acc-claimed",
+        displayName: "casey",
+        token: "jwt-claimed",
+        status: "claimed",
+      };
+      const fetchImpl = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            const attempt = fetchImpl.mock.calls.length;
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+            if (attempt === 2) {
+              resolve(Response.json(session));
+            }
+          }),
+      );
+      const onRetry = vi.fn();
+      const client = createVGamesIdentityClient(fetchImpl, { apiOrigin });
+
+      const login = client.login(
+        {
+          deviceCredential: "cred-123456789012",
+          username: "casey",
+          password: "secret-pass",
+        },
+        { onRetry },
+      );
+      const assertion = expect(login).resolves.toMatchObject({
+        accountId: "acc-claimed",
+        status: "claimed",
+      });
+
+      // The stalled first attempt is cut at the 4s leash (not 15s) and the
+      // caller hears about the retry so it can show honest progress copy.
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+      // Same idempotency key on both attempts - one login, not two.
+      const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers as Record<string, string>;
+      const secondHeaders = fetchImpl.mock.calls[1]?.[1]?.headers as Record<string, string>;
+      expect(secondHeaders["Idempotency-Key"]).toBe(firstHeaders["Idempotency-Key"]);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces identity API error messages", async () => {
     const fetchImpl = vi.fn(async () => {
       return Response.json(

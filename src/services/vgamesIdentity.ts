@@ -38,10 +38,17 @@ export interface LoginInput {
   password: string;
 }
 
+export interface LoginHooks {
+  /** Fired when the client's single automatic retry kicks in, so the UI can
+   *  switch to honest "Still connecting" copy instead of an unchanging
+   *  spinner. */
+  onRetry?: () => void;
+}
+
 export interface VGamesIdentityClient {
   playAsGuest(input: GuestIdentityInput): Promise<VGamesIdentitySession>;
   secureGuest(input: SecureGuestInput): Promise<VGamesIdentitySession>;
-  login(input: LoginInput): Promise<VGamesIdentitySession>;
+  login(input: LoginInput, hooks?: LoginHooks): Promise<VGamesIdentitySession>;
 }
 
 export interface VGamesIdentityClientOptions {
@@ -199,7 +206,7 @@ export function createVGamesIdentityClient(
     secureGuest(input) {
       return identityRequest(fetchImpl, `${apiOrigin}/api/v2/identity/secure`, input);
     },
-    login(input) {
+    login(input, hooks) {
       return identityRequest(
         fetchImpl,
         `${apiOrigin}/api/v2/identity/login`,
@@ -207,11 +214,22 @@ export function createVGamesIdentityClient(
         {
           idempotencyKey: crypto.randomUUID(),
           retry: "idempotent-once",
+          // Fail a stalled first attempt over to the idempotent retry fast:
+          // the warm login chain answers in well under a second (measured
+          // 2026-07-22: 247-566ms p100 across fresh contexts, ghost-fold
+          // included), so a first attempt silent past 4s is a stalled
+          // request, not a slow one. The retry keeps the full 15s window -
+          // it must outlive the API worker's own 10s upstream identity
+          // timeout so a genuine 504 still reaches error copy.
+          firstAttemptTimeoutMs: LOGIN_FIRST_ATTEMPT_TIMEOUT_MS,
+          onRetry: hooks?.onRetry,
         },
       );
     },
   };
 }
+
+export const LOGIN_FIRST_ATTEMPT_TIMEOUT_MS = 4_000;
 
 async function identityRequest(
   fetchImpl: typeof fetch,
@@ -220,12 +238,16 @@ async function identityRequest(
   options: {
     idempotencyKey?: string;
     retry?: "idempotent-once" | "never";
+    firstAttemptTimeoutMs?: number;
+    onRetry?: () => void;
   } = {},
 ): Promise<VGamesIdentitySession> {
   return requestJson(fetchImpl, path, {
     method: "POST",
     body,
     timeoutMs: 15_000,
+    firstAttemptTimeoutMs: options.firstAttemptTimeoutMs,
+    onRetry: options.onRetry,
     retry: options.retry ?? "never",
     idempotencyKey: options.idempotencyKey,
     validate: isSession,

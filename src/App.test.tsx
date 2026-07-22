@@ -804,6 +804,56 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
   });
 
+  it("switches to honest 'Still connecting...' copy when the login retry kicks in", async () => {
+    const loginSession: VGamesIdentitySession = {
+      accountId: "acc-claimed",
+      displayName: "vijay",
+      token: "jwt-claimed",
+      status: "claimed",
+    };
+    const loginDeferred = deferredValue<VGamesIdentitySession>();
+    let reportRetry: (() => void) | undefined;
+    const identityClient = {
+      playAsGuest: vi.fn(async () => loginSession),
+      secureGuest: vi.fn(async () => loginSession),
+      login: vi.fn((_input: unknown, hooks?: { onRetry?: () => void }) => {
+        reportRetry = hooks?.onRetry;
+        return loginDeferred.promise;
+      }),
+    };
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock()}
+        storage={memoryStorage()}
+        identityClient={identityClient}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await user.click(screen.getByRole("button", { name: /^log in$/i }));
+    await user.type(screen.getByLabelText(/^username$/i), "vijay");
+    await user.type(screen.getByLabelText(/^password$/i), "secret-pass");
+    fireEvent.submit(
+      screen.getByLabelText(/^password$/i).closest("form") as HTMLFormElement,
+    );
+
+    expect(await screen.findByRole("button", { name: /logging in/i })).toBeDisabled();
+
+    // The identity client reports its single automatic retry - the button
+    // copy turns honest instead of spinning silently.
+    act(() => reportRetry?.());
+    const retryButton = await screen.findByRole("button", { name: /still connecting/i });
+    expect(retryButton).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /logging in/i })).toBeNull();
+
+    // The retry succeeding still lands the login normally.
+    act(() => loginDeferred.resolve(loginSession));
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+  });
+
   // QF-07: continueAsGuest/createVGamesAccount had no synchronous guard of
   // their own (only the async `authBusy` state setter, which has a real
   // window before re-render for a second tap/Enter to fire a second
