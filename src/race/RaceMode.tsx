@@ -3,12 +3,13 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
   type FocusEvent,
   type MouseEvent,
   type PointerEvent,
 } from "react";
 import { dailyNumberLabel } from "../domain/dailyEditorial";
-import { formatTimeAndClicks } from "../domain/formatting";
+import { formatTimeAndClicks, truncateTitle } from "../domain/formatting";
 import type { GameSession } from "../domain/gameSession";
 import { compressPathForStrip } from "../domain/pathCompression";
 import type { Article } from "../domain/types";
@@ -88,6 +89,18 @@ export default function RaceMode({
     ? compressPathForStrip(currentPathTitles, session.challenge.target.title)
     : [];
 
+  // RC-1: owner report - the path strip's target disclosure (below) is the
+  // ONLY place to check the target while racing, and that strip is plain
+  // static flow (`.race-mode .path-strip`), not sticky - scroll a few
+  // article-lengths down and it's gone, right when a lost player wants it
+  // most. Target now also gets a compact chip in the STICKY `.race-hud`
+  // (below), reusing this same targetTitle/useTargetPreview state - see
+  // that chip's own comment for why the popover moved out from under
+  // `.target-reference`'s old `<details>` markup.
+  const targetTitle = session?.challenge.target.title ?? "Target";
+  const readyTargetPreview = targetPreview.status === "ready" ? targetPreview : null;
+  const [isTargetOpen, setIsTargetOpen] = useState(false);
+
   return (
     <section className="race-mode">
       <header className="race-hud">
@@ -99,18 +112,31 @@ export default function RaceMode({
           ) : null}
         </div>
         {session ? (
-          // PKG-02: was three chips (Clicks/Timer/Target), one per `dl`
-          // entry - collapsed to a single always-visible "0:14 · 3 clk"
-          // chip using the same time+clicks formatter every other
-          // run-summary in the app uses (invariant 1). Target dropped here
-          // since PathStrip's own "Target ▾" disclosure just below already
-          // shows it - this was a literal on-screen duplicate.
-          <dl className="run-metrics" aria-label="Current run">
-            <div>
-              <dt>Run</dt>
-              <dd>{formatTimeAndClicks(elapsedMs, session.clicks)}</dd>
-            </div>
-          </dl>
+          // RC-1: Run and Target now share this one flex row as siblings
+          // (not two grid areas) so they always stay on a single line - the
+          // scroll-margin-top regression guard below depends on race-hud
+          // never growing a second row at any width. PKG-02's original
+          // single "Run" chip is untouched (App.test.tsx keys off
+          // `getByLabelText(/current run/i)` unmodified).
+          <div className="race-hud-metrics">
+            <dl className="run-metrics" aria-label="Current run">
+              <div>
+                <dt>Run</dt>
+                <dd>{formatTimeAndClicks(elapsedMs, session.clicks)}</dd>
+              </div>
+            </dl>
+            <button
+              aria-expanded={isTargetOpen}
+              aria-label={`Target: ${targetTitle}`}
+              className="target-chip"
+              type="button"
+              onClick={() => setIsTargetOpen((open) => !open)}
+            >
+              <small>Target</small>
+              <strong title={targetTitle}>{truncateTitle(targetTitle)}</strong>
+              <span aria-hidden="true">{isTargetOpen ? "–" : "+"}</span>
+            </button>
+          </div>
         ) : null}
         <button
           className="end-run-button"
@@ -120,9 +146,31 @@ export default function RaceMode({
         >
           End Run
         </button>
+
+        {session && isTargetOpen ? (
+          // RC-1: a plain child of `.race-hud` (not a wrapping sibling div)
+          // is deliberate - an earlier version of this wrapped `.race-hud`
+          // in its own parent so this popover could sit outside race-hud's
+          // clip-path, but that wrapper's box was exactly race-hud's own
+          // height (the popover is `position: absolute`, contributing none
+          // of its own), leaving `position: sticky` no room in its
+          // containing block to stick through the page - it just scrolled
+          // away like a static element. Fixed instead by moving race-hud's
+          // notched-corner chrome (border/background/backdrop-filter/
+          // clip-path) onto a `.race-hud::before` pseudo-element in
+          // styles.css, so `.race-hud` itself carries no clip-path and this
+          // popover (an ordinary absolutely-positioned child of it) is free
+          // to render past its bottom edge uncropped - while `.race-hud`
+          // keeps its original, unwrapped parentage under `.race-mode` and
+          // its original sticky behavior.
+          <p className="target-preview-popover">
+            {readyTargetPreview?.preview.blurb ??
+              "The target preview was not ready when this run began."}
+          </p>
+        ) : null}
       </header>
 
-      {session ? <PathStrip targetPreview={targetPreview} titles={visiblePath} /> : null}
+      {session ? <PathStrip titles={visiblePath} /> : null}
 
       {pendingRetry ? (
         <aside className="sync-retry-panel" role="status">
@@ -241,16 +289,17 @@ export const WikipediaArticlePanel = memo(function WikipediaArticlePanel({
   );
 });
 
-export function PathStrip({
-  targetPreview,
-  titles,
-}: {
-  targetPreview: TargetPreviewState;
-  titles: string[];
-}) {
-  const targetTitle = titles.at(-1) ?? "Target";
+// RC-1 (owner-proxy ruling): this used to also carry a "Target ▾" disclosure
+// cell (`.target-reference`) alongside the breadcrumb - that's what moved
+// into the sticky `.race-hud` above, reusing the same useTargetPreview state
+// (see RaceMode's own RC-1 comment for the popover-clipping detail that
+// drove HOW it moved). Owner wants ONE obvious place for the target, not two
+// - so rather than duplicate it here too, this strip goes back to exactly
+// what it already computed as "visited": `titles` minus its trailing target
+// entry, purely a path trail. `visitedTitles`/rendering below is otherwise
+// unchanged from before this pass.
+export function PathStrip({ titles }: { titles: string[] }) {
   const visitedTitles = titles.slice(0, -1);
-  const readyPreview = targetPreview.status === "ready" ? targetPreview : null;
   return (
     <nav className="path-strip" aria-label="Run path">
       <div className="path-history">
@@ -263,16 +312,6 @@ export function PathStrip({
           </span>
         ))}
       </div>
-      <details aria-label="Target reference" className="target-reference">
-        <summary>
-          <small>Target</small>
-          <strong>{targetTitle}</strong>
-        </summary>
-        <p>
-          {readyPreview?.preview.blurb ??
-            "The target preview was not ready when this run began."}
-        </p>
-      </details>
     </nav>
   );
 }

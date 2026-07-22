@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMinutesSeconds, formatTimeAndClicks } from "./formatting";
+import { formatMinutesSeconds, formatTimeAndClicks, truncateTitle } from "./formatting";
 
 describe("formatMinutesSeconds", () => {
   it("formats sub-minute durations as 0:ss", () => {
@@ -26,5 +26,18 @@ describe("formatTimeAndClicks", () => {
     expect(formatTimeAndClicks(42_000, 6)).toBe("0:42 · 6 clk");
     expect(formatTimeAndClicks(1_500, 1)).toBe("0:01 · 1 clk");
     expect(formatTimeAndClicks(0, 0)).toBe("0:00 · 0 clk");
+  });
+});
+
+describe("truncateTitle", () => {
+  it("leaves titles at or under the max length untouched", () => {
+    expect(truncateTitle("Fruit")).toBe("Fruit");
+    expect(truncateTitle("Sixteen char ttl")).toBe("Sixteen char ttl");
+    expect(truncateTitle("Fruit", 5)).toBe("Fruit");
+  });
+
+  it("truncates longer titles to the max length plus an ellipsis", () => {
+    expect(truncateTitle("Voynich manuscript")).toBe("Voynich manuscri…");
+    expect(truncateTitle("Voynich manuscript", 7)).toBe("Voynich…");
   });
 });

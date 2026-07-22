@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { GameSession } from "../domain/gameSession";
 import type { Article, Challenge } from "../domain/types";
 import type { TargetPreviewState } from "../hooks/useTargetPreview";
-import RaceMode from "./RaceMode";
+import RaceMode, { PathStrip } from "./RaceMode";
 
 const challenge: Challenge = {
   id: "challenge-1",
@@ -37,17 +38,23 @@ const session: GameSession = {
 
 const idlePreview: TargetPreviewState = { status: "idle" };
 
-function renderRaceMode(redirectedFrom: string | null) {
+function renderRaceMode(
+  redirectedFrom: string | null,
+  overrides: {
+    session?: GameSession;
+    targetPreview?: TargetPreviewState;
+  } = {},
+) {
   return render(
     <RaceMode
       article={article}
-      session={session}
+      session={overrides.session ?? session}
       elapsedMs={1_000}
       redirectedFrom={redirectedFrom}
       pendingNavigationTitle={null}
       pendingRetry={null}
       onRetryPending={() => {}}
-      targetPreview={idlePreview}
+      targetPreview={overrides.targetPreview ?? idlePreview}
       endRunDisabled={false}
       onRequestEndRun={() => {}}
       checkingActiveRun={false}
@@ -75,5 +82,84 @@ describe("RaceMode", () => {
 
     expect(screen.getByRole("heading", { name: "Epoch (astronomy)" })).toBeVisible();
     expect(screen.queryByText(/redirected from/i)).toBeNull();
+  });
+
+  // RC-1: the target used to only surface via a disclosure cell in the
+  // static (non-sticky) path strip, which scrolls out of view mid-article -
+  // this locks in that it now also lives in the sticky race-hud, one tap
+  // from the same preview, at every scroll position.
+  describe("target chip (sticky HUD)", () => {
+    it("renders inside the sticky race-hud, closed by default, with the untruncated title", () => {
+      renderRaceMode(null);
+
+      const chip = screen.getByRole("button", { name: "Target: Fruit" });
+      expect(chip.closest(".race-hud")).not.toBeNull();
+      expect(within(chip).getByText("Fruit")).toBeVisible();
+      expect(chip).toHaveAttribute("aria-expanded", "false");
+      expect(
+        screen.queryByText("The target preview was not ready when this run began."),
+      ).toBeNull();
+    });
+
+    it("hard-truncates a long target title to 16 characters plus an ellipsis, keeping the full title in the accessible name", () => {
+      const longTargetSession: GameSession = {
+        ...session,
+        challenge: {
+          ...challenge,
+          target: { title: "Voynich manuscript", pageId: 2 },
+        },
+      };
+      renderRaceMode(null, { session: longTargetSession });
+
+      const chip = screen.getByRole("button", { name: "Target: Voynich manuscript" });
+      expect(within(chip).getByText("Voynich manuscri…")).toBeVisible();
+      expect(within(chip).queryByText("Voynich manuscript")).toBeNull();
+    });
+
+    it("toggles the shared target-preview popover open and closed on click, reusing the useTargetPreview blurb", async () => {
+      const user = userEvent.setup();
+      const readyPreview: TargetPreviewState = {
+        status: "ready",
+        challengeId: challenge.id,
+        canonicalTitle: "Fruit",
+        attributionUrl: "https://en.wikipedia.org/wiki/Fruit",
+        preview: { blurb: "A fruit is the seed-bearing structure in plants." },
+      };
+      renderRaceMode(null, { targetPreview: readyPreview });
+
+      const chip = screen.getByRole("button", { name: "Target: Fruit" });
+      expect(screen.queryByText(/seed-bearing structure/i)).toBeNull();
+
+      await user.click(chip);
+      expect(chip).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText(/seed-bearing structure/i)).toBeVisible();
+
+      await user.click(chip);
+      expect(chip).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByText(/seed-bearing structure/i)).toBeNull();
+    });
+
+    it("falls back to the not-ready copy when opened before the target preview resolves", async () => {
+      const user = userEvent.setup();
+      renderRaceMode(null, { targetPreview: { status: "loading", challengeId: challenge.id } });
+
+      await user.click(screen.getByRole("button", { name: "Target: Fruit" }));
+      expect(
+        screen.getByText("The target preview was not ready when this run began."),
+      ).toBeVisible();
+    });
+  });
+});
+
+describe("PathStrip (RC-1: purely a path trail, no target cell)", () => {
+  it("renders only the visited titles, dropping the trailing target from the breadcrumb", () => {
+    render(<PathStrip titles={["J2000", "Epoch (astronomy)", "Fruit"]} />);
+
+    const strip = screen.getByRole("navigation", { name: /run path/i });
+    expect(within(strip).getByText("J2000")).toBeVisible();
+    expect(within(strip).getByText("Epoch (astronomy)")).toBeVisible();
+    expect(within(strip).queryByText("Fruit")).toBeNull();
+    expect(screen.queryByRole("button", { name: /target/i })).toBeNull();
+    expect(screen.queryByRole("group", { name: /target/i })).toBeNull();
   });
 });

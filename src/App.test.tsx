@@ -285,7 +285,16 @@ describe("VWiki Race app", () => {
     ).toBeVisible();
   });
 
-  it("retains a compact in-game target reference during the race (the target-preview panel itself now lives only in the pre-race preview beat)", async () => {
+  // RC-1: was a `<details>`/`<summary>` "target reference" cell in the path
+  // strip, checked via `toBeInTheDocument()` (not `toBeVisible()`) because
+  // jsdom doesn't apply the UA stylesheet that hides a closed `<details>`'s
+  // non-summary children in a real browser - so the old test could never
+  // actually distinguish open from closed. That cell moved into the sticky
+  // `.race-hud` as a real controlled disclosure (`.target-chip` + a
+  // conditionally-rendered `.target-preview-popover`, see RaceMode.tsx),
+  // which IS a genuine DOM presence toggle - so this test now drives the
+  // open/close through a real click instead.
+  it("shows a target chip in the sticky HUD that reveals the target preview on tap (the target-preview panel itself now lives only in the pre-race preview beat)", async () => {
     const fetchImpl = createFetchMock();
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
@@ -294,9 +303,20 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("button", { name: /start race/i }));
     expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
     expect(screen.queryByRole("region", { name: /target preview/i })).toBeNull();
-    const targetReference = screen.getByRole("group", { name: /target reference/i });
-    expect(within(targetReference).getByText("Fruit")).toBeVisible();
-    expect(within(targetReference).getByText(/seed-bearing structure/i)).toBeInTheDocument();
+
+    const targetChip = screen.getByRole("button", { name: /target: fruit/i });
+    expect(targetChip.closest(".race-hud")).not.toBeNull();
+    expect(within(targetChip).getByText("Fruit")).toBeVisible();
+    expect(targetChip).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/seed-bearing structure/i)).toBeNull();
+
+    await user.click(targetChip);
+    expect(targetChip).toHaveAttribute("aria-expanded", "true");
+    expect(await screen.findByText(/seed-bearing structure/i)).toBeVisible();
+
+    await user.click(targetChip);
+    expect(targetChip).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/seed-bearing structure/i)).toBeNull();
   });
 
   it("selects and labels today's daily challenge when no deep link is present", async () => {

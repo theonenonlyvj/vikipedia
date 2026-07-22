@@ -773,12 +773,16 @@ h1 {
   white-space: nowrap;
 }
 
+/* RC-1: was a 2-column grid (`.path-history` + the target disclosure cell
+   that's now `.target-chip` in `.race-hud` instead) - a single implicit
+   column now that `.path-history` is its only child. `display: grid` is
+   kept (rather than switched to block) since it's still a 1-line diff and
+   nothing here depends on grid specifically. */
 .path-strip {
   position: sticky;
   top: 96px;
   z-index: 15;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(190px, 320px);
   gap: 8px;
   align-items: center;
   overflow: visible;
@@ -830,75 +834,79 @@ h1 {
   font-weight: 400;
 }
 
-.target-reference {
-  position: relative;
+/* RC-1: was `.target-reference`, a `<details>`/`<summary>` disclosure that
+   lived in `.path-strip` alongside the breadcrumb (border-left divider +
+   auto/1fr summary grid tuned for that wide, two-column strip cell). Moved
+   into the sticky `.race-hud`'s single-row `.race-hud-metrics` flex strip
+   instead, as a real chip matching `.run-metrics div`'s pill chrome
+   (border/background/clip-path) rather than a plain bordered cell - see
+   RaceMode.tsx's RC-1 comments for why it's a controlled `<button>` now
+   instead of `<details>` (the popover needed to escape race-hud's
+   clip-path, which a `<details>`'s own disclosed content can't do while
+   staying a DOM descendant of it). `flex: 0 1 auto` + `min-width: 0` +
+   `max-width` let it shrink/stay compact instead of stretching the HUD row
+   - paired with RaceMode.tsx hard-truncating the title text itself
+   (`truncateTitle`), the row can't wrap to a second line at any width,
+   which the scroll-margin-top regression guard below depends on. */
+.target-chip {
+  display: flex;
+  flex: 0 1 auto;
   min-width: 0;
-  border-left: 1px solid var(--line);
-  padding-left: 10px;
-}
-
-.target-reference summary {
-  display: grid;
-  /* PKG-12 (council 2026-07-19, Judge A verified): this was mobile-only
-     (44px inside the max-width:640px query below), 36px at every wider
-     width - including tablet/touch-laptop widths where this disclosure is
-     equally tap-driven. Made the base rule so the touch target holds at
-     every width, not just phones. */
-  min-height: 44px;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
+  max-width: 200px;
   align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  background: var(--ink-soft);
   color: var(--text);
-  cursor: pointer;
-  list-style: none;
+  padding: 8px 10px;
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  font-family: inherit;
+  text-align: left;
 }
 
-.target-reference summary::-webkit-details-marker {
-  display: none;
-}
-
-.target-reference summary::after {
-  color: var(--cyan);
-  content: "+";
-  grid-column: 1;
-  grid-row: 1;
-  /* FB-8 judgment call: kept bold - a disclosure-toggle glyph (+/-), not
-     body copy. NV-1: capped at 600 (was 700). */
-  font-weight: 600;
-}
-
-.target-reference[open] summary::after {
-  content: "-";
-}
-
-.target-reference summary small {
-  grid-column: 1;
-  grid-row: 1;
-  padding-left: 16px;
+.target-chip small {
+  flex: 0 0 auto;
   color: #8fb0b5;
-  font-size: 0.62rem;
+  font-size: 0.6rem;
   /* FB-8: kicker label, not a chip/badge. */
   font-weight: 400;
   text-transform: uppercase;
 }
 
-.target-reference summary strong {
-  grid-column: 2;
-  overflow-wrap: anywhere;
-  font-size: 0.82rem;
+.target-chip strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 0.78rem;
   line-height: 1.15;
   /* FB-8: no author font-weight previously - rendered at UA bold. This is
      the target article's title, so it's capped at the 500 content-title
      ceiling. */
   font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.target-reference > p {
+.target-chip span {
+  flex: 0 0 auto;
+  color: var(--cyan);
+  /* FB-8 judgment call: kept bold - a disclosure-toggle glyph (+/-), not
+     body copy. NV-1: capped at 600 (was 700). */
+  font-weight: 600;
+}
+
+.target-preview-popover {
   position: absolute;
   top: calc(100% + 9px);
-  right: -10px;
+  left: 0;
   z-index: 30;
-  width: min(420px, calc(100vw - 28px));
+  /* `.race-hud` (this element's containing block, being the nearest
+     positioned ancestor) already insets its padding box by its own 9px
+     14px padding - `100%` here is that padding box's width, so this
+     lines up flush with race-hud's own content (the Run/Target chips)
+     with no extra offset math needed. */
+  width: min(420px, 100%);
   border: 1px solid var(--line-strong);
   background: #0b1a1f;
   color: var(--text-bright);
@@ -1556,12 +1564,38 @@ h1 {
     "metrics metrics";
   gap: 10px 16px;
   align-items: center;
+  padding: 9px 14px;
+  font-family: var(--viota-ui-font);
+}
+
+/* RC-1: race-hud's notched-corner chrome (border/background/blur/clip-path)
+   moved here, off `.race-hud` itself, so `.target-preview-popover` (a
+   normal DOM child of `.race-hud`, positioned absolute) can render past the
+   header's bottom edge uncropped - clip-path clips an element's entire
+   painted subtree to its own box (unlike plain `overflow`, which defaults
+   to visible), so leaving it on `.race-hud` directly would silently clip
+   the popover away. z-index: -1 keeps this pseudo-element behind
+   `.race-hud`'s real (non-positioned, normal-flow) children within the
+   stacking context race-hud's own `z-index: 5` already establishes - it
+   reads as `.race-hud`'s background either way.
+   An earlier version instead wrapped `.race-hud` in its own new parent div
+   so the popover could sit outside race-hud as a sibling - don't reintroduce
+   that: a wrapper sized to exactly race-hud's own height gives
+   `position: sticky` no room in its containing block to stick through the
+   page, so it just scrolls away like a static element (caught via the
+   live-DOM measurement this ticket's regression guard requires - see
+   raceHudScrollMargin.test.ts's doc comment for that method). Keeping
+   `.race-hud` a direct, unwrapped child of `.race-mode` (as before this
+   pass) preserves its original sticky behavior. */
+.race-hud::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   border: 1px solid var(--line);
   background: rgba(6, 16, 20, 0.96);
-  padding: 9px 14px;
   backdrop-filter: blur(16px);
   clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
-  font-family: var(--viota-ui-font);
 }
 
 .race-hud-status {
@@ -1569,8 +1603,15 @@ h1 {
   min-width: 0;
 }
 
-.race-hud .run-metrics {
+/* RC-1: `.run-metrics` (Run chip) and `.target-chip` (Target chip) are flex
+   siblings sharing this one grid area/row - see RaceMode.tsx's RC-1 comment
+   on why they must never wrap to a second line. */
+.race-hud-metrics {
   grid-area: metrics;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .race-hud .end-run-button {
@@ -3135,7 +3176,7 @@ h1 {
 .daily-target-preview p {
   color: #d8e6e8;
   /* PKG-15: admin-only extract preview, not the genuine in-race article
-     rendering - same non-article-chrome category as .target-reference > p
+     rendering - same non-article-chrome category as .target-preview-popover
      above, so it takes the app's ui-font rather than Georgia. */
   font-family: var(--viota-ui-font);
   font-size: 0.84rem;
@@ -3287,7 +3328,10 @@ h1 {
   }
 
   .path-strip {
-    grid-template-columns: minmax(0, 1fr) minmax(136px, 46%);
+    /* RC-1: was also `grid-template-columns: minmax(0, 1fr) minmax(136px,
+       46%)` here, sizing the strip's old 2nd column (the target disclosure
+       cell, now `.target-chip` in `.race-hud`) - dropped along with it; see
+       the base rule's own RC-1 comment. */
     padding: 6px 8px;
   }
 
@@ -3295,24 +3339,11 @@ h1 {
     max-width: 136px;
   }
 
-  .target-reference {
-    padding-left: 7px;
-  }
-
-  .target-reference summary {
-    /* min-height: 44px is now the base rule above (PKG-12) - only the
-       tighter mobile gap remains here. */
-    gap: 5px;
-  }
-
-  .target-reference summary small {
-    padding-left: 13px;
-    font-size: 0.55rem;
-  }
-
-  .target-reference summary strong {
-    font-size: 0.72rem;
-  }
+  /* RC-1: was `.target-reference`'s mobile tightening (padding-left/gap/
+     font-size on the old `<details>` disclosure cell that lived in
+     `.path-strip`) - that cell moved to `.race-hud` as `.target-chip`,
+     which doesn't currently need its own <=640px override (verified with
+     live screenshots at 390px - see rc1-after-390-*.png). */
 
   .mode-nav button {
     padding-inline: 5px;
