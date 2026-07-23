@@ -49,6 +49,7 @@ export default function RaceFlow({
   elapsedMs,
   redirectedFrom,
   pendingNavigationTitle,
+  navigationRetrying,
   pendingRetry,
   leaderboardContext,
   runId,
@@ -103,6 +104,10 @@ export default function RaceFlow({
   // name - see its doc comment there.
   redirectedFrom: string | null;
   pendingNavigationTitle: string | null;
+  // MB-1 Part 2: true while pendingNavigationTitle's fetch (article or
+  // click-POST) is on its automatic retry - see useRaceController's own
+  // field of the same name.
+  navigationRetrying: boolean;
   pendingRetry: { title: string; anchorText: string } | null;
   leaderboardContext: LeaderboardContext | null;
   runId: string | null;
@@ -168,6 +173,7 @@ export default function RaceFlow({
         elapsedMs={elapsedMs}
         redirectedFrom={redirectedFrom}
         pendingNavigationTitle={pendingNavigationTitle}
+        navigationRetrying={navigationRetrying}
         pendingRetry={pendingRetry}
         onRetryPending={onRetryPending}
         targetPreview={targetPreview}

@@ -105,6 +105,14 @@ export function useRaceController(options: RaceControllerOptions) {
   const observedAt = options.observedAt ?? defaultObservedAt;
   const createEventId = options.createEventId ?? defaultEventId;
   const [state, setState] = useState<RaceState>(initialState);
+  // MB-1 Part 2: true only while the CURRENT navigation's automatic retry
+  // (article fetch leash or click-POST leash - both mirror the shipped
+  // login pattern, see wikipediaGateway.ts/vwikiRaceApiClient.ts) is in
+  // flight. Deliberately kept OUTSIDE RaceState/commitState: it's a
+  // transient signal scoped to a single followLink/retryPendingClick call,
+  // not part of the race's durable state machine, so it never needs to be
+  // threaded through every `{...snapshot, ...}` transition object below.
+  const [navigationRetrying, setNavigationRetrying] = useState(false);
   const stateRef = useRef(state);
   const requestGeneration = useRef(0);
   const operationAbort = useRef<AbortController | null>(null);
@@ -208,9 +216,15 @@ export function useRaceController(options: RaceControllerOptions) {
     pending: PendingClick,
     token: string,
     operation: Operation,
+    onRetry?: () => void,
   ): Promise<ClickOutcome> => {
     try {
-      const response = await options.apiClient.recordClick(pending.runId, pending.body, token);
+      const response = await options.apiClient.recordClick(
+        pending.runId,
+        pending.body,
+        token,
+        onRetry ? { onRetry } : undefined,
+      );
       if (!isCurrent(operation, requestGeneration, mounted)) return { status: "stale" };
       const source = pending.sourceState;
       if (!source.session || !source.run) return { status: "stale" };
@@ -284,6 +298,7 @@ export function useRaceController(options: RaceControllerOptions) {
     if (snapshot.pendingClick) return { status: "ignored" };
     const operation = beginOperation();
     const decisionElapsedMs = Math.round(timer.readElapsed());
+    setNavigationRetrying(false);
     commitState({
       ...snapshot,
       phase: "syncing",
@@ -294,6 +309,7 @@ export function useRaceController(options: RaceControllerOptions) {
       const destinationRequest = options.gateway.getArticle(title, {
         ruleset: snapshot.challenge.ruleset,
         signal: operation.controller.signal,
+        onRetry: () => setNavigationRetrying(true),
       });
       prewarmAbort.current?.abort();
       prewarmAbort.current = null;
@@ -332,7 +348,8 @@ export function useRaceController(options: RaceControllerOptions) {
         pendingNavigationTitle: anchorText || title,
         error: null,
       });
-      return await acceptClick(pending, token, operation);
+      setNavigationRetrying(false);
+      return await acceptClick(pending, token, operation, () => setNavigationRetrying(true));
     } catch (caught) {
       if (!isCurrent(operation, requestGeneration, mounted)) return { status: "stale" };
       commitState({
@@ -342,6 +359,8 @@ export function useRaceController(options: RaceControllerOptions) {
         error: errorMessage(caught, "Could not load that article."),
       });
       return { status: "failed", challengeId: snapshot.challenge.id };
+    } finally {
+      setNavigationRetrying(false);
     }
   }, [acceptClick, beginOperation, commitState, createEventId, observedAt, options.gateway, timer]);
 
@@ -378,13 +397,18 @@ export function useRaceController(options: RaceControllerOptions) {
     const pending = snapshot.pendingClick;
     if (snapshot.phase !== "active" || !pending) return { status: "ignored" };
     const operation = beginOperation();
+    setNavigationRetrying(false);
     commitState({
       ...snapshot,
       phase: "syncing",
       pendingNavigationTitle: pending.body.clickedAnchorText || pending.body.requestedTitle,
       error: null,
     });
-    return acceptClick(pending, token, operation);
+    try {
+      return await acceptClick(pending, token, operation, () => setNavigationRetrying(true));
+    } finally {
+      setNavigationRetrying(false);
+    }
   }, [acceptClick, beginOperation, commitState]);
 
   const recoverActiveRun = useCallback(async (
@@ -541,6 +565,7 @@ export function useRaceController(options: RaceControllerOptions) {
       ? { title: state.pendingClick.body.requestedTitle, anchorText: state.pendingClick.body.clickedAnchorText }
       : null,
     elapsedMs: state.run?.elapsedMs ?? timer.elapsedMs,
+    navigationRetrying,
     start,
     prewarmLink,
     followLink,
@@ -576,7 +601,8 @@ function computeRedirectedFrom(requestedTitle: string, canonicalTitle: string): 
 }
 
 function acceptedLastPage(run: ActiveRunRecord, path: ServerPathStep[]) {
-  const last = path.at(-1);
+  // MB-1 Part 3 (old-Safari compat): Array.prototype.at is Safari 15.4+.
+  const last = path[path.length - 1];
   return {
     title: last?.destinationTitle ?? run.lastTitle ?? run.startTitle,
     pageId: last?.destinationPageId ?? run.lastPageId ?? run.startPageId,
@@ -596,7 +622,8 @@ function sameAcceptedPage(article: Article, accepted: { title: string; pageId?: 
 }
 
 function acceptedDecisionBase(path: ServerPathStep[]) {
-  return Math.max(0, path.at(-1)?.elapsedSinceStartMs ?? 0);
+  // MB-1 Part 3 (old-Safari compat): Array.prototype.at is Safari 15.4+.
+  return Math.max(0, path[path.length - 1]?.elapsedSinceStartMs ?? 0);
 }
 
 function recoveredSession(

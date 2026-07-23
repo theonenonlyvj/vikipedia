@@ -3437,17 +3437,33 @@ h1 {
    * viewport height -- the stable, keyboard-independent minimum), so its
    * position and geometry can't move under a tap while the keyboard is
    * animating. `.modal-backdrop` is shared with `.end-run-dialog`, which
-   * should keep its bottom-sheet placement, so this is scoped via
-   * `:has()` (Safari 15.4+) rather than changing the shared rule above.
+   * should keep its bottom-sheet placement.
+   *
+   * MB-1 Part 3 (old-Safari compat, ~14-15 floor): the original version of
+   * this fix put `align-items: start` on `.modal-backdrop:has(.identity-
+   * dialog)` to flip the shared backdrop without touching `.end-run-dialog`.
+   * `:has()` is Safari 15.4+ - a browser below that floor doesn't merely
+   * ignore the ONE unsupported condition, CSS drops the entire ruleset, so
+   * `.modal-backdrop` silently falls back to the bottom-sheet
+   * `align-items: end` above and the exact tap-swallow bug this fix exists
+   * for comes back, on exactly the old-iOS Safari this ticket is about. The
+   * top-anchor itself is moved onto `.identity-dialog` as `align-self`
+   * instead - a grid/flex ITEM overriding its container's `align-items` is
+   * universally supported (long predates `:has()`), so this half of the fix
+   * now applies unconditionally, on every Safari version. Only the
+   * `height: svh`/safe-area padding refinement below stays behind `:has()`
+   * as a pure cosmetic enhancement - its fallback (backdrop height still
+   * tracking `dvh`) no longer matters functionally once the dialog is
+   * already top-anchored via `align-self`.
    */
   .modal-backdrop:has(.identity-dialog) {
-    align-items: start;
     height: 100vh;
     height: 100svh;
     padding-top: max(10px, env(safe-area-inset-top));
   }
 
   .identity-dialog {
+    align-self: start;
     max-height: calc(100vh - 20px);
     max-height: calc(100svh - 20px);
   }

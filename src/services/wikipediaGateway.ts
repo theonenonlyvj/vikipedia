@@ -14,10 +14,32 @@ const DEFAULT_RULESET = "ranked_classic";
 export const WIKIMEDIA_API_USER_AGENT =
   "VWiki Race/0.0 (https://vwikirace.pages.dev; contact: https://github.com/theonenonlyvj/vwiki-race)";
 
+// MB-1 Part 2: the article fetch used to carry no timeout at all - a
+// stalled connection on a bad mobile network hung `fetchArticle` (and every
+// awaiter of it - see followLink in useRaceController.ts) forever, wedging
+// phase="syncing" with no way out. Mirrors the shipped login leash
+// (apiRequest.ts firstAttemptTimeoutMs, commit 6d54452): a short first
+// attempt, one automatic retry with the full budget (this is the biggest
+// single payload the app fetches on a slow phone, so the retry gets more
+// room than a plain API read), then a real, honest failure that lets the
+// caller revert out of "syncing" instead of hanging.
+const ARTICLE_FIRST_ATTEMPT_TIMEOUT_MS = 5_000;
+const ARTICLE_RETRY_TIMEOUT_MS = 15_000;
+const ARTICLE_RETRY_DELAY_MS = 250;
+
 export interface GetWikipediaArticleOptions {
   revisionId?: number;
   ruleset?: string;
   signal?: AbortSignal;
+  /** Notified once, only when the FIRST attempt stalls past
+   *  ARTICLE_FIRST_ATTEMPT_TIMEOUT_MS and the automatic retry starts - lets
+   *  a caller with a "loading..." affordance switch to honest "still
+   *  loading" copy instead of an unchanging spinner (see useRaceController's
+   *  navigationRetrying). Multiple concurrent callers deduped onto the same
+   *  in-flight request (see the cache below) each get their own
+   *  notification. Never fired for a real, fast failure (bad status/invalid
+   *  response/network error) - only for a genuine stall. */
+  onRetry?: () => void;
 }
 
 export interface WikipediaGateway {
@@ -31,7 +53,8 @@ export class WikipediaGatewayError extends Error {
       | "bad_status"
       | "invalid_article"
       | "invalid_response"
-      | "request_failed",
+      | "request_failed"
+      | "timeout",
     message: string,
     readonly status: number | null = null,
     options?: ErrorOptions,
@@ -46,6 +69,7 @@ interface CacheEntry {
   promise: Promise<Article>;
   settled: boolean;
   subscribers: Set<symbol>;
+  retryListeners: Set<() => void>;
 }
 
 export function createWikipediaGateway(options: {
@@ -104,22 +128,30 @@ export function createWikipediaGateway(options: {
       if (cached?.controller.signal.aborted) {
         evictEntry(articleCache, cached);
       } else if (cached) {
-        return subscribeToEntry(cached, requestOptions.signal);
+        return subscribeToEntry(cached, requestOptions.signal, requestOptions.onRetry);
       }
 
       const requestGeneration = generation;
       const controller = new AbortController();
 
       let entry!: CacheEntry;
+      // Referencing `entry` here (assigned synchronously right below, before
+      // this ever actually runs) is the same forward-reference trick the
+      // `.then`/`.catch` handlers just below already rely on.
+      const notifyRetry = () => {
+        for (const listener of entry.retryListeners) {
+          listener();
+        }
+      };
       const articleRequest = raceWithAbort(
-        fetchArticle({
+        fetchArticleWithLeash({
           endpoint,
           fetchImpl: options.fetchImpl,
           revisionId: requestOptions.revisionId,
           sanitizeHtml,
           signal: controller.signal,
           title,
-        }),
+        }, notifyRetry),
         controller.signal,
       )
         .then((article) => {
@@ -156,12 +188,107 @@ export function createWikipediaGateway(options: {
         promise: articleRequest,
         settled: false,
         subscribers: new Set(),
+        retryListeners: new Set(),
       };
       activeEntries.add(entry);
       articleCache.set(cacheKey, entry);
-      return subscribeToEntry(entry, requestOptions.signal);
+      return subscribeToEntry(entry, requestOptions.signal, requestOptions.onRetry);
     },
   };
+}
+
+// MB-1 Part 2: two attempts at most - a short first leash, then one
+// automatic retry with the full budget. Only a genuine STALL (this
+// function's own timeout firing) is retried; a real, fast failure (bad
+// status/invalid response/a network error the underlying fetch rejects
+// with quickly) is not - it propagates immediately, same as before this
+// fix (see wikipediaGateway.test.ts P12d: a 503 must still reject the
+// FIRST getArticle call outright, not be silently retried away, so a caller
+// that wants to try again gets an honest "it failed" first).
+async function fetchArticleWithLeash(
+  params: {
+    endpoint: string;
+    fetchImpl: typeof fetch;
+    revisionId?: number;
+    sanitizeHtml: (
+      rawHtml: string,
+      currentTitle: string,
+    ) => SanitizedWikipediaArticle;
+    signal: AbortSignal;
+    title: string;
+  },
+  notifyRetry: () => void,
+): Promise<Article> {
+  const attempts = 2;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (params.signal.aborted) {
+      throw abortError();
+    }
+    const attemptTimeoutMs = attempt === 0
+      ? ARTICLE_FIRST_ATTEMPT_TIMEOUT_MS
+      : ARTICLE_RETRY_TIMEOUT_MS;
+    const timeoutController = new AbortController();
+    const timeout = setTimeout(() => timeoutController.abort(), attemptTimeoutMs);
+    unrefTimeout(timeout);
+    const attemptSignal = combineSignals([params.signal, timeoutController.signal]);
+    try {
+      return await fetchArticle({ ...params, signal: attemptSignal });
+    } catch (caught) {
+      if (params.signal.aborted) {
+        // External cancellation (nav superseded, gateway cleared) - never
+        // retried, propagate whatever fetchArticle threw as-is.
+        throw caught;
+      }
+      if (!timeoutController.signal.aborted) {
+        // A real, fast failure - not the stall this leash exists for.
+        throw caught;
+      }
+      if (attempt + 1 >= attempts) {
+        throw articleTimeoutError();
+      }
+      notifyRetry();
+      await delay(ARTICLE_RETRY_DELAY_MS);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw articleTimeoutError();
+}
+
+function articleTimeoutError(): WikipediaGatewayError {
+  return new WikipediaGatewayError(
+    "timeout",
+    "The Wikipedia article took too long to load.",
+    504,
+  );
+}
+
+// No AbortSignal.any() (Safari 15.4+, MB-1 Part 3 compat floor is ~14-15) -
+// a plain listener-based combinator works everywhere AbortController does.
+function combineSignals(signals: AbortSignal[]): AbortSignal {
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+  }
+  for (const signal of signals) {
+    signal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+// Node-only escape hatch so a leash timer that never fires (the common
+// case - the request settles well before it) can't keep a process/test
+// worker alive waiting on it. No-op (and harmless) in real browsers, where
+// setTimeout doesn't return an unref-able handle at all.
+function unrefTimeout(timeout: ReturnType<typeof setTimeout>): void {
+  (timeout as unknown as { unref?: () => void }).unref?.();
 }
 
 async function fetchArticle(options: {
@@ -405,6 +532,7 @@ function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> 
 function subscribeToEntry(
   entry: CacheEntry,
   signal?: AbortSignal,
+  onRetry?: () => void,
 ): Promise<Article> {
   if (signal?.aborted) {
     return Promise.reject(abortError());
@@ -412,6 +540,9 @@ function subscribeToEntry(
 
   const subscriber = Symbol("wikipedia-request-subscriber");
   entry.subscribers.add(subscriber);
+  if (onRetry) {
+    entry.retryListeners.add(onRetry);
+  }
   return new Promise<Article>((resolve, reject) => {
     let finished = false;
     const finish = (aborted: boolean) => {
@@ -421,6 +552,9 @@ function subscribeToEntry(
       finished = true;
       signal?.removeEventListener("abort", handleAbort);
       entry.subscribers.delete(subscriber);
+      if (onRetry) {
+        entry.retryListeners.delete(onRetry);
+      }
       if (aborted && !entry.settled && entry.subscribers.size === 0) {
         entry.controller.abort();
       }

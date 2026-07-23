@@ -366,6 +366,7 @@ export default function App({
   const session = race.session;
   const article = race.article;
   const pendingNavigationTitle = race.pendingNavigationTitle;
+  const navigationRetrying = race.navigationRetrying;
   const challengeIsLocked =
     ["preparing", "active", "syncing", "abandoning"].includes(race.phase) ||
     Boolean(race.recoveryRun);
@@ -1767,6 +1768,7 @@ export default function App({
           elapsedMs={elapsedMs}
           redirectedFrom={race.redirectedFrom}
           pendingNavigationTitle={pendingNavigationTitle}
+          navigationRetrying={navigationRetrying}
           pendingRetry={race.pendingRetry}
           leaderboardContext={race.leaderboardContext}
           runId={race.run?.id ?? null}

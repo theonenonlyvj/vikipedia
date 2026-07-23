@@ -740,6 +740,51 @@ describe("VWiki Race API client", () => {
     await expectFirstAttemptTimeout("mutation", 15_000);
   });
 
+  // MB-1 Part 2: the click POST used to share the plain 15s mutation timeout
+  // for its first attempt too - a stall there could take up to ~30s (15s +
+  // the existing idempotent-once retry's own 15s) before useRaceController
+  // ever got a chance to revert phase="syncing" back to "active". Mirrors
+  // the shipped login leash: a short 5s first attempt, onRetry fired when
+  // the automatic retry starts, and the retry itself keeps the full 15s
+  // budget (unlike the first attempt).
+  it("leashes a stalled first click-POST attempt to 5s, notifies onRetry, and keeps the retry's full 15s budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const signals: AbortSignal[] = [];
+      const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        const signal = init?.signal;
+        if (!signal) throw new Error("Expected an abort signal.");
+        signals.push(signal);
+        if (signals.length > 1) {
+          return Promise.resolve(Response.json({
+            transition: { runId: "run-1", clickCount: 1, runStatus: "active" },
+          }));
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        });
+      });
+      const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+      const onRetry = vi.fn();
+
+      const request = client.recordClick("run-1", clickInput(), "jwt-claimed", { onRetry });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(signals[0]?.aborted).toBe(false);
+      expect(onRetry).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signals[0]?.aborted).toBe(true);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      await expect(request).resolves.toMatchObject({ transition: { clickCount: 1 } });
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("caches resolved lazy paths and account stats, then invalidates stats on mutation", async () => {
     const stats = {
       totals: {
@@ -1220,6 +1265,22 @@ async function expectFirstAttemptTimeout(
     await vi.runAllTimersAsync();
     vi.useRealTimers();
   }
+}
+
+function clickInput() {
+  return {
+    clientEventId: "00000000-0000-4000-8000-000000000001",
+    expectedStepNumber: 1,
+    sourceTitle: "Moon",
+    sourcePageId: 19331,
+    sourceRevisionId: 1,
+    clickedAnchorText: "gravity",
+    requestedTitle: "Gravity",
+    destinationTitle: "Gravity",
+    destinationPageId: 123,
+    decisionElapsedMs: 1500,
+    clientObservedAt: "2026-07-14T01:00:01.500Z",
+  };
 }
 
 function validChallenge(overrides: Record<string, unknown> = {}) {

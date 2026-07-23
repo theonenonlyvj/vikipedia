@@ -43,6 +43,24 @@ const MUTATION_TIMEOUT_MS = 15_000;
 // could immediately collide with the still-in-flight original and surface a
 // confusing "in_progress" 429 right after what looks like a fresh request.
 const RANDOM_CHALLENGE_TIMEOUT_MS = 35_000;
+// MB-1 Part 2: mirrors the shipped login leash (apiRequest.ts
+// firstAttemptTimeoutMs, commit 6d54452) for the in-race click POST. Click
+// ops already carry an idempotency key per the run protocol, so the
+// existing `retry: "idempotent-once"` was always safe to retry - it just
+// used the full 15s MUTATION_TIMEOUT_MS for the first attempt too, meaning
+// a stalled click on a bad mobile connection could take up to ~30s
+// (15s stall + 15s retry) before useRaceController's acceptClick catch
+// ever go a chance to revert phase="syncing" back to "active". A short
+// first leash fails a stalled attempt over to the retry in ~5s instead.
+const CLICK_FIRST_ATTEMPT_TIMEOUT_MS = 5_000;
+
+export interface RecordClickHooks {
+  /** Fired when the click POST's automatic retry kicks in - lets the race
+   *  UI switch pendingNavigationTitle's copy to an honest "still loading"
+   *  instead of an unchanging spinner (see useRaceController's
+   *  navigationRetrying). */
+  onRetry?: () => void;
+}
 
 export interface CreateTrackedChallengeRequest {
   startTitle: string;
@@ -84,7 +102,12 @@ export interface VWikiRaceApiClient extends VWikiRaceDailyAdminApiClient {
   startRun(input: StartTrackedRunRequest, token: string): Promise<ActiveRunRecord>;
   getActiveRun(token: string): Promise<ActiveRunRecord | null>;
   getActiveRunPath(runId: string, token: string): Promise<ServerPathStep[]>;
-  recordClick(runId: string, input: RecordTrackedClickRequest, token: string): Promise<ClickV2Response>;
+  recordClick(
+    runId: string,
+    input: RecordTrackedClickRequest,
+    token: string,
+    hooks?: RecordClickHooks,
+  ): Promise<ClickV2Response>;
   abandonRun(
     runId: string,
     token: string,
@@ -198,8 +221,17 @@ export function createVWikiRaceApiClient(
         isRunPathResponse,
       )).path;
     },
-    async recordClick(runId, input, token) {
-      const response = await write(urlPath.run(runId, "click"), input, token, isClickResponse, true);
+    async recordClick(runId, input, token, hooks) {
+      const response = await write(
+        urlPath.run(runId, "click"),
+        input,
+        token,
+        isClickResponse,
+        true,
+        undefined,
+        "POST",
+        { firstAttemptTimeoutMs: CLICK_FIRST_ATTEMPT_TIMEOUT_MS, onRetry: hooks?.onRetry },
+      );
       invalidateStats();
       return response;
     },
@@ -355,12 +387,15 @@ export function createVWikiRaceApiClient(
     retryable = false,
     stableIdempotencyKey?: string,
     method: "POST" | "DELETE" = "POST",
+    leash?: { firstAttemptTimeoutMs?: number; onRetry?: () => void },
   ): Promise<T> {
     return requestJson(fetchImpl, url(path), {
       method: method as "POST",
       body,
       token,
       timeoutMs: MUTATION_TIMEOUT_MS,
+      firstAttemptTimeoutMs: leash?.firstAttemptTimeoutMs,
+      onRetry: leash?.onRetry,
       retry: retryable ? "idempotent-once" : "never",
       idempotencyKey: retryable
         ? stableIdempotencyKey ?? createIdempotencyKey()

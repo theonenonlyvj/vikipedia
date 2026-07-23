@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Article, Challenge, ServerPathStep } from "../domain/types";
 import { ApiRequestError } from "../services/apiRequest";
 import type { VWikiRaceApiClient } from "../services/vwikiRaceApiClient";
-import type { WikipediaGateway } from "../services/wikipediaGateway";
+import { WikipediaGatewayError, type WikipediaGateway } from "../services/wikipediaGateway";
 import { useRaceController } from "./useRaceController";
 
 const challenge: Challenge = {
@@ -308,6 +308,91 @@ describe("useRaceController", () => {
     });
   });
 
+  // MB-1 Part 2: the article fetch used to have no timeout at all - a
+  // stalled fetch on a bad mobile connection would hang `await
+  // destinationRequest` forever, wedging phase="syncing" with no way out
+  // (the real leash/retry mechanics now live in wikipediaGateway.ts and are
+  // covered there; this locks in useRaceController's own side of the
+  // contract - it surfaces the gateway's onRetry as navigationRetrying, and
+  // when the gateway ultimately gives up, phase reverts to "active" with the
+  // existing quiet error affordance instead of hanging).
+  it("MB-1 surfaces navigationRetrying during a stalled article fetch's automatic retry, and reverts to active without wedging on final failure", async () => {
+    let capturedOnRetry: (() => void) | undefined;
+    const fetchAttempt = deferred<Article>();
+    const gateway: WikipediaGateway = {
+      getArticle: vi.fn((title: string, fetchOptions?: { onRetry?: () => void }) => {
+        if (title === "Apple") return Promise.resolve(apple);
+        capturedOnRetry = fetchOptions?.onRetry;
+        return fetchAttempt.promise;
+      }),
+      clear: vi.fn(),
+    };
+    const api = apiClient();
+    const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+    await act(async () => { await result.current.start(challenge, "token"); });
+
+    let pending!: ReturnType<typeof result.current.followLink>;
+    act(() => { pending = result.current.followLink("Fruit", "fruit", "token"); });
+    expect(result.current.phase).toBe("syncing");
+    expect(result.current.navigationRetrying).toBe(false);
+
+    act(() => { capturedOnRetry?.(); });
+    expect(result.current.navigationRetrying).toBe(true);
+
+    let outcome!: Awaited<typeof pending>;
+    await act(async () => {
+      fetchAttempt.reject(
+        new WikipediaGatewayError("timeout", "The Wikipedia article took too long to load.", 504),
+      );
+      outcome = await pending;
+    });
+
+    expect(outcome).toEqual({ status: "failed", challengeId: challenge.id });
+    expect(result.current.phase).toBe("active");
+    expect(result.current.navigationRetrying).toBe(false);
+    expect(result.current.error).toBe("The Wikipedia article took too long to load.");
+
+    // Never wedged: a further followLink is accepted, not silently "ignored".
+    const second = await result.current.followLink("Fruit", "fruit", "token");
+    expect(second.status).not.toBe("ignored");
+  });
+
+  it("MB-1 surfaces navigationRetrying during a stalled click-POST automatic retry, and reverts to active (retryable) without wedging on final failure", async () => {
+    let capturedOnRetry: (() => void) | undefined;
+    const clickAttempt = deferred<ReturnType<typeof activeClick>>();
+    const recordClick = vi.fn((..._args: Parameters<VWikiRaceApiClient["recordClick"]>) => {
+      capturedOnRetry = _args[3]?.onRetry;
+      return clickAttempt.promise;
+    });
+    const api = apiClient({ recordClick });
+    const gateway = wikiGateway({ Apple: apple, Fruit: fruit });
+    const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+    await act(async () => { await result.current.start(challenge, "token"); });
+
+    let pending!: ReturnType<typeof result.current.followLink>;
+    act(() => { pending = result.current.followLink("Fruit", "fruit", "token"); });
+    await act(async () => {
+      await waitFor(() => expect(recordClick).toHaveBeenCalledTimes(1));
+    });
+    expect(result.current.phase).toBe("syncing");
+    expect(result.current.navigationRetrying).toBe(false);
+
+    act(() => { capturedOnRetry?.(); });
+    expect(result.current.navigationRetrying).toBe(true);
+
+    let outcome!: Awaited<typeof pending>;
+    await act(async () => {
+      clickAttempt.reject(new ApiRequestError("timeout", "API request timed out.", 504));
+      outcome = await pending;
+    });
+
+    expect(outcome).toMatchObject({ status: "retryable" });
+    expect(result.current.phase).toBe("active");
+    expect(result.current.navigationRetrying).toBe(false);
+    // The quiet error affordance, not a wedge: the player can tap to retry.
+    expect(result.current.pendingRetry).not.toBeNull();
+  });
+
   it("keeps decision time frozen while an accepted click waits for retry", async () => {
     let now = 1_000;
     const water = article("Water", 3);
@@ -581,7 +666,15 @@ function pathStep(override: Partial<ServerPathStep> = {}): ServerPathStep {
 function activeClick() {
   return { transition: { runId: "run-1", clickCount: 1, runStatus: "completed" as const, completedAt: "2026-07-15T00:00:01.000Z", elapsedMs: 1_000 }, leaderboardContext: { isPersonalBest: true, rank: 1 } };
 }
-function deferred<T>() { let resolve!: (value: T) => void; return { promise: new Promise<T>((done) => { resolve = done; }), resolve }; }
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 function apiClient(overrides: Partial<VWikiRaceApiClient> = {}): VWikiRaceApiClient {
   return {
     listChallenges: vi.fn(async () => []),

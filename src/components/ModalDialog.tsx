@@ -146,7 +146,10 @@ export default function ModalDialog({
       return;
     }
     const first = focusable[0];
-    const last = focusable.at(-1);
+    // MB-1 Part 3 (old-Safari compat): Array.prototype.at is Safari 15.4+;
+    // this file's floor is ~14-15. Plain index arithmetic is identical here
+    // (focusable.length is already checked > 0 above) and works everywhere.
+    const last = focusable[focusable.length - 1];
     if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) {
       event.preventDefault();
       last?.focus();

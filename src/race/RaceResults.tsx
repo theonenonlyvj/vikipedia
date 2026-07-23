@@ -406,6 +406,7 @@ export default function RaceResults({
           onFocus={stableArticleFocus}
           onPointerDown={stableArticlePointerDown}
           pendingNavigationTitle={null}
+          navigationRetrying={false}
         />
       ) : null}
     </section>
@@ -473,7 +474,8 @@ function PathRecap({ session }: { session: GameSession }) {
     session.challenge.start.title,
     ...session.path.map((entry) => entry.resolvedDestination.canonicalTitle),
   ];
-  const lastTitle = pathTitles.at(-1) ?? "";
+  // MB-1 Part 3 (old-Safari compat): Array.prototype.at is Safari 15.4+.
+  const lastTitle = pathTitles[pathTitles.length - 1] ?? "";
   // The summary line's own compressed teaser text - shared with the live
   // in-race PathStrip HUD (RaceMode.tsx) and untouched by the owner's
   // 2026-07-20 "each interim appears twice" feedback, which was about the

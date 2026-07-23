@@ -43,6 +43,8 @@ function renderRaceMode(
   overrides: {
     session?: GameSession;
     targetPreview?: TargetPreviewState;
+    pendingNavigationTitle?: string | null;
+    navigationRetrying?: boolean;
   } = {},
 ) {
   return render(
@@ -51,7 +53,8 @@ function renderRaceMode(
       session={overrides.session ?? session}
       elapsedMs={1_000}
       redirectedFrom={redirectedFrom}
-      pendingNavigationTitle={null}
+      pendingNavigationTitle={overrides.pendingNavigationTitle ?? null}
+      navigationRetrying={overrides.navigationRetrying ?? false}
       pendingRetry={null}
       onRetryPending={() => {}}
       targetPreview={overrides.targetPreview ?? idlePreview}
@@ -82,6 +85,28 @@ describe("RaceMode", () => {
 
     expect(screen.getByRole("heading", { name: "Epoch (astronomy)" })).toBeVisible();
     expect(screen.queryByText(/redirected from/i)).toBeNull();
+  });
+
+  // MB-1 Part 2: an automatic retry (article fetch or click-POST leash,
+  // see useRaceController's navigationRetrying) must read as honest
+  // progress, not a silently-unchanging "Opening.../Loading next
+  // article..." spinner - mirrors the shipped login "Still connecting..."
+  // treatment.
+  describe("pending-navigation copy", () => {
+    it("shows 'Opening <title>...' while a navigation is pending and no retry is in flight", () => {
+      renderRaceMode(null, { pendingNavigationTitle: "Fruit" });
+
+      expect(screen.getByText("Opening Fruit...")).toBeVisible();
+      expect(screen.getByText("Loading next article...")).toBeVisible();
+      expect(screen.queryByText("Still loading...")).toBeNull();
+    });
+
+    it("swaps to 'Still loading...' once the automatic retry kicks in", () => {
+      renderRaceMode(null, { pendingNavigationTitle: "Fruit", navigationRetrying: true });
+
+      expect(screen.queryByText(/Opening Fruit/)).toBeNull();
+      expect(screen.getAllByText("Still loading...")).toHaveLength(2);
+    });
   });
 
   // RC-1: the target used to only surface via a disclosure cell in the

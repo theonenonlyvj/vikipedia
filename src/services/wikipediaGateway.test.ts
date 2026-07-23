@@ -277,6 +277,102 @@ describe("wikipedia gateway", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  // MB-1 Part 2: the article fetch used to carry NO timeout at all - a
+  // stalled connection hung forever, wedging the caller's phase (see
+  // useRaceController's followLink). This locks in the mirrored-login leash:
+  // a short first attempt, one automatic retry, never a bad-status/real
+  // failure being silently retried away (P12d above already locks that half
+  // in - a real 503 must still reject the FIRST call outright).
+  it("MB-1 leashes a stalled first attempt, notifies onRetry once, and recovers on the automatic retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const aborted: boolean[] = [];
+      const fetchImpl = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((resolve, reject) => {
+            const attempt = fetchImpl.mock.calls.length;
+            init?.signal?.addEventListener("abort", () => {
+              aborted.push(true);
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+            if (attempt === 2) {
+              resolve(parseResponse("<p>Recovered</p>"));
+            }
+          }),
+      );
+      const gateway = createWikipediaGateway({ fetchImpl });
+      const onRetry = vi.fn();
+
+      const request = gateway.getArticle("Apple", { onRetry });
+      const assertion = expect(request).resolves.toMatchObject({ canonicalTitle: "Apple" });
+
+      // First attempt aborts at the 5s leash, NOT some longer budget.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(aborted).toHaveLength(1);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      // ...and the retry fires after the standard short delay.
+      await vi.advanceTimersByTimeAsync(250);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("MB-1 fails a doubly-stalled article fetch with an honest timeout instead of hanging forever", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("Aborted", "AbortError")),
+            );
+          }),
+      );
+      const gateway = createWikipediaGateway({ fetchImpl });
+      const onRetry = vi.fn();
+
+      const request = gateway.getArticle("Apple", { onRetry });
+      const assertion = expect(request).rejects.toMatchObject({ code: "timeout", status: 504 });
+
+      await vi.advanceTimersByTimeAsync(5_000 + 250); // first leash + retry delay
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      // The retry holds the full 15s budget, not another 5s leash.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("MB-1 does not treat a fast external abort as a stall - no retry, no timeout error", async () => {
+    const fetchImpl = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        }),
+    );
+    const gateway = createWikipediaGateway({ fetchImpl });
+    const onRetry = vi.fn();
+    const controller = new AbortController();
+
+    const request = gateway.getArticle("Apple", { onRetry, signal: controller.signal });
+    const assertion = expect(request).rejects.toMatchObject({ name: "AbortError" });
+    controller.abort();
+
+    await assertion;
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("P12e aborts cleanly, evicts the request, and does not cache a late response", async () => {
     const pending = deferred<Response>();
     const fetchImpl = vi

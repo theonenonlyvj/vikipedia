@@ -28,6 +28,7 @@ export default function RaceMode({
   elapsedMs,
   redirectedFrom,
   pendingNavigationTitle,
+  navigationRetrying,
   pendingRetry,
   onRetryPending,
   targetPreview,
@@ -47,6 +48,11 @@ export default function RaceMode({
   // useRaceController's own doc comment on the field.
   redirectedFrom: string | null;
   pendingNavigationTitle: string | null;
+  // MB-1 Part 2: true while the pending navigation's fetch is on its
+  // automatic retry (mirrors the shipped login "Still connecting..."
+  // pattern) - swaps the "Opening.../Loading next article..." copy below
+  // for honest "Still loading..." instead of an unchanging spinner.
+  navigationRetrying: boolean;
   pendingRetry: { title: string; anchorText: string } | null;
   onRetryPending: () => void;
   targetPreview: TargetPreviewState;
@@ -107,7 +113,7 @@ export default function RaceMode({
         <div className="race-hud-status">
           {pendingNavigationTitle ? (
             <strong className="header-navigation-status" role="status">
-              Opening {pendingNavigationTitle}...
+              {navigationRetrying ? "Still loading..." : `Opening ${pendingNavigationTitle}...`}
             </strong>
           ) : null}
         </div>
@@ -194,6 +200,7 @@ export default function RaceMode({
           onFocus={stableArticleFocus}
           onPointerDown={stableArticlePointerDown}
           pendingNavigationTitle={pendingNavigationTitle}
+          navigationRetrying={navigationRetrying}
         />
       ) : (
         <p className="loading-text">
@@ -216,6 +223,7 @@ export const WikipediaArticlePanel = memo(function WikipediaArticlePanel({
   onFocus,
   onPointerDown,
   pendingNavigationTitle,
+  navigationRetrying,
 }: {
   article: Article;
   acceptedPageId: number | undefined;
@@ -225,6 +233,11 @@ export const WikipediaArticlePanel = memo(function WikipediaArticlePanel({
   onFocus: (event: FocusEvent<HTMLElement>) => void;
   onPointerDown: (event: PointerEvent<HTMLElement>) => void;
   pendingNavigationTitle: string | null;
+  // MB-1 Part 2: see RaceMode's own doc comment on the field of the same
+  // name. RaceResults' frozen-article render always passes false - a
+  // retrospective summary never has a navigation (let alone a retry) in
+  // flight.
+  navigationRetrying: boolean;
 }) {
   const articleHeadingRef = useRef<HTMLHeadingElement>(null);
 
@@ -244,7 +257,7 @@ export const WikipediaArticlePanel = memo(function WikipediaArticlePanel({
     >
       {pendingNavigationTitle ? (
         <div className="article-navigation-pending" role="status">
-          Loading next article...
+          {navigationRetrying ? "Still loading..." : "Loading next article..."}
         </div>
       ) : null}
       <div aria-live="polite" className="article-heading">
