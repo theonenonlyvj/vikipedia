@@ -233,6 +233,7 @@ export function sanitizeWikipediaArticleHtml(
 
   const links = rewriteArticleLinks(document, root, currentTitle);
   sanitizeTree(root);
+  wrapWideTablesForScroll(root);
   rewriteMediaUrls(root);
 
   return {
@@ -383,6 +384,32 @@ function sanitizeTree(root: HTMLElement): void {
     } else {
       sanitizeAttributes(element, tagName);
     }
+  }
+}
+
+// MB-1 Part 1: a wide data table (e.g. a "sortable"/"wikitable" stats grid
+// with many numeric columns) cannot shrink below its own min-content width,
+// so on a narrow phone it either forces the WHOLE `.article-content` reading
+// pane to become one shared horizontal-scroll surface (dragging the
+// heading/prose sideways along with it - "really hard to navigate" even
+// though the page itself never overflows), or, on a layout that doesn't
+// contain it at all, blows the page out to Safari's "shrink to fit" crazy
+// scale. Fix: give each such table its OWN local `overflow-x: auto`
+// scroll container (styles.css `.table-scroll`) so only the table scrolls -
+// prose above/below it stays put. `.infobox` is itself a `<table>` in real
+// MediaWiki HTML but already has its own dedicated float/width handling
+// (including a mobile `width: 100%` override - see styles.css) that this
+// would fight with, so infobox tables (and any table nested inside one,
+// e.g. a compact facts grid) are left alone.
+function wrapWideTablesForScroll(root: HTMLElement): void {
+  for (const table of [...root.querySelectorAll("table")]) {
+    if (table.classList.contains("infobox") || table.closest(".infobox")) {
+      continue;
+    }
+    const wrapper = root.ownerDocument.createElement("div");
+    wrapper.className = "table-scroll";
+    table.replaceWith(wrapper);
+    wrapper.appendChild(table);
   }
 }
 

@@ -55,3 +55,67 @@ describe("wikipediaSanitizer: img loading/decoding hints (QF-02)", () => {
     ]);
   });
 });
+
+// MB-1 Part 1: a wide "wikitable"/"sortable" stats grid can't shrink below
+// its own min-content width - without its own local scroll container it
+// either drags the WHOLE article sideways (one shared `.article-content`
+// horizontal scroll, "really hard to navigate" per the brief) or, on a
+// layout that doesn't contain it at all, blows the page out to Safari's
+// "shrink to fit" crazy scale. Each non-infobox table gets wrapped in its
+// own `.table-scroll` div so ONLY the table scrolls.
+describe("wikipediaSanitizer: table containment (MB-1 Part 1)", () => {
+  it("wraps a non-infobox table in its own .table-scroll container, leaving prose/paragraphs untouched", () => {
+    const { sanitizedHtml } = sanitizeWikipediaArticleHtml(
+      `<div class="mw-parser-output">
+        <p>Lead paragraph.</p>
+        <table class="wikitable sortable"><tbody><tr><th>Year</th><th>Matches</th></tr>
+          <tr><td>2019</td><td>4</td></tr>
+        </tbody></table>
+        <p>Trailing paragraph.</p>
+      </div>`,
+      "Apple",
+    );
+    const document = new DOMParser().parseFromString(sanitizedHtml, "text/html");
+
+    const dataTable = document.querySelector("table.wikitable");
+    expect(dataTable).not.toBeNull();
+    const wrapper = dataTable?.closest(".table-scroll");
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.parentElement?.className).toBe("mw-parser-output");
+    expect([...document.querySelectorAll(".table-scroll")]).toHaveLength(1);
+
+    expect(sanitizedHtml).toContain("Lead paragraph");
+    expect(sanitizedHtml).toContain("Trailing paragraph");
+  });
+
+  it("leaves an infobox table (and any table nested inside one) unwrapped - it already has its own float/width handling", () => {
+    const { sanitizedHtml } = sanitizeWikipediaArticleHtml(
+      `<div class="mw-parser-output">
+        <table class="infobox"><tbody><tr><td>
+          <table class="infobox-nested"><tbody><tr><td>nested fact</td></tr></tbody></table>
+        </td></tr></tbody></table>
+      </div>`,
+      "Apple",
+    );
+    const document = new DOMParser().parseFromString(sanitizedHtml, "text/html");
+
+    expect(document.querySelectorAll(".table-scroll")).toHaveLength(0);
+    expect(document.querySelector("table.infobox")).not.toBeNull();
+    expect(document.querySelector("table.infobox-nested")).not.toBeNull();
+  });
+
+  it("wraps every top-level data table independently when an article has more than one", () => {
+    const { sanitizedHtml } = sanitizeWikipediaArticleHtml(
+      `<div class="mw-parser-output">
+        <table class="wikitable"><tbody><tr><td>first</td></tr></tbody></table>
+        <table class="wikitable"><tbody><tr><td>second</td></tr></tbody></table>
+      </div>`,
+      "Apple",
+    );
+    const document = new DOMParser().parseFromString(sanitizedHtml, "text/html");
+
+    const wrappers = [...document.querySelectorAll(".table-scroll")];
+    expect(wrappers).toHaveLength(2);
+    expect(wrappers.every((wrapper) => wrapper.querySelector("table.wikitable"))).toBe(true);
+  });
+});

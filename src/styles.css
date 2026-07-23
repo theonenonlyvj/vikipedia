@@ -1969,6 +1969,7 @@ h1 {
 
 .article-content p + p,
 .article-content table + p,
+.article-content .table-scroll + p,
 .article-content section + p {
   margin-top: 1em;
 }
@@ -2022,6 +2023,18 @@ h1 {
 .article-content table {
   border-collapse: collapse;
   max-width: none;
+}
+
+/* MB-1 Part 1: the sanitizer (wikipediaSanitizer.ts wrapWideTablesForScroll)
+   wraps every non-infobox table in one of these - a wide stats grid scrolls
+   ONLY itself, never the whole article (house rule: wide content scrolls in
+   its own container, the page never scrolls horizontally). `max-width: none`
+   stays on the table itself (above) so it keeps its natural/min-content
+   width and actually needs the scroll, instead of being squashed unreadable. */
+.article-content .table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .article-content pre,
