@@ -2440,13 +2440,20 @@ describe("VWiki Race app", () => {
   // RC-09 (owner-proxy ruling, Judge A item 4 / Judge B amendment 2): the
   // measured-height wrapper must never tempt a future refactor into
   // dual-rendering the outgoing+incoming forms to smooth the morph - Guest/
-  // Create/Log-in stay three separate, mutually-exclusive mounts. This locks
-  // in both halves of that constraint: (1) the DOM's reachable input set
-  // only ever contains the ACTIVE tab's own fields, never a stray one left
-  // over from whatever was showing before, and (2) each switch is a genuine
-  // mount (not an in-place update) - the new tab's first field receives
-  // real focus every time, exactly once.
-  it("identity dialog tab switches never dual-render: reachable inputs are always exactly the active tab's own, and each switch focuses exactly one field", async () => {
+  // Create/Log-in stay three separate, mutually-exclusive mounts. Locks in
+  // the DOM's reachable input set is always exactly the active tab's own
+  // fields, never a stray one left over from whatever was showing before.
+  //
+  // RC-10 (change 5, owner-proxy ruling): the OLD second half of this test's
+  // own title ("each switch focuses exactly one field") locked in the exact
+  // bug being fixed here - a bare JSX `autoFocus` on each form's first input
+  // re-summoned the mobile keyboard on every Guest/Create/Log-in tab
+  // switch, since each `authMode === X ? <form> : null` branch is a genuine
+  // remount. Focus now moves into a form's first field ONLY on the sheet's
+  // first open (see IdentityPrompt's own mount-only effect) - a later tab
+  // switch leaves focus exactly where the click already put it (the tab
+  // button itself), never inside the newly-mounted form.
+  it("identity dialog tab switches never dual-render (reachable inputs are always exactly the active tab's own) and never move focus into an input", async () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
 
@@ -2456,9 +2463,9 @@ describe("VWiki Race app", () => {
     const tabGroup = within(dialog).getByRole("group", { name: /identity options/i });
 
     // Guest (the sheet's default landing mode) - one input, already focused
-    // on mount (ModalDialog's own open-time focus effect). Every label
-    // lookup below is ANCHORED (`^...$`) - the Create form's own "This is
-    // also your public display name." hint text otherwise makes an
+    // on mount (IdentityPrompt's own first-open-only focus effect). Every
+    // label lookup below is ANCHORED (`^...$`) - the Create form's own
+    // "This is also your public display name." hint text otherwise makes an
     // unanchored /display name/i false-positive-match its wrapping <label>,
     // since testing-library's label association considers the whole
     // wrapping element's text, not just the input's own aria-label.
@@ -2466,28 +2473,31 @@ describe("VWiki Race app", () => {
     expect(dialog.querySelectorAll("input")).toHaveLength(1);
     expect(document.activeElement).toBe(displayNameField);
 
-    await user.click(within(tabGroup).getByRole("button", { name: /^create account$/i }));
+    const createTab = within(tabGroup).getByRole("button", { name: /^create account$/i });
+    await user.click(createTab);
     expect(within(dialog).queryByLabelText(/^display name$/i)).toBeNull();
-    const usernameField = within(dialog).getByLabelText(/^vgames username$/i);
     expect(dialog.querySelectorAll("input")).toHaveLength(3);
+    expect(within(dialog).getByLabelText(/^vgames username$/i)).toBeVisible();
     expect(within(dialog).getByLabelText(/^password$/i)).toBeVisible();
     expect(within(dialog).getByLabelText(/^confirm password$/i)).toBeVisible();
-    // Exactly one element received focus from this switch: the new form's
-    // own first field, not the tab button just clicked and not a leftover
-    // Guest element.
-    expect(document.activeElement).toBe(usernameField);
+    // RC-10: focus stays on the tab button just clicked - it does NOT jump
+    // into the freshly-mounted form's first field (that would re-summon the
+    // keyboard on mobile for a switch the player didn't ask to type into).
+    expect(document.activeElement).toBe(createTab);
 
-    await user.click(within(tabGroup).getByRole("button", { name: /^log in$/i }));
+    const loginTab = within(tabGroup).getByRole("button", { name: /^log in$/i });
+    await user.click(loginTab);
     expect(within(dialog).queryByLabelText(/^vgames username$/i)).toBeNull();
     expect(within(dialog).queryByLabelText(/^confirm password$/i)).toBeNull();
-    const loginUsernameField = within(dialog).getByLabelText(/^username$/i);
+    expect(within(dialog).getByLabelText(/^username$/i)).toBeVisible();
     expect(dialog.querySelectorAll("input")).toHaveLength(2);
-    expect(document.activeElement).toBe(loginUsernameField);
+    expect(document.activeElement).toBe(loginTab);
 
-    await user.click(within(tabGroup).getByRole("button", { name: /^guest$/i }));
+    const guestTab = within(tabGroup).getByRole("button", { name: /^guest$/i });
+    await user.click(guestTab);
     expect(within(dialog).queryByLabelText(/^username$/i)).toBeNull();
     expect(dialog.querySelectorAll("input")).toHaveLength(1);
-    expect(document.activeElement).toBe(within(dialog).getByLabelText(/^display name$/i));
+    expect(document.activeElement).toBe(guestTab);
   });
 
   it("offers End Old Run for protocol-1 recovery and sends the recovery abandon", async () => {
@@ -4812,6 +4822,11 @@ describe("Honest You: account UX (session states, logout, ghost guards)", () => 
       const nameField = within(sheet).getByLabelText(/display name/i);
       expect(nameField).toHaveValue("");
       expect(within(sheet).queryByText(/playing as nimbus/i)).toBeNull();
+      // RC-10 (change 5, Judge B's minor note): this sheet mounts fresh
+      // (the guard dialog it replaces is a separate, now-unmounted
+      // component), so it's a genuine first-open - the blanked name input
+      // must still get real focus here, the same as any other first open.
+      expect(nameField).toHaveFocus();
 
       // Cancel-safety: closing now leaves the OLD ghost untouched.
       await user.click(within(sheet).getByRole("button", { name: /close identity prompt/i }));
@@ -5109,6 +5124,35 @@ describe("Race flow: full-screen takeover", () => {
     expect(within(preview).getByRole("button", { name: /start race/i })).toBeEnabled();
     expect(within(preview).getByRole("button", { name: /see other challenges/i })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Apple" })).toBeNull();
+  });
+
+  // RC-10 (change 3): the target-preview fetch used to be gated on
+  // `modeState === "idle"` alone - true (and firing a full-parse Wikipedia
+  // fetch) for the ENTIRE time a challenge is selected while idle, i.e.
+  // every ordinary Home/Browse/Detail/You landing, long before the player
+  // has shown any intent to see the target. It's now gated on
+  // `raceStage === "preview"`, which only becomes true once the pre-race
+  // preview beat itself opens.
+  it("fires no full-parse Wikipedia fetch for the target during ordinary idle Home/Browse/Detail/You browsing - only once the pre-race preview actually opens", async () => {
+    const fetchImpl = createFetchMock();
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await screen.findByRole("button", { name: /▶ race/i });
+    expect(wikipediaArticleCalls(fetchImpl, "Fruit")).toBe(0);
+
+    await user.click(screen.getByRole("button", { name: /^you\b/i }));
+    await screen.findByRole("button", { name: /^you\b/i });
+    expect(wikipediaArticleCalls(fetchImpl, "Fruit")).toBe(0);
+
+    await user.click(screen.getByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #1/i }));
+    await screen.findByRole("region", { name: /challenge detail/i });
+    expect(wikipediaArticleCalls(fetchImpl, "Fruit")).toBe(0);
+
+    await user.click(screen.getByRole("button", { name: /^▶ race$/i }));
+    await screen.findByRole("region", { name: /pre-race preview/i });
+    await waitFor(() => expect(wikipediaArticleCalls(fetchImpl, "Fruit")).toBeGreaterThan(0));
   });
 
   it("keeps Start race enabled from the preview when the target preview is unavailable", async () => {
@@ -7605,6 +7649,29 @@ describe("Increment 5: Play-another suggestion + create-random (Browse full card
     expect(randomChallengeCalls(fetchImpl)).toBe(1);
   });
 
+  // RC-10 (change 1, Judge B amendment 2): the suggestion effect's
+  // `getPlayAnotherSuggestion` -> `getChallengesSummary` sequence stays
+  // conditional on the FIRST call actually resolving a suggestion - a naive
+  // `Promise.all([getPlayAnotherSuggestion, getChallengesSummary])` would
+  // fire the summary request even in this exact "empty" case (an account
+  // that's started everything), adding a network call that doesn't exist
+  // today. No prior test in this file pinned that; this one does.
+  it("never calls getChallengesSummary when the play-another suggestion resolves empty", async () => {
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      leaderboardRows: [
+        leaderboardRow({ rank: 1, runId: "run-1", accountId: "acc-1", displayName: "Vijay", elapsedMs: 42_000, clickCount: 6 }),
+      ],
+      playAnotherSuggestion: null,
+    });
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const card = await screen.findByRole("region", { name: /play another challenge/i });
+    await within(card).findByRole("button", { name: /create a random new one/i });
+    await waitFor(() => expect(suggestionCalls(fetchImpl)).toBeGreaterThan(0));
+    expect(challengesSummaryCalls(fetchImpl)).toBe(0);
+  });
+
   it("shows a friendly 429 error respecting Retry-After from the create-random action", async () => {
     const fetchImpl = createFetchMock({
       challenges: [twoChallenges()[0]],
@@ -9072,6 +9139,14 @@ function createChallengeBodies(fetchImpl: ReturnType<typeof createFetchMock>): A
 
 function accountStatsCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
   return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl("/api/v2/accounts/me/stats")).length;
+}
+
+function suggestionCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
+  return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl("/api/v2/challenges/suggestion")).length;
+}
+
+function challengesSummaryCalls(fetchImpl: ReturnType<typeof createFetchMock>): number {
+  return fetchImpl.mock.calls.filter(([input]) => String(input) === apiUrl("/api/v2/challenges/summary")).length;
 }
 
 function runPathCalls(fetchImpl: ReturnType<typeof createFetchMock>, runId: string): number {

@@ -78,9 +78,22 @@ export default function ModalDialog({
     }
     return () => {
       queueMicrotask(() => {
-        if (focusCycle.current === cycle && returnFocusRef.current?.isConnected) {
-          returnFocusRef.current.focus();
-        }
+        if (focusCycle.current !== cycle || !returnFocusRef.current?.isConnected) return;
+        // RC-10 (change 5 fallout): a dialog can be replaced by a DIFFERENT
+        // ModalDialog sharing the same trigger/returnFocusRef instead of
+        // genuinely closing - e.g. "Play as someone else"'s ghost-guard
+        // dialog handing straight off to the identity sheet on "Start fresh
+        // anyway"/Cancel. That's a real unmount+mount of two distinct
+        // ModalDialog instances, so THIS instance's own cleanup still runs
+        // and (deferred to a microtask, same as always) would otherwise
+        // steal focus back to the trigger button a tick after the NEW
+        // dialog has already put real focus on its own first field -
+        // clobbering it. Only return focus to the trigger when nothing else
+        // has legitimately claimed it in the meantime (the common case: the
+        // dialog fully closed and focus fell back to the trigger/body).
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active.closest('[role="dialog"]')) return;
+        returnFocusRef.current.focus();
       });
     };
   }, [returnFocusRef]);

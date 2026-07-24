@@ -284,6 +284,37 @@ function identitySessionsEqual(
     a.status === b.status;
 }
 
+// RC-10 (change 2): capabilities/stats/play-another-suggestion are all
+// non-gating background reads (nothing on the critical guest-continue path
+// awaits them - see deriveScreen.ts, which never consults canManageDailies/
+// accountStats/playAnotherSuggestion) that today fire in the same tick as
+// every OTHER boot-time request (catalog, recovery's own active-run check).
+// On a throttled mobile CPU, that pile-up competes with the recovery ->
+// race-start article render for main-thread time right when it matters
+// most. Yielding one idle turn (native requestIdleCallback; a same-macrotask
+// setTimeout fallback everywhere else - jsdom under test included, per this
+// package's own "requestIdleCallback with setTimeout fallback" instruction)
+// costs nothing when the thread is already idle (the common non-recovery
+// boot) and lets a real in-flight paint finish first when it isn't. Judge A
+// amendment 2 (owner-proxy ruling): this is kept as a reasonable background-
+// work hygiene change, explicitly NOT relied upon to hit the p95<=3.5s
+// guest-continue acceptance number - see RC-10's package notes.
+function scheduleBackgroundWork(callback: () => void): () => void {
+  const idleScheduler = (globalThis as {
+    requestIdleCallback?: (cb: () => void) => number;
+    cancelIdleCallback?: (handle: number) => void;
+  }).requestIdleCallback;
+  if (typeof idleScheduler === "function") {
+    const handle = idleScheduler(callback);
+    return () => {
+      (globalThis as { cancelIdleCallback?: (handle: number) => void })
+        .cancelIdleCallback?.(handle);
+    };
+  }
+  const timeout = setTimeout(callback, 0);
+  return () => clearTimeout(timeout);
+}
+
 export default function App({
   apiOrigin,
   fetchImpl = defaultFetch,
@@ -596,9 +627,25 @@ export default function App({
     challenges[0] ??
     null;
   const currentCentralDate = todayUtc();
+  // RC-10 (change 3): used to be `modeState === "idle" && !race.recoveryRun`
+  // - true (and firing a full-parse Wikipedia fetch) for the ENTIRE time a
+  // challenge is selected while idle, i.e. every ordinary Home/Browse/
+  // Detail/You landing, long before the player has shown any intent to
+  // actually see the target. `raceStage === "preview"` is the moment that
+  // intent becomes real: Home's hero, Browse's cards, and Challenge Detail's
+  // "Race this" all resolve through the SAME `openRacePreviewFor`/nav path
+  // (see its own doc comment) to get here, and `raceStage` clears itself the
+  // instant an actual run starts (the effect just below this file's earlier
+  // `raceStage`-clearing block) - so this fetch now only ever runs for the
+  // full-screen pre-race preview beat that actually renders the blurb
+  // (PreRacePreview) or the in-race Target chip's popover (RaceMode, which
+  // reads this same frozen "ready" state - see useTargetPreview's own
+  // disabled-but-retains-ready-state guard). `!race.recoveryRun` is kept
+  // for defense in depth even though `raceStage` and a recovery run are
+  // already mutually exclusive in deriveScreen's precedence table.
   const targetPreview = useTargetPreview({
     challenge: selectedChallenge,
-    enabled: modeState === "idle" && !race.recoveryRun,
+    enabled: raceStage === "preview" && !race.recoveryRun,
     gateway: previewWikipediaGateway,
   });
   const leaderboard = !challengeIsLocked && selectedChallenge &&
@@ -689,16 +736,22 @@ export default function App({
     }
 
     setCanManageDailies(null);
-    void apiClient.getCapabilities(identitySession.token)
-      .then((capabilities) => {
-        if (!cancelled) setCanManageDailies(capabilities.canManageDailies);
-      })
-      .catch(() => {
-        if (!cancelled) setCanManageDailies(false);
-      });
+    // RC-10 (change 2): non-gating (only the admin route reads this) -
+    // see scheduleBackgroundWork's doc comment.
+    const cancelSchedule = scheduleBackgroundWork(() => {
+      if (cancelled) return;
+      void apiClient.getCapabilities(identitySession.token)
+        .then((capabilities) => {
+          if (!cancelled) setCanManageDailies(capabilities.canManageDailies);
+        })
+        .catch(() => {
+          if (!cancelled) setCanManageDailies(false);
+        });
+    });
 
     return () => {
       cancelled = true;
+      cancelSchedule();
     };
   }, [apiClient, identitySession]);
 
@@ -1086,6 +1139,24 @@ export default function App({
     // never surfaces it. A Retry tap (bumps statsRefreshVersion from the
     // "error" state) needs this to flip visibly back to "loading" too.
     setAccountStatsFetchStatus("loading");
+    // RC-10 (change 2, scope note): deliberately NOT wrapped in
+    // scheduleBackgroundWork, unlike capabilities/suggestion below - a real
+    // CPU-throttle repro (see RC-10 package notes / Judge A amendment 2)
+    // found this specific deferral isn't needed for the acceptance target
+    // and, on closer look, this effect's 401 path (clearStaleIdentity, right
+    // below) sits upstream of the recovery-effect's own
+    // recoveredToken.current-vs-identitySession guard (the recovery effect a
+    // little above this one) - adding even one extra macrotask of delay here
+    // opens a window for that guard to observe a stale identitySession
+    // closure against an already-cleared recoveredToken.current ref and
+    // re-fire recoverActiveRun for a token that's about to be invalidated
+    // (confirmed via a reliable repro against
+    // "clears stale identity and prior stats when the stats projection
+    // returns 401"). That guard is a separate, pre-existing piece of
+    // machinery this package doesn't own - staying synchronous here (as
+    // before RC-10) is the surgical fix; capabilities/suggestion have no
+    // such downstream coupling (neither's failure path clears identity) and
+    // keep the idle-callback deferral.
     void apiClient.getAccountStats(identitySession.token)
       .then((stats) => {
         if (request === statsRequest.current) {
@@ -1138,31 +1209,43 @@ export default function App({
     if (identityChanged || playAnotherSuggestion.status !== "ready") {
       setPlayAnotherSuggestion({ status: "loading" });
     }
-    void (async () => {
-      try {
-        const suggested = await apiClient.getPlayAnotherSuggestion(token);
-        if (cancelled || request !== suggestionRequest.current) return;
-        if (!suggested) {
-          setPlayAnotherSuggestion({ status: "empty" });
-          return;
-        }
-        let playerCount: number | null = null;
+    // RC-10 (change 2): non-gating - see scheduleBackgroundWork's doc
+    // comment. Change (1) / Judge B amendment 2: getChallengesSummary stays
+    // conditional on `suggested` actually existing - a literal
+    // Promise.all([getPlayAnotherSuggestion, getChallengesSummary]) here
+    // would fire the summary request even in the "empty" case (new account,
+    // everything already played), where today it never fires at all. That
+    // conditional can't be relaxed without adding a network call the "empty"
+    // path doesn't have today (see useTargetPreview.test.tsx-style coverage
+    // in App.test.tsx for the regression test pinning this).
+    const cancelSchedule = scheduleBackgroundWork(() => {
+      void (async () => {
         try {
-          const summary = await apiClient.getChallengesSummary();
-          playerCount = summary.find((entry) => entry.challengeId === suggested.id)?.playerCount ?? null;
+          const suggested = await apiClient.getPlayAnotherSuggestion(token);
+          if (cancelled || request !== suggestionRequest.current) return;
+          if (!suggested) {
+            setPlayAnotherSuggestion({ status: "empty" });
+            return;
+          }
+          let playerCount: number | null = null;
+          try {
+            const summary = await apiClient.getChallengesSummary();
+            playerCount = summary.find((entry) => entry.challengeId === suggested.id)?.playerCount ?? null;
+          } catch {
+            // Degrade gracefully - the suggestion title just omits player
+            // count (same "never fabricate" rule as Browse's own meta line).
+          }
+          if (cancelled || request !== suggestionRequest.current) return;
+          setPlayAnotherSuggestion({ status: "ready", challenge: suggested, playerCount });
         } catch {
-          // Degrade gracefully - the suggestion title just omits player
-          // count (same "never fabricate" rule as Browse's own meta line).
+          if (cancelled || request !== suggestionRequest.current) return;
+          setPlayAnotherSuggestion({ status: "error" });
         }
-        if (cancelled || request !== suggestionRequest.current) return;
-        setPlayAnotherSuggestion({ status: "ready", challenge: suggested, playerCount });
-      } catch {
-        if (cancelled || request !== suggestionRequest.current) return;
-        setPlayAnotherSuggestion({ status: "error" });
-      }
-    })();
+      })();
+    });
     return () => {
       cancelled = true;
+      cancelSchedule();
     };
   }, [apiClient, identitySession, statsRefreshVersion]);
 
@@ -2418,6 +2501,29 @@ function IdentityPrompt({
   const { contentRef: identityFormRef, height: identityFormHeight } =
     useMeasuredHeight<HTMLDivElement>();
 
+  // RC-10 (change 5, Judge B's minor implementation note): a bare JSX
+  // `autoFocus` on each form's first input used to re-summon the keyboard on
+  // every Guest/Create/Log in TAB SWITCH, because the three forms below are
+  // separately mode-gated `authMode === X ? <form> : null` blocks that each
+  // remount fresh when `authMode` changes - `autoFocus` fires on every one
+  // of those remounts, not just the sheet's own first open. `IdentityPrompt`
+  // itself, unlike its child forms, mounts exactly once per genuine
+  // sheet-opening (the parent only ever renders it via a
+  // `authPrompt ? <IdentityPrompt/> : null` transition - see its call site's
+  // own doc comment - never keeps it mounted through a tab switch), so one
+  // imperative mount-only effect here reaches "focus the very first form
+  // shown, and nothing after" without needing per-tab state. Covers the
+  // forceGuestNameEntry ("Play as someone else") and "Switch account" paths
+  // too, since both open a brand-new `authPrompt` (a fresh mount) rather
+  // than mutating props on an already-open sheet.
+  useEffect(() => {
+    identityFormRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+    // Mount-only, deliberately: see the comment above for why re-running
+    // this on every authMode/prop change would resurrect the exact bug
+    // being fixed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <ModalDialog
       busy={authBusy}
@@ -2527,7 +2633,6 @@ function IdentityPrompt({
                 <input
                   aria-label="Display name"
                   autoComplete="nickname"
-                  autoFocus
                   maxLength={24}
                   onChange={(event) => onDisplayNameChange(event.target.value)}
                   placeholder="e.g. a nickname"
@@ -2585,7 +2690,6 @@ function IdentityPrompt({
               <input
                 aria-label="VGames username"
                 autoCapitalize="none"
-                autoFocus
                 autoComplete="username"
                 maxLength={20}
                 minLength={3}
@@ -2647,7 +2751,6 @@ function IdentityPrompt({
                 aria-label="Username"
                 autoCapitalize="none"
                 autoComplete="username"
-                autoFocus
                 maxLength={20}
                 name="username"
                 onChange={(event) => onUsernameChange(event.target.value)}
