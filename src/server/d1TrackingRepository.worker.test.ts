@@ -637,9 +637,11 @@ describe("atomic D1 protocol-2 runs", () => {
     const created = await repository.startRunV2(merged, start);
     expect(created.protocolVersion).toBe(2);
     await expect(runStatus("legacy-alias-run")).resolves.toBe("abandoned");
-    // Cross the 2-click resumability floor so this run is discoverable as
-    // active; a bare 0-click run is deliberately not surfaced (see the
-    // "2-click floor" describe block).
+    // click_count is incidental here (RC-02 root-cause fix: findActiveRun no
+    // longer gates on it - see the "findActiveRun surfaces active runs
+    // regardless of click count" describe block) - bumped anyway just to
+    // exercise a non-zero value alongside the alias/cross-protocol discovery
+    // this test is actually about.
     await env.VWIKI_RACE_DB.prepare("UPDATE runs SET click_count = 2 WHERE id = ?")
       .bind(created.id).run();
     await expect(repository.findActiveRun(merged)).resolves.toMatchObject({
@@ -1021,16 +1023,30 @@ describe("atomic D1 protocol-2 runs", () => {
   });
 });
 
-describe("2-click floor for resumable protocol-2 runs", () => {
-  it("does not surface a 0-click active run from findActiveRun", async () => {
+describe("findActiveRun surfaces active runs regardless of click count (RC-02 root-cause fix)", () => {
+  // RC-02 (owner-proxy ruling, "no silent run loss", 2026-07-24): findActiveRun
+  // backs GET /api/v2/runs/active, the client's sole means of detecting "is
+  // there a run to recover" on load/reload. Before this fix it additionally
+  // required `click_count >= MIN_RESUMABLE_CLICKS` (added 2026-07-17),
+  // conflating "is there an active run at all" with the unrelated "should a
+  // trivial run get auto-abandoned to make way for a fresh start" concern
+  // below. That meant a genuinely active 0- or 1-click run resolved as
+  // `run: null` on reload - exactly journey8's traced defect (click 200,
+  // then active->null). These three cases are the regression contract the
+  // ruling calls for: 0 clicks, 1 click, and 2+ clicks must ALL be surfaced.
+  it("surfaces a 0-click active run from findActiveRun", async () => {
     const { repository } = fixture();
     const created = await repository.startRunV2(account, start);
     expect(created).toMatchObject({ clickCount: 0, status: "active" });
 
-    await expect(repository.findActiveRun(account)).resolves.toBeNull();
+    await expect(repository.findActiveRun(account)).resolves.toMatchObject({
+      id: created.id,
+      status: "active",
+      clickCount: 0,
+    });
   });
 
-  it("does not surface a 1-click active run from findActiveRun", async () => {
+  it("surfaces a 1-click active run from findActiveRun", async () => {
     const clock = { now: "2026-07-14T01:00:00.000Z" };
     const { repository } = fixture(clock);
     await repository.startRunV2(account, start);
@@ -1046,7 +1062,11 @@ describe("2-click floor for resumable protocol-2 runs", () => {
       status: "active",
       click_count: 1,
     });
-    await expect(repository.findActiveRun(account)).resolves.toBeNull();
+    await expect(repository.findActiveRun(account)).resolves.toMatchObject({
+      id: "run-1",
+      status: "active",
+      clickCount: 1,
+    });
   });
 
   it("surfaces a 2-click active run from findActiveRun", async () => {
@@ -1102,13 +1122,19 @@ describe("2-click floor for resumable protocol-2 runs", () => {
         start_title: "Moon",
         target_title: "Gravity",
       });
-      // The fresh run is itself sub-threshold (0 clicks), so it is not yet a
-      // resumable "active run" either -- confirm no run leaked through as active.
       await expect(runSnapshot(second.id)).resolves.toMatchObject({
         status: "active",
         click_count: 0,
       });
-      await expect(repository.findActiveRun(account)).resolves.toBeNull();
+      // RC-02 root-cause fix: findActiveRun surfaces every active run
+      // regardless of click count, so the fresh (0-click) second run is
+      // exactly what comes back here - not null, and not the abandoned first
+      // run.
+      await expect(repository.findActiveRun(account)).resolves.toMatchObject({
+        id: second.id,
+        status: "active",
+        clickCount: 0,
+      });
       await expect(count("runs")).resolves.toBe(2);
     },
   );
@@ -3537,8 +3563,9 @@ describe("Task 4 D1 projections", () => {
         challengeId: "challenge-0001",
         idempotencyKey: "alias-old-start",
       });
-      // Cross the 2-click resumability floor so this run is discoverable as
-      // active; a bare 0-click run is deliberately not surfaced.
+      // click_count is incidental here (RC-02 root-cause fix: findActiveRun no
+      // longer gates on it) - bumped anyway just to exercise a non-zero value
+      // alongside the alias-owned discovery/abandon behavior under test.
       await env.VWIKI_RACE_DB.prepare("UPDATE runs SET click_count = 2 WHERE id = ?")
         .bind("alias-abandon-run").run();
     } else {

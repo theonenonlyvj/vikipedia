@@ -1985,6 +1985,23 @@ export function createD1TrackingRepository(options: {
       const account = normalizeAuthorizedAccount(accountInput);
       const receipt = receiptIdsCte(account);
       const at = timestamp();
+      // RC-02 (owner-proxy ruling, "no silent run loss", root-cause fix):
+      // this backs GET /api/v2/runs/active - the client's sole means of
+      // detecting "is there a run to recover" on load/reload. It must
+      // surface ANY active run regardless of click_count. MIN_RESUMABLE_CLICKS
+      // previously gated this query too (added 2026-07-17 to keep
+      // trivial/ghost runs from being treated as "resumable"), but that
+      // conflated two different concerns: "is there an active run at all"
+      // (write-side existence - this query) vs. "should a DNF count as a
+      // played attempt for boards/streaks" (read-side, FB-7's
+      // MIN_COUNTED_DNF_CLICKS, applied elsewhere and untouched by this fix).
+      // A run with 0 or 1 clicks is still a genuinely active run the account
+      // is mid-race on - hiding it here is exactly the journey8 defect
+      // (click 200, then active->null on reload). startRunV2's own
+      // auto-abandon-a-trivial-run-on-fresh-start behavior (still gated on
+      // MIN_RESUMABLE_CLICKS, above) is unaffected: it only fires once the
+      // account deliberately starts a NEW run, not on a passive recovery
+      // check.
       const row = await db.prepare(
         `WITH ${receipt.sql}
          ${ACTIVE_RUN_SELECT}
@@ -1996,9 +2013,8 @@ export function createD1TrackingRepository(options: {
          )
            AND r.status = 'active'
            AND (r.expires_at IS NULL OR r.expires_at >= ?)
-           AND (r.protocol_version <> 2 OR r.click_count >= ?)
          ORDER BY r.started_at DESC LIMIT 1`,
-      ).bind(...receipt.bindings, at, MIN_RESUMABLE_CLICKS).first<RunRow>();
+      ).bind(...receipt.bindings, at).first<RunRow>();
       return row ? mapActiveRunRow(row) : null;
     },
 

@@ -1,9 +1,18 @@
 export const RUN_EXPIRY_MS = 24 * 60 * 60 * 1000;
 export const MAX_RUN_CLICKS = 250;
 export const DECISION_TIME_GRACE_MS = 5_000;
-// A protocol-2 run isn't a resumable in-progress run until it has this many
-// clicks. Sub-threshold runs are transient "ghosts" that findActiveRun hides
-// and that startRunV2 auto-abandons to make way for a fresh start.
+// Below this many clicks, a protocol-2 active run is a transient "ghost"
+// that startRunV2 auto-abandons on a fresh Start so it doesn't dead-end a
+// new attempt. RC-02 (owner-proxy ruling, "no silent run loss", root-cause
+// fix, 2026-07-24): this NO LONGER gates findActiveRun/GET
+// /api/v2/runs/active - that query must surface every active run
+// regardless of click_count, or a mid-race reload after 0/1 clicks silently
+// loses the run (journey8). Conflating "is there an active run" with "is
+// this run worth auto-abandoning on a new start" was the original bug;
+// they're kept as one constant here only because both auto-abandon
+// thresholds happen to share the same value today, not because they're the
+// same concept - see MIN_COUNTED_DNF_CLICKS below for the (also distinct)
+// read-side "did this count as playing" gate.
 export const MIN_RESUMABLE_CLICKS = 2;
 // FB-7 (owner ruling, 2026-07-19: "hide DNF runs [that] don't involve >1
 // click from the start. those dont really even count, no?"): a DNF only
