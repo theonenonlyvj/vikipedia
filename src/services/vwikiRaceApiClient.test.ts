@@ -1319,7 +1319,7 @@ describe("RC-03: shared read cache", () => {
     }
   });
 
-  it("a run-ending mutation invalidates the open board + leaderboard caches but leaves a permanently-closed board cached", async () => {
+  it("a run-ending mutation invalidates the open board + leaderboard caches AND a permanently-closed board (Wave 2 review: past dailies are race-able, not exempt)", async () => {
     let openBoardReads = 0;
     let closedBoardReads = 0;
     let leaderboardReads = 0;
@@ -1357,10 +1357,62 @@ describe("RC-03: shared read cache", () => {
     await client.getChallengeBoard("challenge-closed", { closed: true });
     await client.listLeaderboard("challenge-open");
     expect(openBoardReads).toBe(2);
-    // A run against a different, still-open challenge can't affect an
-    // already-closed day's board - the permanent entry survives untouched.
-    expect(closedBoardReads).toBe(1);
+    // Racing a past daily is a first-class flow (no server-side
+    // deactivation, no date window on the board queries) - a run-ending
+    // mutation must re-fetch a closed board too, not just open ones.
+    expect(closedBoardReads).toBe(2);
     expect(leaderboardReads).toBe(2);
+  });
+
+  it("QF-02 regression: a run finished against a challenge with a cached CLOSED board is visible on the very next board read, not just after a full reload", async () => {
+    let boardReads = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      if (requestUrl.endsWith("/board")) {
+        boardReads += 1;
+        // First read (pre-run, cached with closed:true) sees no finisher;
+        // the second read (post-run) reflects the freshly landed run - this
+        // is the exact QF-02 staleness class ("a just-finished run MUST
+        // appear on boards immediately").
+        return boardReads === 1
+          ? Response.json({ challengeId: "challenge-daily-past", placements: [], dnfs: [] })
+          : Response.json({
+            challengeId: "challenge-daily-past",
+            placements: [{ accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 4_200, clickCount: 3 }],
+            dnfs: [],
+          });
+      }
+      if (requestUrl.endsWith("/click")) {
+        return Response.json({
+          transition: {
+            runId: "run-1",
+            clickCount: 3,
+            runStatus: "completed",
+            completedAt: new Date().toISOString(),
+            elapsedMs: 4_200,
+          },
+        });
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    // Board -> Yesterday (or the trend drill-down) opens this past daily
+    // before the race, caching it forever under the closed hint.
+    await expect(client.getChallengeBoard("challenge-daily-past", { closed: true })).resolves.toMatchObject({
+      placements: [],
+    });
+
+    // Race that same challenge and finish it.
+    await client.recordClick("run-1", clickInput(), "jwt-claimed");
+
+    // RaceResults' own self-fetched board (no closed hint, but keyed on the
+    // same challengeId) must see the fresh finisher, not the stale
+    // permanent entry.
+    await expect(client.getChallengeBoard("challenge-daily-past")).resolves.toMatchObject({
+      placements: [{ accountId: "acc-1" }],
+    });
+    expect(boardReads).toBe(2);
   });
 
   it("drops a stale in-flight board read's write after a mutation invalidates it (out-of-order-resolution guard)", async () => {

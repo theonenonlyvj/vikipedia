@@ -222,10 +222,10 @@ interface CacheGroup<T> {
   put(key: string, value: T, ttlMs: number | null, generation: number): void;
   generation(): number;
   /** Bumps the generation (so any write already in flight is dropped) and
-   *  clears cached entries - `keepPermanent` leaves `ttlMs: null` entries
-   *  (closed-day boards) alone, since those never go stale from a run
-   *  finishing elsewhere. */
-  invalidate(invalidateOptions?: { keepPermanent?: boolean }): void;
+   *  clears every cached entry, including `ttlMs: null` ones (closed-day
+   *  boards) - see invalidateEngagementCaches' doc comment for why closed
+   *  boards don't get a carve-out here. */
+  invalidate(): void;
   /** Same generation bump, scoped to a single key - used where a mutation's
    *  own response names the one affected id (e.g. createChallenge) rather
    *  than requiring a blanket clear. */
@@ -252,15 +252,9 @@ function createCacheGroup<T>(): CacheGroup<T> {
     generation() {
       return currentGeneration;
     },
-    invalidate(invalidateOptions) {
+    invalidate() {
       currentGeneration += 1;
-      if (!invalidateOptions?.keepPermanent) {
-        entries.clear();
-        return;
-      }
-      for (const [key, entry] of entries) {
-        if (entry.expiresAt !== null) entries.delete(key);
-      }
+      entries.clear();
     },
     invalidateKey(key) {
       currentGeneration += 1;
@@ -614,14 +608,26 @@ export function createVWikiRaceApiClient(
    * not per-challengeId: none of these three responses carry a challengeId
    * (RecordClickV2Input/AbandonRunV2Input don't either) for the api client
    * to target precisely, and staleness - not an extra fetch - is the
-   * failure mode the risk section calls out. `boardCache` keeps its
-   * permanently-cached CLOSED entries (a past day's board can't be affected
-   * by a run against a different, still-open challenge); every other
-   * engagement-shaped cache is fully cleared.
+   * failure mode the risk section calls out.
+   *
+   * `boardCache` is fully cleared here too, including permanently-cached
+   * CLOSED entries - Wave 2 review finding RC-03/keepPermanent: past dailies
+   * are never deactivated server-side (no code path flips `is_active`), so
+   * racing a bygone daily (Boards -> a past day -> "Race this", or a
+   * Play-another suggestion) is a first-class flow, not just a pre-drop
+   * edge case, and listChallengePlacements/listChallengeDnfs have no date
+   * window that would keep such a run from landing on that board. The old
+   * "a past day's board can't be affected by a run" premise only holds for
+   * a run against a genuinely DIFFERENT, still-open challenge - it doesn't
+   * hold in general, and this cache has no way to tell the two cases apart
+   * from here. A closed board still caches forever (see
+   * GetChallengeBoardOptions) until the next run-ending mutation re-clears
+   * it - this only removes the carve-out that let a closed entry outlive
+   * mutations altogether.
    */
   function invalidateEngagementCaches(): void {
     invalidateStats();
-    boardCache.invalidate({ keepPermanent: true });
+    boardCache.invalidate();
     leaderboardCache.invalidate();
     summaryCache.invalidate();
     outcomesCache.invalidate();
