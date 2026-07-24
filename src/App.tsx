@@ -2127,12 +2127,23 @@ export default function App({
   const visibleError = error ?? race.error;
   const endRunIsBlocked = modeState === "syncing" || Boolean(race.pendingRetry);
   const endRunClickCount = race.recoveryRun?.clickCount ?? race.session?.clicks ?? 0;
+  // RC-08 (Judge B amend 2): the dialog copy must predict confirmEndRun's
+  // OWN destination fork exactly, not just click count. Any recovery end
+  // ("End Old Run") forces dnfSnapshot to null unconditionally (see
+  // confirmEndRun's isRecoveryEnd, above) - it always lands on Home with a
+  // notice, DNF Results or not, regardless of how many clicks the stale run
+  // being cleared out had racked up. So the DNF-with-N-clicks framing is
+  // only ever true for the non-recovery, 1+-click, active-race path; every
+  // other case (zero clicks, or ANY recovery end) shares one honest
+  // Home-bound line - stating the destination up front instead of leaving
+  // it to be discovered after confirming.
+  const isRecoveryEnd = Boolean(race.recoveryRun);
   // QF-05: "DNF" spelled out here too, matching RaceResults' own kicker
   // ("DNF — Did not finish") - this dialog is often a first-time player's
   // first encounter with the term, before they've ever seen Results.
-  const endRunConfirmCopy = endRunClickCount >= 1
+  const endRunConfirmCopy = !isRecoveryEnd && endRunClickCount >= 1
     ? `It'll count as a DNF — Did not finish — with ${endRunClickCount} ${endRunClickCount === 1 ? "click" : "clicks"}.`
-    : "This cannot be resumed after the server accepts it.";
+    : "Ending now won't count as an attempt — you'll go back to Home.";
   const showBanners = !authPrompt && !endConfirmationOpen;
   const bannerError = showBanners ? visibleError : null;
   const bannerNotice = showBanners ? runNotice : null;

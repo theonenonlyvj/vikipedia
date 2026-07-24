@@ -2459,6 +2459,43 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("button", { name: /▶ race/i })).toBeEnabled();
   });
 
+  it("RC-08 (Judge B amend 2): a recovered run with prior clicks still shows the Home-bound End Run copy, not the DNF framing, and still lands on Home", async () => {
+    // Today's fixture default is clickCount: 0, leaving this branch (a
+    // stale/legacy run recovered with clicks already on it - the normal
+    // case for something worth recovering) with zero coverage. Without this
+    // amendment, confirmEndRun's own isRecoveryEnd guard (App.tsx) forces
+    // dnfSnapshot to null for ANY recovery end regardless of click count -
+    // always Home, never DNF Results - while the dialog copy branched on
+    // click count alone and would have promised the DNF framing here.
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({
+      activeRun: activeRunFixture({ protocolVersion: 1, clickCount: 2 }),
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    const endOldRun = await screen.findByRole("button", { name: /end old run/i });
+    await user.click(endOldRun);
+    const dialog = screen.getByRole("dialog", { name: /end this run/i });
+    expect(
+      within(dialog).getByText(/ending now won.t count as an attempt.*you.ll go back to home\./i),
+    ).toBeVisible();
+    expect(within(dialog).queryByText(/it.ll count as a dnf/i)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /confirm end old run/i }));
+
+    await waitFor(() => expect(fetchImpl).toHaveBeenCalledWith(
+      apiUrl("/api/v2/runs/run-old/abandon"),
+      expect.objectContaining({
+        body: JSON.stringify({ recoveryProtocolVersion: 1 }),
+        method: "POST",
+      }),
+    ));
+    // Home, not DNF Results.
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeEnabled();
+    expect(screen.queryByText(/did not finish/i)).toBeNull();
+  });
+
   it("locks out challenge browsing during active-run recovery and honors the back-gesture lock", async () => {
     const storage = claimedStorage();
     const fetchImpl = createFetchMock({
@@ -4257,7 +4294,13 @@ describe("VWiki Race app", () => {
       // Zero repeated "No data yet." strings - not the old 7-tile grid +
       // 3 list sections' placeholder-times-ten.
       expect(screen.queryByText(/no data yet/i)).toBeNull();
-      expect(screen.queryByRole("heading", { name: /your stats/i })).toBeNull();
+      // RC-08: the nav's "Log In" tap now also opens the identity sheet
+      // (Save your stats) alongside the You panel underneath it - exact-
+      // match the StatsPanel heading ("Your stats") so this assertion isn't
+      // also (accidentally) satisfied by the sheet's own "Save your stats"
+      // h2, which contains the same substring. The guarantee this protects
+      // (no full StatsPanel for a never-played guest) is unchanged.
+      expect(screen.queryByRole("heading", { name: /^your stats$/i })).toBeNull();
       // Scoped to the true never-played-guest case only: no identitySession
       // at all, so there's nothing yet to "claim" either.
       expect(screen.queryByRole("region", { name: /claim your stats/i })).toBeNull();
@@ -5680,7 +5723,7 @@ describe("Race flow: full-screen takeover", () => {
     expect(screen.getByRole("region", { name: /today's board/i })).toBeVisible();
   });
 
-  it("keeps the original End Run confirm copy when no clicks have been made yet", async () => {
+  it("RC-08: End Run confirm copy states the Home destination up front when no clicks have been made yet", async () => {
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
 
@@ -5689,8 +5732,11 @@ describe("Race flow: full-screen takeover", () => {
     await user.click(screen.getByRole("button", { name: /^end run$/i }));
 
     const dialog = await screen.findByRole("dialog", { name: /end this run/i });
+    // RC-08: the zero-click short-circuit (App.tsx's confirmEndRun) lands on
+    // Home with a notice, not DNF Results - the dialog now says so up front
+    // instead of leaving it to be discovered after confirming.
     expect(
-      within(dialog).getByText(/this cannot be resumed after the server accepts it\./i),
+      within(dialog).getByText(/ending now won.t count as an attempt.*you.ll go back to home\./i),
     ).toBeVisible();
     // PKG-12 (council 2026-07-19, Judge B): End Run is the dialog that most
     // needs backgrounding - it interrupts a live timed race, and its

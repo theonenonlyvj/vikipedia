@@ -296,7 +296,23 @@ export default function AppShell({
               aria-pressed={visibleMode === key}
               className={visibleMode === key ? "active" : undefined}
               key={key}
-              onClick={() => onSelectMode(key)}
+              onClick={() => {
+                onSelectMode(key);
+                // RC-08: the signed-out "Log In" nav item's whole promise IS
+                // the sheet - selecting the mode alone lands on the You
+                // panel's own "Log in" button, a second click away from the
+                // form the label already claimed. One tap now both switches
+                // to You (so the sheet has the panel underneath it for a
+                // sane dismiss) AND opens the sheet directly, straight to
+                // the Log in tab - the same onClaimIdentity("login") call
+                // You.tsx's own signed-out "Log in" button makes. Batched
+                // synchronously in this one handler, so both state changes
+                // land in the same React commit (no transient signed-out-You
+                // frame with no sheet).
+                if (key === "you" && identitySession === null) {
+                  onClaimIdentity("login");
+                }
+              }}
               type="button"
             >
               {/* NV-1 (owner feedback, two screenshots): a signed-out
