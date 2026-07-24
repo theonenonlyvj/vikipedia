@@ -86,7 +86,14 @@ export default function You({
         // times over for someone who has never raced at all. Reuses the
         // app's existing `.empty-state` panel chrome (Home.tsx's loading
         // state) rather than inventing new CSS.
-        <section className="empty-state you-empty-state">
+        // RC-09 (owner-proxy ruling, Judge B "strongest-evidenced item"):
+        // the empty-state/stats-panel swap on login/logout used to be a
+        // literal instant hard-swap (journey6 trace: the identity modal at
+        // one capture, the fully-mounted panel the very next, zero
+        // cross-fade) - `surface-entrance` is the same shared fade+rise
+        // QF-08 already ships elsewhere, applied to both sides of this
+        // swap so whichever one mounts eases in instead of popping.
+        <section className="empty-state you-empty-state surface-entrance">
           <p>Play your first race to start building stats.</p>
           <button onClick={onGoHome} type="button">
             Home
@@ -233,9 +240,15 @@ function StatsPanel({
 }) {
   const totals = stats?.totals;
 
+  // RC-09 (owner-proxy ruling, Judge B "strongest-evidenced item"): every
+  // return below carries `surface-entrance` (see You()'s own comment on the
+  // empty-state sibling for the trace evidence) - StatsPanel mounts fresh on
+  // every login/logout swap regardless of which internal status it starts
+  // in, so all three branches need the same fade+rise, not just the "ready"
+  // one.
   if (status === "error") {
     return (
-      <section className="stats-panel">
+      <section className="stats-panel surface-entrance">
         <h2>Your stats</h2>
         <div className="board-error">
           <p className="error-banner" role="alert">Couldn&apos;t load your stats.</p>
@@ -249,7 +262,7 @@ function StatsPanel({
 
   if (status === "loading") {
     return (
-      <section className="stats-panel">
+      <section className="stats-panel surface-entrance">
         <h2>Your stats</h2>
         <StagedLoadingNotice
           active
@@ -262,7 +275,7 @@ function StatsPanel({
   }
 
   return (
-    <section className="stats-panel">
+    <section className="stats-panel surface-entrance">
       {/* QF-09: nav's "Stats" tab now literally points at Boards
           (PKG-14, AppShell.tsx) - keeping this heading as "Stats" too
           made a screen one tap away self-identify with the same name.

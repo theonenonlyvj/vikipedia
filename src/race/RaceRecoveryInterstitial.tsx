@@ -26,7 +26,11 @@ export default function RaceRecoveryInterstitial({
   onRequestEndRun: (event: MouseEvent<HTMLElement>) => void;
 }) {
   return (
-    <section aria-label="Resume previous run" className="recovery-notice">
+    // RC-09 (owner-proxy ruling, Judge A item 3): see PreRacePreview.tsx's
+    // matching comment - same shared `surface-entrance` fade+rise, applied
+    // here for the same reason (a full-screen race-flow mount that used to
+    // hard-cut in with no entrance treatment at all).
+    <section aria-label="Resume previous run" className="recovery-notice surface-entrance">
       <h2>Resume your previous run</h2>
       {recoveryRun.protocolVersion === 2 ? (
         <button disabled={phase !== "idle"} type="button" onClick={onRetryResume}>

@@ -87,6 +87,46 @@ describe("RaceMode", () => {
     expect(screen.queryByText(/redirected from/i)).toBeNull();
   });
 
+  // RC-09 (Judge A item 1 salvage): a genuinely slow first-article fetch (or
+  // the boot-recovery check) must read as progress, not a frozen box - the
+  // shared shimmer class from styles.css's `.article-navigation-pending`
+  // extraction now lives on this box too.
+  describe("pre-article loading (RC-09 shimmer)", () => {
+    function renderLoading(overrides: { checkingActiveRun?: boolean } = {}) {
+      return render(
+        <RaceMode
+          article={null}
+          session={session}
+          elapsedMs={1_000}
+          redirectedFrom={null}
+          pendingNavigationTitle={null}
+          navigationRetrying={false}
+          pendingRetry={null}
+          onRetryPending={() => {}}
+          targetPreview={idlePreview}
+          endRunDisabled={false}
+          onRequestEndRun={() => {}}
+          checkingActiveRun={overrides.checkingActiveRun ?? false}
+          handleArticleClick={vi.fn()}
+          handleArticlePrewarm={vi.fn()}
+        />,
+      );
+    }
+
+    it("shows the shimmer on the 'Loading article...' box", () => {
+      renderLoading();
+
+      expect(screen.getByText("Loading article...")).toHaveClass("progress-shimmer");
+    });
+
+    it("shows the shimmer on the boot-recovery 'Checking for an active run...' box too", () => {
+      renderLoading({ checkingActiveRun: true });
+
+      expect(screen.getByText("Checking for an active run...")).toHaveClass("progress-shimmer");
+      expect(screen.queryByText("Loading article...")).toBeNull();
+    });
+  });
+
   // MB-1 Part 2: an automatic retry (article fetch or click-POST leash,
   // see useRaceController's navigationRetrying) must read as honest
   // progress, not a silently-unchanging "Opening.../Loading next

@@ -39,7 +39,12 @@ export default function PreRacePreview({
   const dailyBadge = challenge.dailyFeature ? dailyFlavorBadgeText(challenge.dailyFeature) : null;
 
   return (
-    <section className="pre-race-preview" aria-label="Pre-race preview">
+    // RC-09 (owner-proxy ruling, Judge A item 3): this full-screen mount
+    // used to hard-cut in with zero entrance treatment - `surface-entrance`
+    // is the shared fade+rise QF-08 already ships on the identity/End Run
+    // dialogs and the results reveal, extracted so surfaces like this one
+    // stop being individually forgotten.
+    <section className="pre-race-preview surface-entrance" aria-label="Pre-race preview">
       <button
         aria-label="Back"
         className="icon-button pre-race-back"

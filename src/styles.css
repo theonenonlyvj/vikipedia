@@ -469,6 +469,19 @@ ol {
   color: var(--cyan);
 }
 
+/* RC-09 (owner-proxy ruling, Judge A item 4 / Judge B amendment 2): wraps
+   whichever ONE of the three Guest/Create/Log-in forms is currently mounted
+   (App.tsx never dual-renders them - see useMeasuredHeight.ts) so a tab
+   switch morphs the dialog's height instead of snapping instantly between
+   materially different form heights. `overflow: hidden` clips the box to
+   its own animated height during the transition only; it never permanently
+   hides content, since the height itself always ends up matching the
+   single mounted form's natural size. */
+.identity-form-viewport {
+  overflow: hidden;
+  transition: height 200ms ease;
+}
+
 .identity-form {
   display: grid;
   gap: 10px;
@@ -1602,6 +1615,14 @@ h1 {
   z-index: 40;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* RC-09 (Judge A: precautionary hardening, not a proven bug - no frame
+     evidence actually showed a scrollbar-driven width change) - this is the
+     real scrolling container, and RaceResults content is taller than
+     RaceMode's, so a results mount that crosses the viewport height could
+     introduce a scrollbar mid-animation without this. Reserving the gutter
+     up front keeps the content-box width identical whether or not the
+     scrollbar is actually needed. */
+  scrollbar-gutter: stable;
   background: var(--ink);
   padding: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right))
     max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
@@ -1731,6 +1752,33 @@ h1 {
 }
 
 @keyframes result-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* RC-09 (owner-proxy ruling, Judge A item 3 + Judge B amendment 3): QF-08's
+   fade+rise entrance, extracted into one reusable class - opt in by adding
+   `surface-entrance` to any full-screen race-flow mount instead of writing a
+   fresh `animation:` declaration (or, worse, forgetting one entirely - the
+   original audit found `.pre-race-preview`/`.recovery-notice` had silently
+   shipped with zero entrance treatment while their siblings got one for
+   free). 200ms sits inside QF-08's established 140-260ms band, between the
+   modal's 140/180ms and the results reveal's 260ms.
+   DO NOT apply this to `.race-mode` - see the comment on `.race-mode,
+   .race-results` above: it mounts on every race start and must never replay
+   an entrance. `.race-results` keeps its own dedicated `result-reveal`
+   animation/timing rather than being folded into this class. */
+.surface-entrance {
+  animation: surface-entrance-fade-rise 200ms ease both;
+}
+
+@keyframes surface-entrance-fade-rise {
   from {
     opacity: 0;
     transform: translateY(10px);
@@ -1985,6 +2033,32 @@ h1 {
 @keyframes article-loading {
   from { transform: scaleX(0.18); }
   to { transform: scaleX(1); }
+}
+
+/* RC-09 (Judge A item 1 salvage / Judge B amendment 4): the pending-fetch
+   progress bar, extracted from `.article-navigation-pending::after` above
+   into its own shareable class - that ruleset's full white/sticky/border/
+   light-chrome treatment is raw Wikipedia-chrome mimicry (FB-8, deliberately
+   scoped to the in-race article surface only) and does not fit RaceMode's
+   dark `.loading-text` box, where the FIRST article is still loading before
+   any Wikipedia chrome exists to mimic. Reuses the same `article-loading`
+   keyframes so a genuinely slow first-article fetch reads as progress
+   instead of a freeze, without inheriting chrome that clashes with the
+   race-takeover's dark background. */
+.progress-shimmer {
+  position: relative;
+}
+
+.progress-shimmer::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 3px;
+  background: var(--cyan);
+  content: "";
+  transform-origin: left;
+  animation: article-loading 900ms ease-in-out infinite alternate;
 }
 
 .article-heading {
@@ -3855,6 +3929,16 @@ h1 {
   }
 
   .article-navigation-pending::after {
+    animation: none;
+    transform: scaleX(1);
+  }
+
+  /* RC-09: same freeze as `.article-navigation-pending::after` above, for
+     the shared shimmer class extracted from it - the blanket rule already
+     neutralizes the animation's duration/iteration count, but pins the bar
+     fully filled explicitly rather than leaving it at whatever fraction
+     `article-loading`'s 0.01ms run happens to land on. */
+  .progress-shimmer::after {
     animation: none;
     transform: scaleX(1);
   }

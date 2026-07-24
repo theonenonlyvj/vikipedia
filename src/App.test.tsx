@@ -2437,6 +2437,59 @@ describe("VWiki Race app", () => {
     expect(raceTakeover).not.toHaveAttribute("inert");
   });
 
+  // RC-09 (owner-proxy ruling, Judge A item 4 / Judge B amendment 2): the
+  // measured-height wrapper must never tempt a future refactor into
+  // dual-rendering the outgoing+incoming forms to smooth the morph - Guest/
+  // Create/Log-in stay three separate, mutually-exclusive mounts. This locks
+  // in both halves of that constraint: (1) the DOM's reachable input set
+  // only ever contains the ACTIVE tab's own fields, never a stray one left
+  // over from whatever was showing before, and (2) each switch is a genuine
+  // mount (not an in-place update) - the new tab's first field receives
+  // real focus every time, exactly once.
+  it("identity dialog tab switches never dual-render: reachable inputs are always exactly the active tab's own, and each switch focuses exactly one field", async () => {
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={memoryStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    const dialog = await screen.findByRole("dialog", { name: /save your stats/i });
+    const tabGroup = within(dialog).getByRole("group", { name: /identity options/i });
+
+    // Guest (the sheet's default landing mode) - one input, already focused
+    // on mount (ModalDialog's own open-time focus effect). Every label
+    // lookup below is ANCHORED (`^...$`) - the Create form's own "This is
+    // also your public display name." hint text otherwise makes an
+    // unanchored /display name/i false-positive-match its wrapping <label>,
+    // since testing-library's label association considers the whole
+    // wrapping element's text, not just the input's own aria-label.
+    const displayNameField = within(dialog).getByLabelText(/^display name$/i);
+    expect(dialog.querySelectorAll("input")).toHaveLength(1);
+    expect(document.activeElement).toBe(displayNameField);
+
+    await user.click(within(tabGroup).getByRole("button", { name: /^create account$/i }));
+    expect(within(dialog).queryByLabelText(/^display name$/i)).toBeNull();
+    const usernameField = within(dialog).getByLabelText(/^vgames username$/i);
+    expect(dialog.querySelectorAll("input")).toHaveLength(3);
+    expect(within(dialog).getByLabelText(/^password$/i)).toBeVisible();
+    expect(within(dialog).getByLabelText(/^confirm password$/i)).toBeVisible();
+    // Exactly one element received focus from this switch: the new form's
+    // own first field, not the tab button just clicked and not a leftover
+    // Guest element.
+    expect(document.activeElement).toBe(usernameField);
+
+    await user.click(within(tabGroup).getByRole("button", { name: /^log in$/i }));
+    expect(within(dialog).queryByLabelText(/^vgames username$/i)).toBeNull();
+    expect(within(dialog).queryByLabelText(/^confirm password$/i)).toBeNull();
+    const loginUsernameField = within(dialog).getByLabelText(/^username$/i);
+    expect(dialog.querySelectorAll("input")).toHaveLength(2);
+    expect(document.activeElement).toBe(loginUsernameField);
+
+    await user.click(within(tabGroup).getByRole("button", { name: /^guest$/i }));
+    expect(within(dialog).queryByLabelText(/^username$/i)).toBeNull();
+    expect(dialog.querySelectorAll("input")).toHaveLength(1);
+    expect(document.activeElement).toBe(within(dialog).getByLabelText(/^display name$/i));
+  });
+
   it("offers End Old Run for protocol-1 recovery and sends the recovery abandon", async () => {
     const storage = claimedStorage();
     const fetchImpl = createFetchMock({ activeRun: activeRunFixture({ protocolVersion: 1 }) });
@@ -2444,6 +2497,11 @@ describe("VWiki Race app", () => {
     render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
 
     const endOldRun = await screen.findByRole("button", { name: /end old run/i });
+    // RC-09 (owner-proxy ruling, Judge A item 3): same shared fade+rise as
+    // the pre-race preview - see PreRacePreview.tsx's matching comment.
+    expect(screen.getByRole("region", { name: /resume previous run/i })).toHaveClass(
+      "surface-entrance",
+    );
     await user.click(endOldRun);
     const dialog = screen.getByRole("dialog", { name: /end this run/i });
     expect(dialog.parentElement).toHaveClass("modal-backdrop");
@@ -5029,6 +5087,10 @@ describe("Race flow: full-screen takeover", () => {
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
 
     const preview = await screen.findByRole("region", { name: /pre-race preview/i });
+    // RC-09 (owner-proxy ruling, Judge A item 3): this full-screen mount
+    // used to hard-cut in with zero entrance treatment - locks in the
+    // shared fade+rise class now applied to it.
+    expect(preview).toHaveClass("surface-entrance");
     expect(within(preview).getByText(/your target/i)).toBeVisible();
     expect(within(preview).getByRole("heading", { name: "Fruit" })).toBeVisible();
     await within(preview).findByText(/seed-bearing structure/i);

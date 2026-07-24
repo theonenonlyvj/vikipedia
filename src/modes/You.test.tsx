@@ -136,4 +136,47 @@ describe("You: RC-06 (one honest loading/error system) - three visually distinct
     expect(screen.getByText(/play your first race/i)).toBeVisible();
     expect(screen.queryByText(/loading your stats/i)).toBeNull();
   });
+
+  // RC-09 (owner-proxy ruling, Judge B "strongest-evidenced item"): journey6
+  // caught a literal instant hard-swap between the empty-state and the
+  // freshly-mounted stats panel on login - both sides of that swap now
+  // carry the shared `surface-entrance` fade+rise, and the swap must stay a
+  // genuine single-mount replace (never both on screen at once).
+  it("cross-fades the empty-state/stats-panel swap on login: exactly one surface-entrance element at a time", () => {
+    const { rerender } = render(
+      <You
+        identitySession={null}
+        onClaimIdentity={vi.fn()}
+        onGoHome={vi.fn()}
+        onLogOut={vi.fn()}
+        onPlayAsSomeoneElse={vi.fn()}
+        onRetryStats={vi.fn()}
+        onSwitchAccount={vi.fn()}
+        stats={null}
+        statsStatus="ready"
+      />,
+    );
+    const emptyState = document.querySelector(".you-empty-state");
+    expect(emptyState).toHaveClass("surface-entrance");
+    expect(document.querySelectorAll(".surface-entrance")).toHaveLength(1);
+    expect(document.querySelector(".stats-panel")).toBeNull();
+
+    rerender(
+      <You
+        identitySession={claimedSession}
+        onClaimIdentity={vi.fn()}
+        onGoHome={vi.fn()}
+        onLogOut={vi.fn()}
+        onPlayAsSomeoneElse={vi.fn()}
+        onRetryStats={vi.fn()}
+        onSwitchAccount={vi.fn()}
+        stats={zeroStats}
+        statsStatus="ready"
+      />,
+    );
+    const statsPanel = document.querySelector(".stats-panel");
+    expect(statsPanel).toHaveClass("surface-entrance");
+    expect(document.querySelectorAll(".surface-entrance")).toHaveLength(1);
+    expect(document.querySelector(".you-empty-state")).toBeNull();
+  });
 });
