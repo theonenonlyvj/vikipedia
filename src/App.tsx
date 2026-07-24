@@ -960,6 +960,18 @@ export default function App({
     setMode("boards");
   }
 
+  // RC-05 (Judge B amendment 1): Home's FINISHED-state "Today's board" card
+  // gets its own "see full board ›" link, distinct from goToBoardsFor's
+  // Yesterday-specific one above - it must land on Boards' Today segment,
+  // not silently reuse Yesterday's destination. Same Back-ladder marker
+  // (item 8) as goToBoardsFor, for the same reason: this is a second Home ->
+  // non-Home entry point that bypasses the bottom nav.
+  function goToBoardsForToday() {
+    setBoardsInitialSegment("today");
+    markInAppMode();
+    setMode("boards");
+  }
+
   function selectMode(nextMode: ModeKey) {
     // Owner-approved URL policy: any bottom-nav tap enforces the iff-
     // invariant (?challenge= present only on Detail or a locked/recovering
@@ -1996,6 +2008,7 @@ export default function App({
           onDismissStorageNotice={() => setStorageNoticeDismissed(true)}
           onExitAdmin={exitAdmin}
           onGoToBoardsFor={goToBoardsFor}
+          onGoToBoardsToday={goToBoardsForToday}
           onLogOut={logOut}
           onOpenChallengeDetail={(challengeId) => void openChallengeDetail(challengeId)}
           onPlayAsSomeoneElse={requestPlayAsSomeoneElse}

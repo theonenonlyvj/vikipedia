@@ -18,11 +18,17 @@ export default function BoardSnippet({
   rows,
   emptyLabel = "No completed runs yet.",
   children,
+  maxRows = 3,
 }: {
   title: string;
   rows: BoardSnippetRow[];
   emptyLabel?: string;
   children?: ReactNode;
+  // RC-05: Results' own snippet and the yesterday-recap card keep the
+  // original top-3 cap (default unchanged); Home's finished-state
+  // "Today's board" widens this to 6 so a signed-in player can see (almost)
+  // everyone who raced today, not just the podium.
+  maxRows?: number;
 }) {
   if (rows.length === 0) {
     return (
@@ -34,10 +40,10 @@ export default function BoardSnippet({
     );
   }
 
-  const top3 = rows.slice(0, 3);
+  const topN = rows.slice(0, maxRows);
   const yourRow = rows.find((row) => row.isYou) ?? null;
-  const yourRowInTop3 = Boolean(yourRow) && top3.some((row) => row.key === yourRow?.key);
-  const visibleRows = yourRow && !yourRowInTop3 ? [...top3, yourRow] : top3;
+  const yourRowInTopN = Boolean(yourRow) && topN.some((row) => row.key === yourRow?.key);
+  const visibleRows = yourRow && !yourRowInTopN ? [...topN, yourRow] : topN;
 
   return (
     <section aria-label={title} className="board-snippet">

@@ -60,3 +60,77 @@ describe("BoardSnippet: DNF rank color (QF-04)", () => {
     expect(rankSpan).not.toHaveClass("rank-dnf");
   });
 });
+
+function rankedRows(count: number, youRank: number | null): BoardSnippetRow[] {
+  return Array.from({ length: count }, (_, index) => {
+    const rank = index + 1;
+    return row({
+      key: `row-${rank}`,
+      rankLabel: `#${rank}`,
+      rank,
+      displayName: rank === youRank ? "Vijay" : `Player${rank}`,
+      isYou: rank === youRank,
+    });
+  });
+}
+
+/**
+ * RC-05 (owner ask: "Today's board lists ALL finishers up to ~6 rows"):
+ * `maxRows` widens the shared cap without touching Results'/the yesterday
+ * card's existing 3-row default - those callers omit the prop entirely.
+ */
+describe("BoardSnippet: maxRows (RC-05)", () => {
+  it("defaults maxRows to 3, unchanged for Results/yesterday callers", () => {
+    render(<BoardSnippet title="Yesterday's results" rows={rankedRows(8, null)} />);
+
+    const list = screen.getByRole("list");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(list).getByText("Player1")).toBeVisible();
+    expect(within(list).getByText("Player3")).toBeVisible();
+    expect(within(list).queryByText("Player4")).toBeNull();
+  });
+
+  it("still appends your own row below the default 3-row cap when you placed outside it", () => {
+    render(<BoardSnippet title="Yesterday's results" rows={rankedRows(8, 5)} />);
+
+    const list = screen.getByRole("list");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(4);
+    expect(within(list).getByText("Vijay")).toBeVisible();
+  });
+
+  it("renders all 6 rows with maxRows={6} and no append needed when you're inside the cap", () => {
+    render(<BoardSnippet title="Today's board" rows={rankedRows(6, 6)} maxRows={6} />);
+
+    const list = screen.getByRole("list");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(6);
+    expect(within(list).getByText("Vijay")).toBeVisible();
+  });
+
+  it("with 7+ finishers and maxRows={6}, renders 6 plus your appended row when you're outside them", () => {
+    render(<BoardSnippet title="Today's board" rows={rankedRows(9, 9)} maxRows={6} />);
+
+    const list = screen.getByRole("list");
+    const items = within(list).getAllByRole("listitem");
+    expect(items).toHaveLength(7);
+    expect(within(list).getByText("Player1")).toBeVisible();
+    expect(within(list).getByText("Player6")).toBeVisible();
+    expect(within(list).queryByText("Player7")).toBeNull();
+    expect(within(list).getByText("Vijay")).toBeVisible();
+  });
+
+  it("renders children (the 'see full board' link) in both the populated and empty branches", () => {
+    const { rerender } = render(
+      <BoardSnippet title="Today's board" rows={rankedRows(6, 6)} maxRows={6}>
+        <button type="button">see full board ›</button>
+      </BoardSnippet>,
+    );
+    expect(screen.getByRole("button", { name: /see full board/i })).toBeVisible();
+
+    rerender(
+      <BoardSnippet title="Today's board" rows={[]} maxRows={6}>
+        <button type="button">see full board ›</button>
+      </BoardSnippet>,
+    );
+    expect(screen.getByRole("button", { name: /see full board/i })).toBeVisible();
+  });
+});

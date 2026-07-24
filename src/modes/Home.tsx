@@ -65,6 +65,7 @@ export default function Home({
   identityAccountId,
   identityToken,
   onGoToBoards,
+  onGoToBoardsToday,
   onOpenChallenge,
   onCreateRandomChallenge,
   onRaceChallenge,
@@ -96,6 +97,12 @@ export default function Home({
   // GR-1 ("View graph"): the bearer token `ChallengePathGraphButton` needs.
   identityToken: string | null;
   onGoToBoards: () => void;
+  // RC-05 (Judge B amendment 1): distinct from onGoToBoards (which lands on
+  // Boards' Yesterday segment via goToBoardsFor) - the finished-state
+  // "Today's board" card's own "see full board ›" link needs to land on
+  // Boards' TODAY segment specifically, so it must never share that
+  // callback even though the button reads identically.
+  onGoToBoardsToday: () => void;
   // Play-another's suggestion opens Challenge Detail - same route as
   // Browse's own cards (spec: "a Race affordance (route consistent with
   // Browse cards → Detail)") - reuses App.tsx's existing openChallengeDetail.
@@ -131,6 +138,24 @@ export default function Home({
     [challenges, yesterdayCentral],
   );
 
+  // RC-05 part (B) deferral (Judge A amendment 1 / Judge B amendment 4,
+  // OWNER-PROXY RULING "build as amended"): the package's hero-truthfulness
+  // half asked for a loading|error|ready tri-state here (skeleton-hold
+  // instead of defaulting to "not-attempted" while a placement lookup is in
+  // flight). Both judges gated that explicitly on RC-03's shared read-cache
+  // landing FIRST (or an equivalent substitute that lets a Home remount
+  // resolve synchronously from a cache) - "Do NOT ship the skeleton-hold
+  // ahead of that cache." RC-03 has not landed on this HEAD yet (still
+  // null-only, no caching at all - heroBoard genuinely refetches from
+  // scratch on every Home mount, per journey2-rapid-nav's network trace).
+  // A bespoke substitute cache built here would need its own invalidation
+  // hook into App.tsx's race-end path (finish/DNF) to avoid a WORSE bug -
+  // showing a stale pre-finish hero after a real completion - and building
+  // that is RC-03's mandate, not this package's file list. Judge B's own
+  // amendment 4 names exactly this fallback: ship Part A (the board
+  // widening below) now, and leave heroBoard's null-default behavior
+  // unchanged until RC-03 (or an owner-approved substitute) lands. See this
+  // package's report for the acceptance items this leaves unmet.
   const [heroBoard, setHeroBoard] = useState<ChallengeBoardResponse | null>(null);
   const [independentYesterdayBoard, setIndependentYesterdayBoard] =
     useState<ChallengeBoardResponse | null>(null);
@@ -382,10 +407,26 @@ export default function Home({
 
       {dailyState === "finished" && myPlacement ? (
         <>
+          {/* RC-05 (owner ask): "Today's board lists ALL finishers up to
+              ~6 rows + always 'see full board ›'". `maxRows={6}` widens the
+              cap past the shared 3-row default (BoardSnippet still appends
+              your own row below the cap if you placed outside it); the link
+              renders in every branch - including 0/1-finisher boards -
+              because BoardSnippet already renders `children` in its empty
+              branch too. */}
           <BoardSnippet
             title={heroBoardTitle}
             rows={heroBoardMatches ? boardSnippetRowsFromBoard(heroBoardMatches, identityAccountId) : []}
-          />
+            maxRows={6}
+          >
+            <button
+              className="link-button"
+              onClick={() => onGoToBoardsToday()}
+              type="button"
+            >
+              see full board ›
+            </button>
+          </BoardSnippet>
 
           <ShareResultButton
             challenge={heroChallenge}

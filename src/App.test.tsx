@@ -5503,12 +5503,138 @@ describe("Home v2: stateful daily hub + teaching gate (Increment 2 Task 2)", () 
     const todaysBoard = screen.getByRole("region", { name: /today's board/i });
     expect(within(todaysBoard).getByText(/ari/i)).toBeVisible();
     expect(within(todaysBoard).getByText(/\(you\)/i)).toBeVisible();
+    // RC-05 (owner ask): the finished-state "Today's board" always carries
+    // its own "see full board ›" link, same as the pre-play yesterday card.
+    expect(within(todaysBoard).getByRole("button", { name: /see full board/i })).toBeVisible();
 
     expect(screen.getByRole("button", { name: /share result/i })).toBeVisible();
     expect(screen.getByRole("region", { name: /play another challenge/i })).toBeVisible();
     expect(screen.getByText(/new daily drops 5:00 am central/i)).toBeVisible();
     // Finished takes precedence over the pre-play yesterday card, per spec.
     expect(screen.queryByRole("region", { name: /yesterday's results/i })).toBeNull();
+  });
+
+  it("RC-05: today's board shows all 6 finishers (no cap-3), and 7+ finishers append your row if you placed outside the top 6", async () => {
+    const sixFinishers = [
+      leaderboardRow({ rank: 1, runId: "run-1", accountId: "acc-alice", displayName: "Alice", elapsedMs: 10_000, clickCount: 1 }),
+      leaderboardRow({ rank: 2, runId: "run-2", accountId: "acc-2", displayName: "Bob", elapsedMs: 11_000, clickCount: 1 }),
+      leaderboardRow({ rank: 3, runId: "run-3", accountId: "acc-3", displayName: "Cara", elapsedMs: 12_000, clickCount: 1 }),
+      leaderboardRow({ rank: 4, runId: "run-4", accountId: "acc-4", displayName: "Dee", elapsedMs: 13_000, clickCount: 1 }),
+      leaderboardRow({ rank: 5, runId: "run-5", accountId: "acc-5", displayName: "Eve", elapsedMs: 14_000, clickCount: 1 }),
+      // "you" (acc-1, claimed-storage's default identity) placed last within
+      // the 6-row cap - RC-05's owner ask is "up to ~6 rows", not just top 3.
+      leaderboardRow({ rank: 6, runId: "run-6", accountId: "acc-1", displayName: "Vijay", elapsedMs: 15_000, clickCount: 1 }),
+    ];
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      leaderboardRows: sixFinishers,
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: sixFinishers.map((row) => ({
+            accountId: row.accountId,
+            displayName: row.displayName,
+            placement: row.rank,
+            elapsedMs: row.elapsedMs,
+            clickCount: row.clickCount,
+          })),
+        },
+      },
+    });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+      />,
+    );
+
+    const todaysBoard = await screen.findByRole("region", { name: /today's board/i });
+    expect(within(todaysBoard).getAllByRole("listitem")).toHaveLength(6);
+    expect(within(todaysBoard).getByText(/alice/i)).toBeVisible();
+    expect(within(todaysBoard).getByText(/\(you\)/i)).toBeVisible();
+    expect(within(todaysBoard).getByRole("button", { name: /see full board/i })).toBeVisible();
+  });
+
+  it("RC-05: with 7 finishers and you placed outside the top 6, your row appends below the 6", async () => {
+    const sevenFinishers = Array.from({ length: 7 }, (_, index) => {
+      const rank = index + 1;
+      const isYou = rank === 7;
+      return leaderboardRow({
+        rank,
+        runId: `run-${rank}`,
+        // "you" is acc-1 (claimed-storage's default identity); other rows
+        // use a distinct acc-pN prefix so none of them collide with it.
+        accountId: isYou ? "acc-1" : `acc-p${rank}`,
+        displayName: isYou ? "Vijay" : `Player${rank}`,
+        elapsedMs: 10_000 + rank * 1_000,
+        clickCount: 1,
+      });
+    });
+    const fetchImpl = createFetchMock({
+      challenges: [twoChallenges()[0]],
+      leaderboardRows: sevenFinishers,
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: sevenFinishers.map((row) => ({
+            accountId: row.accountId,
+            displayName: row.displayName,
+            placement: row.rank,
+            elapsedMs: row.elapsedMs,
+            clickCount: row.clickCount,
+          })),
+        },
+      },
+    });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+      />,
+    );
+
+    const todaysBoard = await screen.findByRole("region", { name: /today's board/i });
+    expect(within(todaysBoard).getAllByRole("listitem")).toHaveLength(7);
+    expect(within(todaysBoard).getByText(/player1/i)).toBeVisible();
+    expect(within(todaysBoard).getByText(/player6/i)).toBeVisible();
+    expect(within(todaysBoard).queryByText(/player7/i)).toBeNull();
+    expect(within(todaysBoard).getByText(/\(you\)/i)).toBeVisible();
+  });
+
+  it("RC-05: the finished-state 'see full board ›' link is present with just 1 finisher (you), and lands on Boards' Today segment specifically - not the Yesterday-only goToBoardsFor destination", async () => {
+    const user = userEvent.setup();
+    // Needs a genuine today-daily (not the plain twoChallenges fixture) so
+    // Boards' Today segment renders the board instead of its own
+    // `todayHeroKind === "default"` -> "No daily challenge right now" empty
+    // state.
+    const todayChallenge = dailyChallenge("challenge-0001", { dailyDate: "2026-07-17" });
+    const fetchImpl = createFetchMock({
+      challenges: [todayChallenge],
+      leaderboardRows: [
+        leaderboardRow({ rank: 1, runId: "run-1", accountId: "acc-1", displayName: "Vijay", elapsedMs: 10_000, clickCount: 1 }),
+      ],
+    });
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-17"}
+      />,
+    );
+
+    const todaysBoard = await screen.findByRole("region", { name: /today's board/i });
+    expect(within(todaysBoard).getAllByRole("listitem")).toHaveLength(1);
+    const seeFullBoard = within(todaysBoard).getByRole("button", { name: /see full board/i });
+    expect(seeFullBoard).toBeVisible();
+
+    await user.click(seeFullBoard);
+    expect(screen.getByRole("heading", { name: "Stats" })).toBeVisible();
+    // Today's segment (not Yesterday) is the finished-state link's landing
+    // spot - the challenge just raced (challenge-0001) has today's own
+    // completed run visible here.
+    expect(await screen.findByText(/vijay/i)).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Today", selected: true })).toBeVisible();
   });
 
   it("composes and copies the same result line from Home's post-play Share result as Results does", async () => {

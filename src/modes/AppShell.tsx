@@ -82,6 +82,7 @@ export default function AppShell({
   onDismissStorageNotice,
   onExitAdmin,
   onGoToBoardsFor,
+  onGoToBoardsToday,
   onLogOut,
   onOpenChallengeDetail,
   onPlayAsSomeoneElse,
@@ -133,6 +134,11 @@ export default function AppShell({
   onDismissStorageNotice: () => void;
   onExitAdmin: () => void;
   onGoToBoardsFor: () => void;
+  // RC-05 (Judge B amendment 1): Home's finished-state "see full board ›"
+  // link needs to land on Boards' TODAY segment - a distinct callback from
+  // onGoToBoardsFor's Yesterday-only goToBoardsFor, so the two links can
+  // never be silently wired to the same destination.
+  onGoToBoardsToday: () => void;
   // "Honest You" (State C, spec §2.1): local-only, synchronous - see
   // App.tsx's `logOut`.
   onLogOut: () => void;
@@ -329,6 +335,7 @@ export default function AppShell({
             identityToken={identitySession?.token ?? null}
             onCreateRandomChallenge={onCreateRandomChallenge}
             onGoToBoards={onGoToBoardsFor}
+            onGoToBoardsToday={onGoToBoardsToday}
             onOpenChallenge={onOpenChallengeDetail}
             onRaceChallenge={onRaceChallenge}
             onRetryCatalog={onRetryCatalog}
