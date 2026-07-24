@@ -652,6 +652,40 @@ describe("useRaceController", () => {
     expect(outcome).toEqual({ status: "unauthorized", challengeId: challenge.id });
     expect(result.current.phase).toBe("idle");
   });
+
+  it("RC-01: substitutes the fallback copy instead of echoing the server's generic internal_error message", async () => {
+    // worker.ts's catch-all replies to ANY unhandled exception with the
+    // identical { code: "internal_error", message: "Something went wrong." }
+    // shape - never useful to a player verbatim. errorMessage() here is a
+    // separate copy of the same helper App.tsx uses for its own ~15 call
+    // sites (catalog/leaderboard/account-stats/...) - this one covers
+    // start/click/article/recovery/end-run.
+    const api = apiClient({
+      startRun: vi.fn(async () => {
+        throw new ApiRequestError("internal_error", "Something went wrong.", 500);
+      }),
+    });
+    const gateway = wikiGateway({ Apple: apple });
+    const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+
+    let outcome!: Awaited<ReturnType<typeof result.current.start>>;
+    await act(async () => { outcome = await result.current.start(challenge, "token"); });
+    expect(outcome).toEqual({ status: "failed", challengeId: challenge.id });
+    expect(result.current.error).toBe("Could not start that challenge.");
+  });
+
+  it("RC-01: still surfaces a non-internal_error message verbatim (regression guard on the fix above)", async () => {
+    const api = apiClient({
+      startRun: vi.fn(async () => {
+        throw new ApiRequestError("server_error", "Boom.", 500);
+      }),
+    });
+    const gateway = wikiGateway({ Apple: apple });
+    const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+
+    await act(async () => { await result.current.start(challenge, "token"); });
+    expect(result.current.error).toBe("Boom.");
+  });
 });
 
 function article(canonicalTitle: string, pageId: number): Article {

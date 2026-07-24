@@ -4,6 +4,13 @@ export type AccountStatus = "ghost" | "claimed" | "merged";
 export type ChallengeMode = "solo" | "daily";
 export type Ruleset = "ranked_classic";
 export type RunStatus = "active" | "completed" | "abandoned";
+// RC-01: one explicit signal for "can the challenge catalog be used right
+// now", shared by App.tsx (derivation), Home.tsx, and AppShell.tsx (render).
+// 'ready' takes precedence over 'failed' whenever challenges.length > 0 - a
+// later background refetch failure (focus/visibilitychange/daily-drop timer)
+// must never demote a still-usable, previously-loaded catalog back to a
+// dead-end "failed" screen (see App.tsx's catalogStatus derivation).
+export type CatalogStatus = "loading" | "failed" | "ready";
 
 export interface AuthorizedAccount {
   accountId: string;

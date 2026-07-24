@@ -5,7 +5,7 @@ import { guestHasStakes } from "../domain/identityStakes";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import { shouldShowTeachingGate } from "../domain/teachingGate";
 import type { CreateChallengeInput } from "./challenges/Browse";
-import type { AccountStats, Challenge, RankedLeaderboardRow, ServerPathStep } from "../domain/types";
+import type { AccountStats, CatalogStatus, Challenge, RankedLeaderboardRow, ServerPathStep } from "../domain/types";
 import { isAdminDailiesRoute } from "../services/urlRouting";
 import type { VGamesIdentitySession } from "../services/vgamesIdentity";
 import type { VWikiRaceApiClient } from "../services/vwikiRaceApiClient";
@@ -68,6 +68,7 @@ export default function AppShell({
   boardsInitialSegment,
   canManageDailies,
   canNominateForDaily,
+  catalogStatus,
   challenges,
   challengesView,
   identitySession,
@@ -85,6 +86,7 @@ export default function AppShell({
   onOpenChallengeDetail,
   onPlayAsSomeoneElse,
   onRaceChallenge,
+  onRetryCatalog,
   onSelectMode,
   onSwitchAccount,
   playAnotherSuggestion,
@@ -106,6 +108,13 @@ export default function AppShell({
   boardsInitialSegment: BoardsSegment;
   canManageDailies: boolean | null;
   canNominateForDaily: boolean;
+  // RC-01: App.tsx's one explicit catalog-readiness signal - see Home.tsx's
+  // doc comment on the identically-named prop. Only drives the shell-level
+  // banner Retry below (scoped to visibleMode !== "home" - Home already
+  // owns its own dedicated "Could not load challenges." + Retry, and both
+  // rendering at once for the same failure is exactly the doubled-up,
+  // confusing-screen texture this package exists to fix).
+  catalogStatus: CatalogStatus;
   challenges: Challenge[];
   challengesView: ChallengesView;
   identitySession: VGamesIdentitySession | null;
@@ -131,6 +140,10 @@ export default function AppShell({
   // "Honest You" (State B, spec §2.3): routes through the ghost-loss guard.
   onPlayAsSomeoneElse: () => void;
   onRaceChallenge: (challengeId: string) => void;
+  // RC-01: retries the App-level catalog fetch (same callback RaceFlow's
+  // own recovery-gate Retry and Home's new failed-catalog Retry both use) -
+  // offered here only in the shell-level banner below.
+  onRetryCatalog: () => void;
   onSelectMode: (mode: ModeKey) => void;
   // "Honest You" (State C, spec §2.4): opens the sheet on Log in, no
   // pre-clear.
@@ -278,6 +291,13 @@ export default function AppShell({
       </header>
 
       {bannerError ? <p className="error-banner" role="alert">{bannerError}</p> : null}
+      {/* RC-01 (Judge A amend #2 / Judge B amend #3): scoped away from Home,
+          which already owns its own dedicated failed-catalog empty state -
+          rendering both here would stack two "couldn't load / Retry" blocks
+          for the exact same failure on the tab most visitors land on. */}
+      {catalogStatus === "failed" && visibleMode !== "home" ? (
+        <button type="button" onClick={onRetryCatalog}>Retry</button>
+      ) : null}
       {bannerNotice ? <p className="run-notice" role="status">{bannerNotice}</p> : null}
       {storageBlockedNotice ? (
         <p className="run-notice storage-blocked-notice" role="status">
@@ -302,6 +322,7 @@ export default function AppShell({
           <Home
             accountStats={accountStats}
             apiClient={apiClient}
+            catalogStatus={catalogStatus}
             challenges={challenges}
             hero={homeHero}
             identityAccountId={identitySession?.accountId ?? null}
@@ -310,6 +331,7 @@ export default function AppShell({
             onGoToBoards={onGoToBoardsFor}
             onOpenChallenge={onOpenChallengeDetail}
             onRaceChallenge={onRaceChallenge}
+            onRetryCatalog={onRetryCatalog}
             onShowChallenges={() => onSelectMode("challenges")}
             playAnotherSuggestion={playAnotherSuggestion}
             raceBusy={authBusy}

@@ -672,6 +672,13 @@ function errorCode(caught: unknown): string | null {
     : null;
 }
 
+// RC-01 (Judge A amend): prefer `fallback` over the caught error's own
+// message whenever the server tagged it `internal_error` - see App.tsx's
+// identical copy of this helper for the full rationale (worker.ts's generic
+// catch-all "Something went wrong." is never useful to show verbatim, and
+// checking `.code` via the existing errorCode() helper above - rather than
+// comparing message text - survives that server-side copy ever changing).
 function errorMessage(caught: unknown, fallback: string) {
+  if (errorCode(caught) === "internal_error") return fallback;
   return caught instanceof Error ? caught.message : fallback;
 }

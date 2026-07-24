@@ -11,7 +11,7 @@ import {
 import { dailyFlavorBadgeText } from "../domain/dailyEditorial";
 import { formatTimeAndClicks } from "../domain/formatting";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
-import type { AccountStats, Challenge } from "../domain/types";
+import type { AccountStats, CatalogStatus, Challenge } from "../domain/types";
 import type { ChallengeBoardResponse } from "../server/contracts";
 import { useDailyCountdown } from "../hooks/useDailyCountdown";
 import { ShareResultButton } from "../race/shared";
@@ -59,6 +59,7 @@ type DailyState = "not-attempted" | "dnf" | "finished";
 export default function Home({
   accountStats,
   apiClient,
+  catalogStatus,
   challenges,
   hero,
   identityAccountId,
@@ -67,6 +68,7 @@ export default function Home({
   onOpenChallenge,
   onCreateRandomChallenge,
   onRaceChallenge,
+  onRetryCatalog,
   onShowChallenges,
   playAnotherSuggestion,
   raceBusy,
@@ -82,6 +84,12 @@ export default function Home({
   // showing a placeholder number.
   accountStats: AccountStats | null;
   apiClient: VWikiRaceApiClient;
+  // RC-01: App.tsx's one explicit catalog-readiness signal - only consulted
+  // in the pre-hero empty state below (the `!hero || !heroChallenge` branch
+  // is otherwise safely gated: a stale-but-usable catalog surviving a later
+  // background refetch failure keeps `hero` truthy, so this never
+  // interrupts a working Home).
+  catalogStatus: CatalogStatus;
   challenges: Challenge[];
   hero: HomeHeroSelection | null;
   identityAccountId: string | null;
@@ -94,6 +102,10 @@ export default function Home({
   onOpenChallenge: (challengeId: string) => void;
   onCreateRandomChallenge: () => void;
   onRaceChallenge: (challengeId: string) => void;
+  // RC-01: retries the App-level catalog fetch (same callback RaceFlow's
+  // own recovery-gate Retry already uses) - offered here only in the
+  // catalogStatus === "failed" empty state below.
+  onRetryCatalog: () => void;
   onShowChallenges: () => void;
   // Increment 5 (spec: "Home post-play 'Got a few more minutes?' card...
   // uses the suggestion endpoint"): centrally fetched in App.tsx (like
@@ -179,11 +191,23 @@ export default function Home({
   const countdownText = useDailyCountdown({ active: Boolean(hero) && hero?.kind !== "default" });
 
   if (!hero || !heroChallenge) {
+    // RC-01 (owner-proxy ruling): the stuck screen the owner photographed
+    // must be unreachable - a settled catalog failure ALWAYS offers a way
+    // out, instead of leaving this bare "Loading" heading up forever.
+    // catalogStatus === "loading" (the fetch is still in flight, or hasn't
+    // settled failed yet) keeps the original heading unchanged.
     return (
       <section className="home-layout">
         <section className="empty-state">
           <span>Challenge</span>
-          <h2>Loading challenge catalog</h2>
+          {catalogStatus === "failed" ? (
+            <>
+              <h2>Could not load challenges.</h2>
+              <button type="button" onClick={onRetryCatalog}>Retry</button>
+            </>
+          ) : (
+            <h2>Loading challenge catalog</h2>
+          )}
         </section>
       </section>
     );
