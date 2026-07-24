@@ -400,6 +400,17 @@ export default function App({
   const leaderboardRequest = useRef(0);
   const statsRequest = useRef(0);
   const suggestionRequest = useRef(0);
+  // RC-04 (stale-while-revalidate): the identity token each effect last
+  // fetched FOR - not just "did `identitySession` change reference"
+  // (identitySessionsEqual already lets a content-identical cached-session
+  // re-read through unchanged, but a real display-name update on the SAME
+  // account still produces a new `identitySession` object). Only an actual
+  // token change (login/switch/logout) is the correctness-bug case where
+  // stale numbers must be cleared; every other retrigger - a
+  // `statsRefreshVersion` bump after a race ends, or a benign session
+  // content refresh - keeps last-good data on screen while revalidating.
+  const statsIdentityTokenRef = useRef<string | null>(null);
+  const suggestionIdentityTokenRef = useRef<string | null>(null);
   // Increment 5 (spec: "a per-account concurrency cap of 1 in-flight
   // request... Disable while in flight (no double-fire)") - one lock shared
   // by every entry point (Browse's bottom action, Home's and Results'
@@ -418,6 +429,16 @@ export default function App({
   const recoveredToken = useRef<string | null>(null);
   const challengeLockRef = useRef(false);
   const startLockRef = useRef(false);
+  // RC-04: latest-ref mirror of `selectedChallengeId`, assigned
+  // unconditionally in the render body below (never only from inside the
+  // catalog effect) - selection also changes via openChallengeDetail,
+  // openRacePreviewFor, the popstate handler, and the locked-challenge pin
+  // effect, all of which bypass the catalog effect entirely. An
+  // effect-local copy would go stale the moment any of those fire, and the
+  // catalog effect's own "did the id actually change" comparison below
+  // would then see a spurious mismatch against a selection the player
+  // already navigated to/from.
+  const selectedChallengeIdRef = useRef<string | null>(null);
   const loginRequestLock = useRef(false);
   // QF-07: same synchronous-ref double-fire guard `login` already has
   // (`authBusy` alone has a real window before re-render where a second
@@ -478,6 +499,7 @@ export default function App({
     !["idle", "completed"].includes(race.phase) || Boolean(race.recoveryRun);
   challengeLockRef.current = challengeIsLocked;
   startLockRef.current = startIsLocked;
+  selectedChallengeIdRef.current = selectedChallengeId;
   // RC-07 Step 3: the single place owning the "?challenge= iff Detail-or-
   // locked-race"/Back-ladder-depth invariants for every app-initiated
   // navigation - see useNavigationIntents.ts's own doc comment for the
@@ -704,10 +726,34 @@ export default function App({
           requestedChallengeId,
           todayUtc: currentCentralDate,
         });
-        setSelectedChallengeId(nextChallenge?.id ?? null);
-        setLeaderboardProjection(nextChallenge
-          ? { challengeId: nextChallenge.id, rows: [] }
-          : null);
+        const nextChallengeId = nextChallenge?.id ?? null;
+        // RC-04 (stale-while-revalidate): this whole effect re-runs on
+        // every background catalog refresh (focus/visibilitychange/5am-drop
+        // via queueCatalogRefresh) - the common case is the SAME resolved
+        // challenge as before. Only touch selection/leaderboard state when
+        // the id actually changed, so an already-populated leaderboard
+        // keeps rendering its last-good rows instead of blanking to `[]`
+        // while the fresh `listLeaderboard` call further down is in
+        // flight - it still swaps atomically once that resolves,
+        // unconditionally, regardless of this guard. Also skip
+        // re-selection entirely whenever a race is locked in
+        // (challengeLockRef.current) - even an id CHANGE here must not
+        // touch selectedChallengeId mid-race: the freshly refetched catalog
+        // can occasionally miss the currently-locked challenge (an
+        // isActive flip, a catalog window/pagination edge), and
+        // re-selecting under it would feed a wrong-id frame into
+        // useTargetPreview, resetting an already-ready preview back to "not
+        // ready" (state-machine#6) - the locked-challenge pin effect below
+        // is the one place that owns selection during a lock. The
+        // URL-sync block right after this still runs unconditionally off
+        // `nextChallenge` itself - it's idempotent and load-bearing for the
+        // B1 invariant, and must not be swallowed by this short-circuit.
+        if (!challengeLockRef.current && nextChallengeId !== selectedChallengeIdRef.current) {
+          setSelectedChallengeId(nextChallengeId);
+          setLeaderboardProjection(nextChallenge
+            ? { challengeId: nextChallenge.id, rows: [] }
+            : null);
+        }
         const requestedIdHonored = Boolean(
           requestedChallengeId && nextChallenge && requestedChallengeId === nextChallenge.id,
         );
@@ -939,7 +985,18 @@ export default function App({
     if (!identitySession) return;
     const token = identitySession.token;
     const request = ++statsRequest.current;
-    setAccountStatsProjection({ token, stats: null });
+    // RC-04: only blank the on-screen stats when this fetch is for a
+    // DIFFERENT identity than the last one this effect fetched for (a
+    // real login/switch, or the initial cold load) - the correctness-bug
+    // case where stale numbers from a different account must never show.
+    // A `statsRefreshVersion` bump for the SAME token (a race just ended)
+    // revalidates in the background and swaps the totals in atomically on
+    // success, leaving the previous numbers on screen until then.
+    const identityChanged = statsIdentityTokenRef.current !== token;
+    statsIdentityTokenRef.current = token;
+    if (identityChanged) {
+      setAccountStatsProjection({ token, stats: null });
+    }
     void apiClient.getAccountStats(identitySession.token)
       .then((stats) => {
         if (request === statsRequest.current) {
@@ -968,12 +1025,26 @@ export default function App({
   useEffect(() => {
     if (!identitySession) {
       setPlayAnotherSuggestion({ status: "loading" });
+      suggestionIdentityTokenRef.current = null;
       return;
     }
     let cancelled = false;
     const request = ++suggestionRequest.current;
     const token = identitySession.token;
-    setPlayAnotherSuggestion({ status: "loading" });
+    // RC-04 (Judge B amend 1): PlayAnotherSuggestionState carries no token
+    // field to derive-filter on at render time the way accountStats does,
+    // so the identity-change carve-out has to live here instead - reset to
+    // "loading" whenever the identity token changed since the suggestion
+    // currently in state was fetched (login/switch/logout), OR whenever
+    // there's nothing worth keeping on screen yet (not already "ready").
+    // A `statsRefreshVersion` bump for the SAME token with a "ready"
+    // suggestion already in state keeps rendering that stale suggestion
+    // until the replacement arrives.
+    const identityChanged = suggestionIdentityTokenRef.current !== token;
+    suggestionIdentityTokenRef.current = token;
+    if (identityChanged || playAnotherSuggestion.status !== "ready") {
+      setPlayAnotherSuggestion({ status: "loading" });
+    }
     void (async () => {
       try {
         const suggested = await apiClient.getPlayAnotherSuggestion(token);

@@ -512,6 +512,338 @@ describe("VWiki Race app", () => {
     expect(screen.queryByRole("region", { name: /challenge detail/i })).toBeNull();
   });
 
+  // RC-04 (stale-while-revalidate, extending the B1 regression coverage
+  // above per Judge A amendment 1): a background catalog refresh
+  // (focus/visibilitychange) with the SAME resolved challenge must never
+  // blank `leaderboardProjection` to `[]` while the fresh `listLeaderboard`
+  // call is in flight - only when it actually resolves does the swap
+  // happen. Challenge Detail's "Your history" content and its `pathsUnlocked`
+  // -gated "View graph" button both derive straight off that projection
+  // (ChallengeDetail.tsx), so a spurious blank there is the clearest,
+  // most literal reading of acceptance criterion 1's "no frame renders
+  // with the 'Your history' panel or View-graph button unmounted when they
+  // were mounted before the focus event" - `pathsUnlocked` in particular
+  // flips straight to `false` (unmounting "View graph") the instant
+  // `leaderboard` reads empty.
+  it("RC-04: keeps Challenge Detail's Your-history content and View-graph button mounted through a focus/visibilitychange catalog refresh with an unchanged selection - swaps in the fresh rows once the refetch resolves, never blanking first", async () => {
+    const staleCompleted = leaderboardRow();
+    const staleDnf = leaderboardRow({
+      rank: 2,
+      runId: "run-dnf",
+      status: "abandoned",
+      elapsedMs: 15_000,
+      clickCount: 2,
+      completedAt: undefined,
+      abandonedAt: "2026-07-14T01:02:15.000Z",
+    });
+    const freshDnf = leaderboardRow({
+      rank: 3,
+      runId: "run-dnf-2",
+      status: "abandoned",
+      elapsedMs: 20_000,
+      clickCount: 3,
+      completedAt: undefined,
+      abandonedAt: "2026-07-14T01:03:00.000Z",
+    });
+    const baseFetch = createFetchMock({
+      leaderboardRows: [staleCompleted, staleDnf],
+      boardByChallenge: {
+        "challenge-0001": {
+          placements: [{ accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 1_500, clickCount: 1 }],
+          dnfs: [],
+        },
+      },
+    });
+    let leaderboardCallCount = 0;
+    const deferredLeaderboard = deferredValue<Response>();
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      if (requestUrl === apiUrl("/api/v2/challenges/challenge-0001/leaderboard")) {
+        leaderboardCallCount += 1;
+        if (leaderboardCallCount > 1) return deferredLeaderboard.promise;
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #1/i }));
+
+    expect(await screen.findByRole("button", { name: "View graph" })).toBeVisible();
+    let history = screen.getByRole("region", { name: /your history/i });
+    expect(within(history).getByText("0:01 · 1 clk")).toBeVisible();
+    expect(within(history).getByText("0:15 · 2 clk")).toBeVisible();
+    expect(screen.queryByText(/haven't tried this one yet/i)).toBeNull();
+
+    // RC-03's shared read-cache serves `listLeaderboard` for 25s
+    // (LEADERBOARD_TTL_MS) - Detail's own initial fetch just populated it,
+    // so a background refresh THIS soon would be served from cache with no
+    // real network round-trip at all (nothing to observe mid-flight). Fake
+    // only `Date` (not timers) to push past that TTL, so the catalog
+    // effect's own `listLeaderboard` call is a genuine cache miss - RTL's
+    // real-timer-based `waitFor`/`findBy*` below keep working normally.
+    const realNowPlus26s = Date.now() + 26_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(realNowPlus26s);
+    try {
+      act(() => window.dispatchEvent(new Event("focus")));
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await waitFor(() => expect(leaderboardCallCount).toBe(2));
+
+      // Still mid-refresh - the refetch is deliberately parked on
+      // `deferredLeaderboard`. Nothing below should have moved yet.
+      expect(screen.getByRole("button", { name: "View graph" })).toBeVisible();
+      history = screen.getByRole("region", { name: /your history/i });
+      expect(within(history).getByText("0:01 · 1 clk")).toBeVisible();
+      expect(within(history).getByText("0:15 · 2 clk")).toBeVisible();
+      expect(screen.queryByText(/haven't tried this one yet/i)).toBeNull();
+
+      deferredLeaderboard.resolve(jsonResponse({ leaderboard: [staleCompleted, staleDnf, freshDnf] }));
+      await act(async () => {
+        await deferredLeaderboard.promise;
+      });
+
+      history = await screen.findByRole("region", { name: /your history/i });
+      expect(within(history).getByText("0:01 · 1 clk")).toBeVisible();
+      expect(within(history).getByText("0:15 · 2 clk")).toBeVisible();
+      expect(within(history).getByText("0:20 · 3 clk")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // RC-04 (state-machine#6, Judge A amendment 2): the catalog effect's
+  // default-selection ladder can resolve to a DIFFERENT challenge on a
+  // background refresh (e.g. a real daily entering the catalog) even while
+  // a race is locked in on another one. Before this fix, that wrong-id
+  // frame would flow straight into `selectedChallengeId`, and because
+  // `useTargetPreview` is disabled mid-race, its own guard
+  // (`current.status === "ready" && current.challengeId === challenge.id`)
+  // would see the id mismatch and reset an already-"ready" preview to
+  // "idle" - permanently, since nothing re-fetches while disabled. This
+  // proves the catalog effect now skips re-selection entirely while
+  // `challengeLockRef.current` is true, so the wrong-id frame never
+  // happens in the first place.
+  it("RC-04 (state-machine#6): a background catalog refresh that would otherwise re-select a different default challenge never resets the target preview to 'not ready' mid-race", async () => {
+    const [challengeOne] = twoChallenges();
+    const baseFetch = createFetchMock({ challenges: [challengeOne] });
+    let catalogCallCount = 0;
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      const method = init?.method ?? "GET";
+      if (requestUrl === apiUrl("/api/v2/challenges") && (method === undefined || method === "GET")) {
+        catalogCallCount += 1;
+        if (catalogCallCount > 1) {
+          return Promise.resolve(jsonResponse({
+            challenges: [
+              challengeOne,
+              dailyChallenge("challenge-today", { dailyDate: "2026-07-15", start: "Mars", target: "Water" }),
+            ],
+          }));
+        }
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => "2026-07-15"}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+
+    const targetChip = screen.getByRole("button", { name: /target: fruit/i });
+    await user.click(targetChip);
+    expect(await screen.findByText(/seed-bearing structure/i)).toBeVisible();
+    await user.click(targetChip);
+
+    act(() => window.dispatchEvent(new Event("focus")));
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(() => expect(catalogCallCount).toBe(2));
+
+    // Still racing the SAME challenge - a real daily entering the catalog
+    // mid-race never touched `selectedChallengeId`.
+    expect(screen.getByRole("button", { name: /target: fruit/i })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /target: fruit/i }));
+    expect(await screen.findByText(/seed-bearing structure/i)).toBeVisible();
+    expect(screen.queryByText(/was not ready when this run began/i)).toBeNull();
+  });
+
+  // RC-04 (Risk section: "the id-comparison ref must not suppress
+  // legitimate new-daily selection"): the flip side of the guard above -
+  // when the resolved default challenge genuinely changes (not locked) the
+  // selection must still update. Simulated here as a plain `todayUtc`
+  // day-flip + a background refresh (the same trigger the 5:00 AM Central
+  // QF-06 self-heal timer ultimately funnels through), observed via
+  // Browse's own `aria-pressed` on its catalog cards - today's daily is
+  // pinned as standing chrome ABOVE that list (QF-03 dedup), so whichever
+  // day is "today" is never itself checkable there; the OTHER day's card
+  // is. If the id-changed branch were wrongly suppressed, day 1 would
+  // still read `aria-pressed="true"` once it re-enters the list post-
+  // rollover instead of yielding to day 2.
+  it("RC-04: a simulated 5am rollover (the day changes, then a background refresh fires) still updates the catalog's default selection to the new daily", async () => {
+    let currentDay = "2026-07-17";
+    const challengeDay1 = dailyChallenge("challenge-day1", { dailyDate: "2026-07-17", start: "Apple", target: "Fruit" });
+    const challengeDay2 = dailyChallenge("challenge-day2", { dailyDate: "2026-07-18", start: "Mars", target: "Water" });
+    const fetchImpl = createFetchMock({ challenges: [challengeDay1, challengeDay2] });
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={fetchImpl}
+        storage={claimedStorage()}
+        todayUtc={() => currentDay}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    await waitFor(() => expect(challengeCatalogCalls(fetchImpl)).toBe(1));
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+    expect(screen.getByRole("button", { name: /daily 2026-07-18/i })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: /daily 2026-07-17/i })).toBeNull();
+
+    currentDay = "2026-07-18";
+    act(() => window.dispatchEvent(new Event("focus")));
+    await waitFor(() => expect(challengeCatalogCalls(fetchImpl)).toBe(2));
+
+    expect(await screen.findByRole("button", { name: /daily 2026-07-17/i })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: /daily 2026-07-18/i })).toBeNull();
+  });
+
+  // RC-04 (change 3, Judge B amendment 1): the same stale-while-revalidate
+  // treatment for the account-stats and play-another-suggestion effects -
+  // a `statsRefreshVersion` bump for the SAME identity (finishing a race)
+  // must revalidate in the background without blanking either one first.
+  it("RC-04: does not blank Results' Play-another suggestion while it revalidates after finishing a race", async () => {
+    const [daily, other] = twoChallenges();
+    const baseFetch = createFetchMock({
+      challenges: [daily, other],
+      playAnotherSuggestion: other,
+    });
+    let suggestionCallCount = 0;
+    const deferredSuggestion = deferredValue<Response>();
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      if (requestUrl === apiUrl("/api/v2/challenges/suggestion")) {
+        suggestionCallCount += 1;
+        if (suggestionCallCount > 1) return deferredSuggestion.promise;
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+
+    await user.click(screen.getByRole("link", { name: /fruit/i }));
+    expect(await screen.findByText(/you reached it/i)).toBeVisible();
+
+    // The suggestion was already "ready" (the pre-race proactive fetch)
+    // before the finish - RC-04 means landing on Results shows it
+    // immediately, not a loading gap.
+    const cardBefore = screen.getByRole("region", { name: /play another challenge/i });
+    expect(within(cardBefore).getByRole("button", { name: /mars → water/i })).toBeVisible();
+
+    await waitFor(() => expect(suggestionCallCount).toBe(2));
+
+    // Still revalidating (parked on `deferredSuggestion`) - the previously-
+    // loaded suggestion button must still be there, not swapped out for the
+    // bare "Browse all challenges" link alone.
+    const cardDuring = screen.getByRole("region", { name: /play another challenge/i });
+    expect(within(cardDuring).getByRole("button", { name: /mars → water/i })).toBeVisible();
+
+    deferredSuggestion.resolve(jsonResponse({ challenge: other }));
+    await act(async () => {
+      await deferredSuggestion.promise;
+    });
+
+    const cardAfter = screen.getByRole("region", { name: /play another challenge/i });
+    expect(within(cardAfter).getByRole("button", { name: /mars → water/i })).toBeVisible();
+  });
+
+  // RC-04 (change 2 + Risk section: "never across an identity change"):
+  // covers BOTH halves in one flow - Home's streak/trend row stays exactly
+  // as it was through a same-token `statsRefreshVersion` revalidation
+  // (finishing a race), then clears immediately (not stale) the instant
+  // the identity itself changes via logout. `StreakTrendRow` is the
+  // cleanest surface for this: unlike Play-another, it renders
+  // unconditionally on Home regardless of the daily's finished/DNF/fresh
+  // state, so there's no confound from `dailyState` also resetting on
+  // logout.
+  it("RC-04: keeps Home's streak row exactly as-is through a same-identity stats refresh after finishing a race, then clears it immediately on logout", async () => {
+    const baseFetch = createFetchMock({ accountDailyStreak: 5 });
+    let statsCallCount = 0;
+    const deferredStats = deferredValue<Response>();
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      if (requestUrl === apiUrl("/api/v2/accounts/me/stats")) {
+        statsCallCount += 1;
+        if (statsCallCount > 1) return deferredStats.promise;
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    expect(await screen.findByText(/🔥 5-day streak/)).toBeVisible();
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    await user.click(screen.getByRole("link", { name: /fruit/i }));
+    expect(await screen.findByText(/you reached it/i)).toBeVisible();
+
+    await waitFor(() => expect(statsCallCount).toBe(2));
+
+    // Results (a full-screen takeover) has no bottom nav - its own "Home"
+    // link is unambiguous here.
+    await user.click(await screen.findByRole("button", { name: /^home$/i }));
+    // Still revalidating (parked on `deferredStats`) - the OLD streak stays
+    // on screen, not blanked to the "no stats yet" state.
+    expect(screen.getByText(/🔥 5-day streak/)).toBeVisible();
+    // Back in the app shell now - the bottom nav has its OWN "Home" button,
+    // so every later same-text query needs to scope to it explicitly.
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+
+    deferredStats.resolve(jsonResponse({
+      stats: {
+        totals: {
+          attempts: 0, completed: 0, abandoned: 0, timedCompleted: 0,
+          totalClicks: 0, bestClicks: null, bestElapsedMs: null,
+          averageClicks: 0, averageElapsedMs: 0,
+        },
+        topStarts: [], topTargets: [], mostVisited: [],
+        dailyStreak: 6,
+        trend30: { avgPlacement: null, playedCount: 0, ranked: false, guard: 10 },
+      },
+    }));
+    await act(async () => {
+      await deferredStats.promise;
+    });
+    expect(await screen.findByText(/🔥 6-day streak/)).toBeVisible();
+
+    // Now the identity itself changes (logout) - this is the one case the
+    // owner-proxy ruling carves out: stale numbers must NOT survive it.
+    await user.click(within(nav).getByRole("button", { name: "You" }));
+    await user.click(await screen.findByRole("button", { name: /^log out$/i }));
+    await user.click(within(nav).getByRole("button", { name: "Home" }));
+
+    expect(screen.getByText("Start your streak today")).toBeVisible();
+    expect(screen.queryByText(/day streak/i)).toBeNull();
+  });
+
   it("prompts for identity before starting when no session exists", async () => {
     const storage = memoryStorage();
     const fetchImpl = createFetchMock();
