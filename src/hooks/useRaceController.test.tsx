@@ -642,6 +642,152 @@ describe("useRaceController", () => {
     expect(result.current.article).toEqual(apple);
   });
 
+  describe("RC-07 Step 2: dnfResult folded into RaceState", () => {
+    it("folds a DNF snapshot into race state on a genuine >=1-click abandon", async () => {
+      const recordClick = vi.fn(async () => ({
+        transition: { runId: "run-1", clickCount: 1, runStatus: "active" as const },
+      }));
+      const abandonRun = vi.fn(async () => ({ runId: "run-1", runStatus: "abandoned" as const, elapsedMs: 8_000 }));
+      const api = apiClient({ recordClick, abandonRun });
+      const gateway = wikiGateway({ Apple: apple, Fruit: fruit });
+      const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+      await act(async () => { await result.current.start(challenge, "token"); });
+      await act(async () => { await result.current.followLink("Fruit", "fruit", "token"); });
+      expect(result.current.phase).toBe("active");
+
+      await act(async () => { await result.current.endRun("token"); });
+
+      expect(result.current.phase).toBe("idle");
+      expect(result.current.dnfResult).toEqual({
+        challenge,
+        clicks: 1,
+        elapsedMs: 8_000,
+        runId: "run-1",
+      });
+    });
+
+    // Judge A amend 1(a): Recovery's "End Old Run" never folds into a DNF
+    // Results screen, regardless of how many clicks the stale run accepted
+    // server-side - there's no live local session/path to show it from.
+    it("excludes a recovery end from dnfResult even with an accepted click count", async () => {
+      const legacyRun = { ...activeRun(), protocolVersion: 1 as const, clickCount: 3 };
+      const abandonRun = vi.fn(async () => ({ runId: "run-1", runStatus: "abandoned" as const }));
+      const api = apiClient({ getActiveRun: vi.fn(async () => legacyRun), abandonRun });
+      const gateway = wikiGateway({});
+      const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+      await act(async () => { await result.current.recoverActiveRun([challenge], "token"); });
+      expect(result.current.recoveryRun?.clickCount).toBe(3);
+
+      await act(async () => { await result.current.endRun("token", 1); });
+
+      expect(result.current.dnfResult).toBeNull();
+    });
+
+    // Judge A amend 1(b) / Judge B amend 2: the `clicks > 0` DISPLAY gate,
+    // distinct from (and smaller than) FB-7's MIN_COUNTED_DNF_CLICKS
+    // board-visibility threshold, which App.tsx's confirmEndRun still owns
+    // separately.
+    it("excludes a 0-click voluntary end from dnfResult (FB-7's display gate)", async () => {
+      const abandonRun = vi.fn(async () => ({ runId: "run-1", runStatus: "abandoned" as const }));
+      const api = apiClient({ abandonRun });
+      const gateway = wikiGateway({ Apple: apple });
+      const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+      await act(async () => { await result.current.start(challenge, "token"); });
+
+      await act(async () => { await result.current.endRun("token"); });
+
+      expect(result.current.dnfResult).toBeNull();
+    });
+
+    // Judge A amend 1(c) / PKG-03: the folded snapshot must prefer the
+    // abandon response's own server-computed elapsedMs over the client's
+    // pre-call timer reading, same as the bare outcome.elapsedMs already
+    // does (see "surfaces the server's elapsedMs..." above) - this pins it
+    // for the folded VALUE players actually see on the DNF Results screen.
+    it("prefers the server's elapsedMs for the folded dnfResult, not the client's pre-call timer reading", async () => {
+      const recordClick = vi.fn(async () => ({
+        transition: { runId: "run-1", clickCount: 1, runStatus: "active" as const },
+      }));
+      const abandonRun = vi.fn(async () => ({ runId: "run-1", runStatus: "abandoned" as const, elapsedMs: 9_200 }));
+      const api = apiClient({ recordClick, abandonRun });
+      const gateway = wikiGateway({ Apple: apple, Fruit: fruit });
+      const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+      await act(async () => { await result.current.start(challenge, "token"); });
+      await act(async () => { await result.current.followLink("Fruit", "fruit", "token"); });
+
+      await act(async () => { await result.current.endRun("token"); });
+
+      expect(result.current.dnfResult?.elapsedMs).toBe(9_200);
+    });
+
+    it("falls back to the client-side elapsedMs reading in the folded dnfResult when an abandon response omits one", async () => {
+      const recordClick = vi.fn(async () => ({
+        transition: { runId: "run-1", clickCount: 1, runStatus: "active" as const, elapsedMs: 4_000 },
+      }));
+      const abandonRun = vi.fn(async () => ({ runId: "run-1", runStatus: "abandoned" as const }));
+      const api = apiClient({ recordClick, abandonRun });
+      const gateway = wikiGateway({ Apple: apple, Fruit: fruit });
+      const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+      await act(async () => { await result.current.start(challenge, "token"); });
+      await act(async () => { await result.current.followLink("Fruit", "fruit", "token"); });
+
+      await act(async () => { await result.current.endRun("token"); });
+
+      expect(result.current.dnfResult?.elapsedMs).toBe(4_000);
+    });
+
+    // Judge B amend 1: resetCompleted's guard used to be a bare
+    // `phase !== "completed"` check - a plain abandon lands on phase
+    // "idle" with dnfResult set, which that guard would silently no-op on.
+    it("resetCompleted also clears an idle dnfResult, not just a completed run", async () => {
+      const recordClick = vi.fn(async () => ({
+        transition: { runId: "run-1", clickCount: 1, runStatus: "active" as const },
+      }));
+      const abandonRun = vi.fn(async () => ({ runId: "run-1", runStatus: "abandoned" as const }));
+      const api = apiClient({ recordClick, abandonRun });
+      const gateway = wikiGateway({ Apple: apple, Fruit: fruit });
+      const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+      await act(async () => { await result.current.start(challenge, "token"); });
+      await act(async () => { await result.current.followLink("Fruit", "fruit", "token"); });
+      await act(async () => { await result.current.endRun("token"); });
+      expect(result.current.phase).toBe("idle");
+      expect(result.current.dnfResult).not.toBeNull();
+
+      let didReset = false;
+      act(() => { didReset = result.current.resetCompleted(); });
+
+      expect(didReset).toBe(true);
+      expect(result.current.dnfResult).toBeNull();
+      expect(result.current.phase).toBe("idle");
+    });
+
+    // Judge A amend 4 / Judge B amend 3: the reachable-today "ended a
+    // recovery run with no local session, server reported completed
+    // instead of abandoned" combination - see deriveScreen.test.ts for the
+    // screen-selection side of this same scenario.
+    it("produces phase completed with a null session when a stale recovery run's abandon call reports completed", async () => {
+      const legacyRun = { ...activeRun(), protocolVersion: 1 as const, clickCount: 2 };
+      const abandonRun = vi.fn(async () => ({
+        runId: "run-1",
+        runStatus: "completed" as const,
+        completedAt: "2026-07-15T00:00:01.500Z",
+        elapsedMs: 1_500,
+      }));
+      const api = apiClient({ getActiveRun: vi.fn(async () => legacyRun), abandonRun });
+      const gateway = wikiGateway({});
+      const { result } = renderHook(() => useRaceController({ apiClient: api, gateway }));
+      await act(async () => { await result.current.recoverActiveRun([challenge], "token"); });
+      expect(result.current.session).toBeNull();
+
+      await act(async () => { await result.current.endRun("token", 1); });
+
+      expect(result.current.phase).toBe("completed");
+      expect(result.current.session).toBeNull();
+      expect(result.current.recoveryRun).toBeNull();
+      expect(result.current.dnfResult).toBeNull();
+    });
+  });
+
   it("returns typed unauthorized outcomes without losing the pending intent context", async () => {
     const api = apiClient({ startRun: vi.fn(async () => { throw new ApiRequestError("unauthorized", "expired", 401); }) });
     const gateway = wikiGateway({ Apple: apple });

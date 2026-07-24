@@ -9,6 +9,16 @@ import { useElapsedDecisionTime } from "./useElapsedDecisionTime";
 
 export type RacePhase = "idle" | "preparing" | "active" | "syncing" | "completed" | "abandoning";
 
+// RC-07 Step 2: folded in from App.tsx's own App-level `dnfResult` state -
+// see endRun's abandoned branch below for where it's constructed, and
+// RaceFlow.tsx (its sole consumer besides App.tsx) for where it's read.
+export interface DnfResultSnapshot {
+  challenge: Challenge;
+  clicks: number;
+  elapsedMs: number;
+  runId: string | null;
+}
+
 export type StartOutcome =
   | { status: "started"; challengeId: string }
   | { status: "recovery-required"; challengeId: string; run: ActiveRunRecord | null }
@@ -81,6 +91,11 @@ interface RaceState {
   error: string | null;
   leaderboardContext: LeaderboardContext | null;
   recoveryRun: ActiveRunRecord | null;
+  // RC-07 Step 2: single-sourced here instead of a parallel App-level
+  // `dnfResult` state the caller had to hand-sync at 6+ call sites - see
+  // endRun's abandoned branch for construction and resetCompleted for the
+  // one place it's cleared alongside everything else.
+  dnfResult: DnfResultSnapshot | null;
 }
 
 const initialState: RaceState = {
@@ -95,6 +110,7 @@ const initialState: RaceState = {
   error: null,
   leaderboardContext: null,
   recoveryRun: null,
+  dnfResult: null,
 };
 const defaultNow = () => performance.now();
 const defaultObservedAt = () => new Date().toISOString();
@@ -495,6 +511,24 @@ export function useRaceController(options: RaceControllerOptions) {
     ) {
       return { status: "ignored" };
     }
+    // RC-07 Step 2 (Judge A amend 1 - ported from App.tsx's confirmEndRun,
+    // NOT from the "completed" branch a few lines below, which is unrelated
+    // to DNF): Recovery's "End Old Run" (a stale/legacy run from this or
+    // another device) has no live session/path to show - it resolves
+    // straight back to the shell, never a DNF Results screen. Snapshotted
+    // BEFORE the abandon call resolves, at the same instant App.tsx's
+    // confirmEndRun used to read race.elapsedMs, so a mid-call render can't
+    // skew the client-side reading below.
+    const isRecoveryEnd = Boolean(snapshot.recoveryRun);
+    const acceptedClickCount = snapshot.recoveryRun?.clickCount ?? snapshot.session?.clicks ?? 0;
+    const dnfSnapshot: DnfResultSnapshot | null = !isRecoveryEnd && snapshot.challenge
+      ? {
+          challenge: snapshot.challenge,
+          clicks: acceptedClickCount,
+          elapsedMs: snapshot.run?.elapsedMs ?? timer.elapsedMs,
+          runId: snapshot.run?.id ?? null,
+        }
+      : null;
     const operation = beginOperation();
     commitState({ ...snapshot, phase: "abandoning", pendingNavigationTitle: null, error: null });
     try {
@@ -513,6 +547,9 @@ export function useRaceController(options: RaceControllerOptions) {
           recoveryRun: null,
           pendingClick: null,
           pendingNavigationTitle: null,
+          // A genuine completion is never a DNF, regardless of whatever
+          // dnfResult happened to be sitting around from a prior run.
+          dnfResult: null,
           session: snapshot.session ? {
             ...snapshot.session,
             status: "completed",
@@ -527,7 +564,28 @@ export function useRaceController(options: RaceControllerOptions) {
         });
         return { status: "completed" };
       }
-      commitState(initialState);
+      // PKG-03 (council 2026-07-19): the header/board-row time mismatch
+      // ("0:04" vs "0:05") traced to dnfSnapshot using the client's
+      // pre-call timer reading while the eventual board row reads the
+      // server's own abandoned_at-based elapsedMs. The abandon response
+      // now echoes that same server value (see AbandonRunTransition's doc
+      // comment) - prefer it here, in the SAME already-in-flight call,
+      // rather than a later, separate leaderboard refetch (which would
+      // also risk a visible number flip after the Results screen mounts).
+      // Falls back to the client snapshot only if an older/legacy response
+      // omitted it.
+      const resolvedDnfSnapshot = dnfSnapshot && response.elapsedMs !== undefined
+        ? { ...dnfSnapshot, elapsedMs: response.elapsedMs }
+        : dnfSnapshot;
+      // Judge B amend 2: this `clicks > 0` DISPLAY gate is distinct from
+      // (and smaller than) MIN_COUNTED_DNF_CLICKS/FB-7's board-visibility
+      // threshold, which App.tsx's confirmEndRun still owns separately - a
+      // single click still earns the DNF Results screen; only a genuine
+      // 0-click voluntary End Run falls back to a plain shell notice.
+      const finalDnfResult = resolvedDnfSnapshot && resolvedDnfSnapshot.clicks > 0
+        ? resolvedDnfSnapshot
+        : null;
+      commitState({ ...initialState, dnfResult: finalDnfResult });
       return { status: "abandoned", elapsedMs: response.elapsedMs };
     } catch (caught) {
       if (!isCurrent(operation, requestGeneration, mounted)) return { status: "stale" };
@@ -546,7 +604,17 @@ export function useRaceController(options: RaceControllerOptions) {
   }, [beginOperation, commitState, now, options.apiClient, options.gateway, timer]);
 
   const resetCompleted = useCallback((): boolean => {
-    if (stateRef.current.phase !== "completed") return false;
+    // Judge B amend 1: widened from a bare `phase !== "completed"` guard.
+    // A plain abandon (the non-recovery branch above) lands on phase
+    // "idle" with dnfResult possibly SET - exactly the state the DNF
+    // Results screen renders from - so a caller exiting FROM that screen
+    // (App.tsx's exitCompletedRaceTo/exitCompletedRaceToChallenge) must
+    // still be able to clear it here, not just from "completed". Reset
+    // fires whenever there's EITHER a completed run OR a folded dnfResult
+    // to clear; a genuinely idle run with nothing to show remains a no-op.
+    if (stateRef.current.phase !== "completed" && stateRef.current.dnfResult === null) {
+      return false;
+    }
     operationAbort.current?.abort();
     operationAbort.current = null;
     prewarmAbort.current?.abort();

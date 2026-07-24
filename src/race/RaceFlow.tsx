@@ -1,47 +1,53 @@
 import type { MouseEvent, ReactNode } from "react";
 import type { GameSession } from "../domain/gameSession";
 import type { Article, Challenge, LeaderboardContext } from "../domain/types";
-import type { RacePhase } from "../hooks/useRaceController";
+import type { DnfResultSnapshot, RacePhase } from "../hooks/useRaceController";
 import type { TargetPreviewState } from "../hooks/useTargetPreview";
 import type { PlayAnotherSuggestionState } from "../domain/playAnother";
 import type { VGamesIdentityStatus } from "../services/vgamesIdentity";
 import type { VWikiRaceApiClient } from "../services/vwikiRaceApiClient";
 import type { ActiveRunRecord } from "../server/trackingRepository";
+import { assertNever, type RaceScreen } from "./deriveScreen";
 import PreRacePreview from "./PreRacePreview";
 import RaceMode from "./RaceMode";
 import RaceRecoveryInterstitial from "./RaceRecoveryInterstitial";
 import RaceResults from "./RaceResults";
 
-export interface DnfResultSnapshot {
-  challenge: Challenge;
-  clicks: number;
-  elapsedMs: number;
-  runId: string | null;
-}
+// RC-07 Step 2: DnfResultSnapshot now lives in useRaceController.ts (the
+// hook owns/constructs it) - re-exported here so existing importers of
+// "./race/RaceFlow" (this component's own public surface before this
+// refactor) don't need to change their import path.
+export type { DnfResultSnapshot };
 
 /**
  * Full-screen, zero-chrome takeover for the race flow (preview -> race ->
  * results), plus the active-run recovery gate. App.tsx renders this in
- * place of the app header/tabbar/content-shell whenever the race flow is
- * engaged - see the `raceEngaged` computation there. Only routing/layout
+ * place of the app header/tabbar/content-shell whenever `deriveScreen`
+ * (../race/deriveScreen.ts) resolves to anything other than "shell" - see
+ * its own doc comment for the full precedence table. Only routing/layout
  * lives here; all business logic (starting, ending, retrying, exiting)
  * stays in App.tsx and is passed down as callbacks, per the "extract, don't
  * rewrite" brief for this increment.
  *
+ * RC-07 Step 1: `screen` is computed ONCE per App render by the shared
+ * `deriveScreen` function and switched on here - this component no longer
+ * independently re-derives "which branch am I in" from raw
+ * phase/recoveryRun/dnfResult/etc. props (the old 7-branch if/else-if
+ * ladder), it just renders whatever `screen.kind` says. The `default:
+ * assertNever(screen)` case is what makes the "TS exhaustiveness" guarantee
+ * real - see deriveScreen.ts's own doc comment.
+ *
  * Recovery-first routing (spec: "Race flow" lead paragraph): App.tsx keeps
  * the shell unmounted until recoverActiveRun has actually resolved for a
- * known session (see `recoveryPending` there). Once recoverActiveRun runs,
- * this component routes purely off its outcome: `recoveryRun` set ->
- * RaceRecoveryInterstitial; phase active-ish -> RaceMode; nothing to
- * recover -> App.tsx drops raceEngaged and the shell takes over.
+ * known session (see `recoveryPending` there, folded into `screen.kind ===
+ * "race-recovery-pending"`).
  */
 export default function RaceFlow({
+  screen,
   apiClient,
   phase,
   raceChallenge,
   recoveryRun,
-  recoveryPending,
-  showPreview,
   previewChallenge,
   targetPreview,
   session,
@@ -83,6 +89,9 @@ export default function RaceFlow({
   handleArticleClick,
   handleArticlePrewarm,
 }: {
+  // RC-07 Step 1: precomputed once per App render by deriveScreen - see
+  // this component's own doc comment above.
+  screen: RaceScreen;
   // PKG-03: Results self-fetches its own deduped board (see RaceResults.tsx)
   // instead of reading the app shell's raw per-attempt leaderboard.
   apiClient: VWikiRaceApiClient;
@@ -93,8 +102,6 @@ export default function RaceFlow({
   // challenge start kicks off preparing instead.
   raceChallenge: Challenge | null;
   recoveryRun: ActiveRunRecord | null;
-  recoveryPending: boolean;
-  showPreview: boolean;
   previewChallenge: Challenge | null;
   targetPreview: TargetPreviewState;
   session: GameSession | null;
@@ -153,130 +160,152 @@ export default function RaceFlow({
 }) {
   let body: ReactNode = null;
 
-  if (recoveryRun) {
-    body = (
-      <RaceRecoveryInterstitial
-        recoveryRun={recoveryRun}
-        phase={phase}
-        endRunDisabled={endRunIsBlocked || phase === "preparing" || phase === "abandoning"}
-        onRetryResume={onRetryRecovery}
-        onRequestEndRun={onRequestEndRun}
-      />
-    );
-  } else if (
-    phase === "preparing" || phase === "active" || phase === "syncing" || phase === "abandoning"
-  ) {
-    body = (
-      <RaceMode
-        article={article}
-        session={session}
-        elapsedMs={elapsedMs}
-        redirectedFrom={redirectedFrom}
-        pendingNavigationTitle={pendingNavigationTitle}
-        navigationRetrying={navigationRetrying}
-        pendingRetry={pendingRetry}
-        onRetryPending={onRetryPending}
-        targetPreview={targetPreview}
-        endRunDisabled={endRunIsBlocked || phase === "preparing" || phase === "abandoning"}
-        onRequestEndRun={onRequestEndRun}
-        // recoverActiveRun sets phase "preparing" before it even knows
-        // whether there's anything to recover, without ever assigning
-        // raceChallenge (unlike a fresh start, which sets it in the same
-        // commitState call as the phase flip) - so !raceChallenge here means
-        // this preparing tick is boot recovery checking, not an article load.
-        checkingActiveRun={phase === "preparing" && !raceChallenge}
-        handleArticleClick={handleArticleClick}
-        handleArticlePrewarm={handleArticlePrewarm}
-      />
-    );
-  } else if (phase === "completed" && session) {
-    body = (
-      <RaceResults
-        apiClient={apiClient}
-        article={article}
-        outcome={{ status: "completed", session, elapsedMs, leaderboardContext, runId }}
-        identityAccountId={identityAccountId}
-        identityToken={identityToken}
-        todayCentral={todayCentral}
-        identityStatus={identityStatus}
-        identityDisplayName={identityDisplayName}
-        preRaceCompletions={preRaceCompletions}
-        playAgainDisabled={authBusy}
-        playAnotherSuggestion={playAnotherSuggestion}
-        randomChallengeBusy={randomChallengeBusy}
-        randomChallengeError={randomChallengeError}
-        onCreateRandomChallenge={onCreateRandomChallenge}
-        onOpenChallenge={onOpenChallenge}
-        onPlayAgain={onPlayAgain}
-        onShowLeaderboard={onShowLeaderboard}
-        onShowChallenges={onShowChallenges}
-        onClaimIdentity={onClaimIdentity}
-        onGoHome={onGoHome}
-        handleArticleClick={handleArticleClick}
-        handleArticlePrewarm={handleArticlePrewarm}
-      />
-    );
-  } else if (dnfResult) {
-    body = (
-      <RaceResults
-        apiClient={apiClient}
-        article={null}
-        outcome={{
-          status: "dnf",
-          challenge: dnfResult.challenge,
-          clicks: dnfResult.clicks,
-          elapsedMs: dnfResult.elapsedMs,
-          runId: dnfResult.runId,
-        }}
-        identityAccountId={identityAccountId}
-        identityToken={identityToken}
-        todayCentral={todayCentral}
-        identityStatus={identityStatus}
-        identityDisplayName={identityDisplayName}
-        preRaceCompletions={preRaceCompletions}
-        playAgainDisabled={authBusy}
-        playAnotherSuggestion={playAnotherSuggestion}
-        randomChallengeBusy={randomChallengeBusy}
-        randomChallengeError={randomChallengeError}
-        onCreateRandomChallenge={onCreateRandomChallenge}
-        onOpenChallenge={onOpenChallenge}
-        onPlayAgain={onPlayAgain}
-        onShowLeaderboard={onShowLeaderboard}
-        onShowChallenges={onShowChallenges}
-        onClaimIdentity={onClaimIdentity}
-        onGoHome={onGoHome}
-        handleArticleClick={handleArticleClick}
-        handleArticlePrewarm={handleArticlePrewarm}
-      />
-    );
-  } else if (showPreview) {
-    body = previewChallenge ? (
-      <PreRacePreview
-        challenge={previewChallenge}
-        targetPreview={targetPreview}
-        startDisabled={authBusy}
-        onBack={onBackFromPreview}
-        onSeeOtherChallenges={onSeeOtherChallengesFromPreview}
-        onStart={onStartFromPreview}
-      />
-    ) : (
-      <p className="loading-text">Loading challenge...</p>
-    );
-  } else if (recoveryPending) {
-    // Spec: "On load, recovery takes priority over everything else" - App.tsx
-    // keeps this takeover engaged (raceEngaged) from the very first render
-    // whenever a cached identity might have an active run, before the
-    // catalog has even loaded enough to call recoverActiveRun. Nothing to
-    // show yet but zero chrome - no Home/nav flash while we wait. A stalled
-    // (rather than errored) catalog fetch has no exception to release the
-    // gate on its own, so Retry gives the user a manual way out instead of
-    // leaving them stuck here indefinitely.
-    body = (
-      <>
-        <p className="loading-text">Checking for an active run...</p>
-        <button type="button" onClick={onRetryCatalog}>Retry</button>
-      </>
-    );
+  switch (screen.kind) {
+    case "race-recovery-interstitial": {
+      // recoveryRun is guaranteed non-null whenever deriveScreen resolves
+      // to this kind (that's the ENTIRE gate) - the `recoveryRun &&` guard
+      // just satisfies TypeScript, which can't see across the two separate
+      // props to know that.
+      body = recoveryRun ? (
+        <RaceRecoveryInterstitial
+          recoveryRun={recoveryRun}
+          phase={phase}
+          endRunDisabled={endRunIsBlocked || phase === "preparing" || phase === "abandoning"}
+          onRetryResume={onRetryRecovery}
+          onRequestEndRun={onRequestEndRun}
+        />
+      ) : null;
+      break;
+    }
+    case "race-active": {
+      body = (
+        <RaceMode
+          article={article}
+          session={session}
+          elapsedMs={elapsedMs}
+          redirectedFrom={redirectedFrom}
+          pendingNavigationTitle={pendingNavigationTitle}
+          navigationRetrying={navigationRetrying}
+          pendingRetry={pendingRetry}
+          onRetryPending={onRetryPending}
+          targetPreview={targetPreview}
+          endRunDisabled={endRunIsBlocked || phase === "preparing" || phase === "abandoning"}
+          onRequestEndRun={onRequestEndRun}
+          // recoverActiveRun sets phase "preparing" before it even knows
+          // whether there's anything to recover, without ever assigning
+          // raceChallenge (unlike a fresh start, which sets it in the same
+          // commitState call as the phase flip) - so !raceChallenge here
+          // means this preparing tick is boot recovery checking, not an
+          // article load.
+          checkingActiveRun={phase === "preparing" && !raceChallenge}
+          handleArticleClick={handleArticleClick}
+          handleArticlePrewarm={handleArticlePrewarm}
+        />
+      );
+      break;
+    }
+    case "race-results": {
+      // session is guaranteed non-null whenever deriveScreen resolves to
+      // this kind - see its own doc comment's precedence table.
+      body = session ? (
+        <RaceResults
+          apiClient={apiClient}
+          article={article}
+          outcome={{ status: "completed", session, elapsedMs, leaderboardContext, runId }}
+          identityAccountId={identityAccountId}
+          identityToken={identityToken}
+          todayCentral={todayCentral}
+          identityStatus={identityStatus}
+          identityDisplayName={identityDisplayName}
+          preRaceCompletions={preRaceCompletions}
+          playAgainDisabled={authBusy}
+          playAnotherSuggestion={playAnotherSuggestion}
+          randomChallengeBusy={randomChallengeBusy}
+          randomChallengeError={randomChallengeError}
+          onCreateRandomChallenge={onCreateRandomChallenge}
+          onOpenChallenge={onOpenChallenge}
+          onPlayAgain={onPlayAgain}
+          onShowLeaderboard={onShowLeaderboard}
+          onShowChallenges={onShowChallenges}
+          onClaimIdentity={onClaimIdentity}
+          onGoHome={onGoHome}
+          handleArticleClick={handleArticleClick}
+          handleArticlePrewarm={handleArticlePrewarm}
+        />
+      ) : null;
+      break;
+    }
+    case "race-dnf": {
+      // dnfResult is guaranteed non-null whenever deriveScreen resolves to
+      // this kind - see its own doc comment's precedence table.
+      body = dnfResult ? (
+        <RaceResults
+          apiClient={apiClient}
+          article={null}
+          outcome={{
+            status: "dnf",
+            challenge: dnfResult.challenge,
+            clicks: dnfResult.clicks,
+            elapsedMs: dnfResult.elapsedMs,
+            runId: dnfResult.runId,
+          }}
+          identityAccountId={identityAccountId}
+          identityToken={identityToken}
+          todayCentral={todayCentral}
+          identityStatus={identityStatus}
+          identityDisplayName={identityDisplayName}
+          preRaceCompletions={preRaceCompletions}
+          playAgainDisabled={authBusy}
+          playAnotherSuggestion={playAnotherSuggestion}
+          randomChallengeBusy={randomChallengeBusy}
+          randomChallengeError={randomChallengeError}
+          onCreateRandomChallenge={onCreateRandomChallenge}
+          onOpenChallenge={onOpenChallenge}
+          onPlayAgain={onPlayAgain}
+          onShowLeaderboard={onShowLeaderboard}
+          onShowChallenges={onShowChallenges}
+          onClaimIdentity={onClaimIdentity}
+          onGoHome={onGoHome}
+          handleArticleClick={handleArticleClick}
+          handleArticlePrewarm={handleArticlePrewarm}
+        />
+      ) : null;
+      break;
+    }
+    case "race-preview": {
+      body = previewChallenge ? (
+        <PreRacePreview
+          challenge={previewChallenge}
+          targetPreview={targetPreview}
+          startDisabled={authBusy}
+          onBack={onBackFromPreview}
+          onSeeOtherChallenges={onSeeOtherChallengesFromPreview}
+          onStart={onStartFromPreview}
+        />
+      ) : (
+        <p className="loading-text">Loading challenge...</p>
+      );
+      break;
+    }
+    case "race-recovery-pending": {
+      // Spec: "On load, recovery takes priority over everything else" -
+      // App.tsx keeps this takeover engaged from the very first render
+      // whenever a cached identity might have an active run, before the
+      // catalog has even loaded enough to call recoverActiveRun. Nothing to
+      // show yet but zero chrome - no Home/nav flash while we wait. A
+      // stalled (rather than errored) catalog fetch has no exception to
+      // release the gate on its own, so Retry gives the user a manual way
+      // out instead of leaving them stuck here indefinitely.
+      body = (
+        <>
+          <p className="loading-text">Checking for an active run...</p>
+          <button type="button" onClick={onRetryCatalog}>Retry</button>
+        </>
+      );
+      break;
+    }
+    default:
+      return assertNever(screen);
   }
 
   return (

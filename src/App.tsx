@@ -48,16 +48,16 @@ import {
   exitAdminDailiesUrl,
   isAdminDailiesRoute,
   isInAppHistoryState,
-  markHomeHistoryState,
-  markInAppMode,
   readChallengeIdFromUrl,
   syncChallengeUrl,
 } from "./services/urlRouting";
 import { createWikipediaGateway } from "./services/wikipediaGateway";
 import { ApiRequestError } from "./services/apiRequest";
 import { useRaceController } from "./hooks/useRaceController";
+import { useNavigationIntents } from "./hooks/useNavigationIntents";
 import { useTargetPreview } from "./hooks/useTargetPreview";
-import RaceFlow, { type DnfResultSnapshot } from "./race/RaceFlow";
+import { deriveScreen } from "./race/deriveScreen";
+import RaceFlow from "./race/RaceFlow";
 import AppShell, { type ChallengesView, type ModeKey } from "./modes/AppShell";
 import type { BoardsSegment } from "./modes/Boards";
 import type { CreateChallengeInput } from "./modes/challenges/Browse";
@@ -326,7 +326,6 @@ export default function App({
   // this page load.
   const [storageBlocked, setStorageBlocked] = useState(false);
   const [storageNoticeDismissed, setStorageNoticeDismissed] = useState(false);
-  const [dnfResult, setDnfResult] = useState<DnfResultSnapshot | null>(null);
   const [catalogLoadFailed, setCatalogLoadFailed] = useState(false);
   // Bumped after every run-ending event (completed or abandoned) to force a
   // fresh account-stats read - the app-shell teaching gate (migration note
@@ -443,6 +442,17 @@ export default function App({
     !["idle", "completed"].includes(race.phase) || Boolean(race.recoveryRun);
   challengeLockRef.current = challengeIsLocked;
   startLockRef.current = startIsLocked;
+  // RC-07 Step 3: the single place owning the "?challenge= iff Detail-or-
+  // locked-race"/Back-ladder-depth invariants for every app-initiated
+  // navigation - see useNavigationIntents.ts's own doc comment for the
+  // full call-site inventory (migrated vs. deliberately deferred).
+  const nav = useNavigationIntents({
+    challengeLockRef,
+    setMode,
+    setChallengesView,
+    setBoardsInitialSegment,
+    setRaceStage,
+  });
   // RC-01: one explicit catalog-readiness signal for Home/AppShell, derived
   // from the existing catalogLoadFailed flag plus challenges.length.
   // 'ready' takes precedence whenever there IS a usable catalog - critical,
@@ -479,17 +489,19 @@ export default function App({
   const recoveryGatePending = identitySession !== null &&
     recoveredToken.current !== identitySession.token &&
     !catalogLoadFailed;
-  // Full-screen, zero-chrome race-flow takeover (spec: "Race flow" section).
-  // Engaged whenever the preview beat is open, the run is mid-flight in any
-  // sense (including transient preparing/syncing/abandoning and the
-  // completed results beat), an active-run recovery gate is pending or
-  // resolved-but-unaddressed, or a just-ended run is showing its DNF
-  // Results variant.
-  const raceEngaged = raceStage !== null ||
-    ["preparing", "active", "syncing", "completed", "abandoning"].includes(race.phase) ||
-    Boolean(race.recoveryRun) ||
-    Boolean(dnfResult) ||
-    recoveryGatePending;
+  // RC-07 Step 1: one precomputed screen selector replaces the old
+  // `raceEngaged` boolean (full-screen, zero-chrome race-flow takeover -
+  // spec: "Race flow" section) AND RaceFlow's own internal 7-branch
+  // if/else-if ladder - see deriveScreen.ts's doc comment for the full
+  // precedence table this preserves verbatim.
+  const screen = deriveScreen({
+    raceStage,
+    racePhase: race.phase,
+    recoveryRun: race.recoveryRun,
+    hasSession: Boolean(race.session),
+    dnfResult: race.dnfResult,
+    recoveryGatePending,
+  });
 
   const selectedChallenge =
     challenges.find((challenge) => challenge.id === selectedChallengeId) ??
@@ -739,86 +751,120 @@ export default function App({
       null;
     if (!lockedChallenge || !challengeIsLocked) return;
     setSelectedChallengeId(lockedChallenge.id);
-    syncChallengeUrl(lockedChallenge.id, "replace");
-  }, [challengeIsLocked, challenges, race.challenge, race.recoveryRun]);
+    nav.pinLockedChallenge(lockedChallenge.id);
+  }, [challengeIsLocked, challenges, nav, race.challenge, race.recoveryRun]);
+
+  // RC-07 Step 3 (Judge B amend 5): subscribes to `popstate` ONCE for the
+  // component's whole lifetime instead of re-subscribing on every
+  // dependency change (the old effect's dependency array churned on nearly
+  // every render). The handler itself is rebuilt fresh on EVERY render and
+  // stashed in a ref (a plain assignment during render, not inside an
+  // effect - the same established pattern as challengeLockRef/startLockRef
+  // above), so it always closes over the CURRENT mode/challenges/race
+  // snapshot without ever needing to resubscribe. This is the standard
+  // "latest ref" callback pattern, deliberately chosen over a bare ref that
+  // ISN'T rebuilt every render, to avoid the exact stale-closure failure
+  // mode that produced the original B1 focus-yank family (see
+  // "reacts to the CURRENT state, not state captured at mount" in
+  // App.test.tsx for a regression test exercising this across multiple
+  // transitions without a remount).
+  const popstateHandlerRef = useRef<() => void>(() => {});
+  popstateHandlerRef.current = () => {
+    // Forces a re-render even on branches below that don't otherwise
+    // touch state (e.g. entering/leaving /admin/dailies), so AppShell's
+    // own isAdminDailiesRoute() read - and every other read of
+    // window.location during this render - reflects the URL popstate
+    // just navigated to. pushState/replaceState never trigger React on
+    // their own.
+    setLocationVersion((version) => version + 1);
+    if (race.phase === "idle" && race.dnfResult) {
+      // Judge B amend 6: Back pressed while a DNF Results screen is
+      // showing was previously undefined - phase idle + dnfResult set
+      // isn't part of the locked-race pin's `challengeIsLocked` boolean,
+      // so a physical Back press used to silently rewrite mode/view state
+      // underneath a screen that never itself reacted (a live instance of
+      // the "weird, unrecoverable screen" complaint). Defined behavior:
+      // Back exits the DNF Results screen to Home, the same destination
+      // its own low-emphasis "Home" link already offers.
+      race.resetCompleted();
+      nav.goHome();
+      return;
+    }
+    const lockedChallengeId = race.challenge?.id ?? race.recoveryRun?.challengeId ?? selectedChallengeId;
+    if (challengeIsLocked) {
+      if (lockedChallengeId) nav.pinLockedChallenge(lockedChallengeId);
+      return;
+    }
+    if (isAdminDailiesRoute()) {
+      setError(null);
+      return;
+    }
+    const requestedId = readChallengeIdFromUrl();
+    const requested = challenges.find((challenge) => challenge.id === requestedId);
+    if (!requested) {
+      // Owner-approved URL policy (PUSH/REPLACE DISCIPLINE): Detail's
+      // entry and its paired "<- Challenges" close both push, so a Back
+      // step landing on a URL with no resolvable challenge id is Back OUT
+      // of Detail - close it so the view visibly follows the URL instead
+      // of silently no-opping and leaving Detail stranded on screen.
+      //
+      // Owner-approved Back ladder (item 8): exactly one demotion per
+      // physical Back press - close Detail first if it's open (above);
+      // only demote mode to Home on a LATER press, once Detail is already
+      // closed, so "Detail -> Browse -> Home" costs two presses, not one.
+      // Home itself is never touched here (mode === "home" already means
+      // there's nothing left for this handler to do - Back from Home is
+      // untouched/no-op on our end, matching "no back-trapping"). This
+      // branch is REACTING to a URL the browser already changed - unlike
+      // nav's own intents, it deliberately never re-writes history itself.
+      const wasDetail = challengesView === "detail";
+      const wasHome = mode === "home";
+      if (wasDetail) {
+        setChallengesView("browse");
+      } else {
+        if (!wasHome) setMode("home");
+        // Adversarial-review fix (2026-07-21, finding 2): this branch is
+        // the ladder's terminal rung - after it runs, the player is at
+        // Home (whether this press just got them there, or they were
+        // already there and this was the "browser-default, no back-
+        // trapping" no-op press). A Detail open/close cycle earlier in
+        // the session can still leave an extra depth-1 rung sitting
+        // directly beneath wherever the player was, separate from the
+        // one that just got replaced in place - each such leftover rung
+        // used to cost the player one more SILENT Back press (no visible
+        // change) before they could actually exit, worse than having no
+        // ladder at all. If the entry we just landed on is still one of
+        // OUR marked rungs (never the true Home floor, which is
+        // unmarked, and never a share-link's own single entry - see the
+        // "accepted as-is" note on markInAppMode), chain one more
+        // programmatic Back to collapse it immediately, so this single
+        // physical press eats every leftover rung in one go and the
+        // NEXT physical Back press genuinely exits.
+        if (isInAppHistoryState()) {
+          window.history.back();
+        }
+      }
+      return;
+    }
+    race.resetCompleted();
+    setSelectedChallengeId(requested.id);
+    // Migration note (iv): back/forward through a challenge share link
+    // lands on Detail, same as the initial load. Routed through
+    // nav.openDetail for consistency with every other Detail arrival -
+    // its own syncChallengeUrl call is a guaranteed no-op here (the
+    // browser already navigated the address bar to this exact URL).
+    nav.openDetail(requested.id);
+    setError(null);
+    void refreshLeaderboard(requested.id).catch((caught) => {
+      setError(errorMessage(caught, "Could not load the leaderboard."));
+    });
+  };
 
   useEffect(() => {
-    const onPopState = () => {
-      // Forces a re-render even on branches below that don't otherwise
-      // touch state (e.g. entering/leaving /admin/dailies), so AppShell's
-      // own isAdminDailiesRoute() read - and every other read of
-      // window.location during this render - reflects the URL popstate
-      // just navigated to. pushState/replaceState never trigger React on
-      // their own.
-      setLocationVersion((version) => version + 1);
-      const lockedChallengeId = race.challenge?.id ?? race.recoveryRun?.challengeId ?? selectedChallengeId;
-      if (challengeIsLocked) {
-        if (lockedChallengeId) syncChallengeUrl(lockedChallengeId, "replace");
-        return;
-      }
-      if (isAdminDailiesRoute()) {
-        setError(null);
-        return;
-      }
-      const requestedId = readChallengeIdFromUrl();
-      const requested = challenges.find((challenge) => challenge.id === requestedId);
-      if (!requested) {
-        // Owner-approved URL policy (PUSH/REPLACE DISCIPLINE): Detail's
-        // entry and its paired "<- Challenges" close both push, so a Back
-        // step landing on a URL with no resolvable challenge id is Back OUT
-        // of Detail - close it so the view visibly follows the URL instead
-        // of silently no-opping and leaving Detail stranded on screen.
-        //
-        // Owner-approved Back ladder (item 8): exactly one demotion per
-        // physical Back press - close Detail first if it's open (above);
-        // only demote mode to Home on a LATER press, once Detail is already
-        // closed, so "Detail -> Browse -> Home" costs two presses, not one.
-        // Home itself is never touched here (mode === "home" already means
-        // there's nothing left for this handler to do - Back from Home is
-        // untouched/no-op on our end, matching "no back-trapping").
-        const wasDetail = challengesView === "detail";
-        const wasHome = mode === "home";
-        if (wasDetail) {
-          setChallengesView("browse");
-        } else {
-          if (!wasHome) setMode("home");
-          // Adversarial-review fix (2026-07-21, finding 2): this branch is
-          // the ladder's terminal rung - after it runs, the player is at
-          // Home (whether this press just got them there, or they were
-          // already there and this was the "browser-default, no back-
-          // trapping" no-op press). A Detail open/close cycle earlier in
-          // the session can still leave an extra depth-1 rung sitting
-          // directly beneath wherever the player was, separate from the
-          // one that just got replaced in place - each such leftover rung
-          // used to cost the player one more SILENT Back press (no visible
-          // change) before they could actually exit, worse than having no
-          // ladder at all. If the entry we just landed on is still one of
-          // OUR marked rungs (never the true Home floor, which is
-          // unmarked, and never a share-link's own single entry - see the
-          // "accepted as-is" note on markInAppMode), chain one more
-          // programmatic Back to collapse it immediately, so this single
-          // physical press eats every leftover rung in one go and the
-          // NEXT physical Back press genuinely exits.
-          if (isInAppHistoryState()) {
-            window.history.back();
-          }
-        }
-        return;
-      }
-      race.resetCompleted();
-      setSelectedChallengeId(requested.id);
-      // Migration note (iv): back/forward through a challenge share link
-      // lands on Detail, same as the initial load.
-      setMode("challenges");
-      setChallengesView("detail");
-      setError(null);
-      void refreshLeaderboard(requested.id).catch((caught) => {
-        setError(errorMessage(caught, "Could not load the leaderboard."));
-      });
-    };
+    const onPopState = () => popstateHandlerRef.current();
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
-  }, [challengeIsLocked, challenges, challengesView, mode, race.challenge, race.recoveryRun, selectedChallengeId]);
+  }, []);
 
   // Account stats are fetched proactively for ANY identified session - not
   // gated on "You" being open - because the app-shell teaching gate
@@ -918,9 +964,7 @@ export default function App({
     if (challengeLockRef.current) return;
     race.resetCompleted();
     setSelectedChallengeId(challengeId);
-    syncChallengeUrl(challengeId);
-    setMode("challenges");
-    setChallengesView("detail");
+    nav.openDetail(challengeId);
     setError(null);
     setRunNotice(null);
     try {
@@ -941,8 +985,7 @@ export default function App({
     if (challengeLockRef.current) return;
     if (!challenges.some((item) => item.id === challengeId)) return;
     setSelectedChallengeId(challengeId);
-    syncChallengeUrl(challengeId);
-    setRaceStage("preview");
+    nav.enterRacePreview(challengeId);
   }
 
   // Home's yesterday recap card ("see full board ›") - Boards computes its
@@ -950,14 +993,7 @@ export default function App({
   // only needs to land on Boards with that segment pre-selected, not sync
   // any shared challenge-selection state the old v0 selector used.
   function goToBoardsFor() {
-    setBoardsInitialSegment("yesterday");
-    // Owner-approved Back ladder (item 8): this is a second Home ->
-    // non-Home entry point (bypasses the bottom nav) - it needs the exact
-    // same in-app history marker selectMode's own nextMode!=="home" branch
-    // sets, or Back from here would leave the site directly instead of
-    // landing on Home first.
-    markInAppMode();
-    setMode("boards");
+    nav.goToBoards("yesterday");
   }
 
   // RC-05 (Judge B amendment 1): Home's FINISHED-state "Today's board" card
@@ -967,82 +1003,30 @@ export default function App({
   // (item 8) as goToBoardsFor, for the same reason: this is a second Home ->
   // non-Home entry point that bypasses the bottom nav.
   function goToBoardsForToday() {
-    setBoardsInitialSegment("today");
-    markInAppMode();
-    setMode("boards");
+    nav.goToBoards("today");
   }
 
   function selectMode(nextMode: ModeKey) {
-    // Owner-approved URL policy: any bottom-nav tap enforces the iff-
-    // invariant (?challenge= present only on Detail or a locked/recovering
-    // race) - fixes the live leak (share link -> tap Stats -> refresh used
-    // to teleport back into Detail), covers the openRacePreviewFor-cancel
-    // residual, and is the one-visit self-heal for a tab still parked on a
-    // pre-deploy self-synced id. Skipped while a race is locked - the
-    // locked-race pin (App.tsx's own effect + popstate branch) owns the URL
-    // for the duration, same as everywhere else in this file.
-    //
-    // Owner-approved Back ladder (item 8): exactly ONE history write per
-    // call, in either branch - never both - so a nav tap away from Detail
-    // never adds a spurious extra entry on top of its own replace. When
-    // there's a param to clear, that single replaceState is ALSO where the
-    // resulting ladder depth gets decided (depth: nextMode !== "home" ? 1 :
-    // 0) - Detail -> another non-Home mode stays at depth 1 (still away
-    // from Home, one replace, no growth); Detail -> Home tap collapses to
-    // depth 0 (this IS Home now). Only the no-param branch defers to
-    // markInAppMode/markHomeHistoryState's own push-or-replace guards, for
-    // a plain mode-to-mode switch that never touched the challenge param at
-    // all (e.g. Home -> Stats, Stats -> You).
-    if (!challengeLockRef.current && readChallengeIdFromUrl()) {
-      clearChallengeUrl("replace", { depth: nextMode !== "home" ? 1 : 0 });
-      // Item 8 interaction fix: a tap AWAY from Detail (to a mode other
-      // than Challenges) must also close the Detail view itself, not just
-      // clear the URL - otherwise `challengesView` keeps lying "detail"
-      // after the tap, and the popstate ladder below (which checks this
-      // flag first) would silently eat a later Back press closing a Detail
-      // that isn't even on screen anymore instead of promoting to Home.
-      setChallengesView("browse");
-    } else if (nextMode !== "home") {
-      markInAppMode();
+    // RC-07 Step 3: the URL/Back-ladder invariant enforcement this used to
+    // do inline (owner-approved URL policy + Back ladder item 8 - see
+    // useNavigationIntents.ts's own doc comment for the full history) now
+    // lives in nav.goHome/nav.switchMode, the ONE place both this and
+    // every other app-initiated navigation share.
+    if (nextMode === "home") {
+      nav.goHome();
     } else {
-      // Adversarial-review fix (2026-07-21, finding 1): landing on Home
-      // through a plain nav tap (no challenge param involved at all) must
-      // ALSO normalize away any stale depth left on the current entry from
-      // a prior non-Home replace (Stats<->You bounces, etc.) - this branch
-      // used to be a total no-op, so the marker silently survived the
-      // Home landing and poisoned the very next departure's push-vs-
-      // replace guard (markInAppMode would see "already away from Home"
-      // and replace instead of push, leaving that departure's own Back
-      // press nothing to land on).
-      markHomeHistoryState();
+      nav.switchMode(nextMode);
     }
-    setMode(nextMode);
-    // Tapping the Challenges nav item always returns to its root (Browse) -
-    // Detail is reached only via a share link/back-forward, never the nav.
-    if (nextMode === "challenges") setChallengesView("browse");
-    // The bottom-nav Boards item is always a cold entry - Today (Open
-    // Question 4) - distinct from goToBoardsFor's Yesterday-specific link.
-    if (nextMode === "boards") setBoardsInitialSegment("today");
   }
 
   function closeChallengeDetail() {
-    setChallengesView("browse");
-    // Adversarial-review fix (2026-07-21, finding 1): REPLACE Detail's own
-    // entry in place (depth 1 - still one level away from Home) rather
-    // than pushing a new bare entry on top of it. The original design
-    // pushed here for a "clean paired push/push round trip" (Detail's open
-    // push, undone by this push), but once the Back ladder's replace-reuse
-    // guard (markInAppMode) started reusing whatever entry sits on top of
-    // this one for every later same-depth mode switch, that push became a
-    // permanently buried `?challenge=` entry no subsequent replaceState
-    // could ever reach back to pop - a single Back press after switching
-    // to another mode would land right on it and silently reopen Detail.
-    // Replacing collapses Detail's entry directly into the depth-1 bare
-    // entry that was already there, so there is nothing left to bury.
-    clearChallengeUrl("replace", { depth: 1 });
+    nav.closeDetail();
   }
 
   function exitAdmin() {
+    // Out of scope for nav's `?challenge=`/ladder-depth intents (RC-07 Step
+    // 3) - the /admin/dailies pathname bypass is a different invariant
+    // entirely, with its own dedicated urlRouting.ts helper.
     exitAdminDailiesUrl();
     setLocationVersion((version) => version + 1);
   }
@@ -1085,14 +1069,12 @@ export default function App({
       if (!challengeLockRef.current) {
         race.resetCompleted();
         setSelectedChallengeId(challenge.id);
-        syncChallengeUrl(challenge.id);
         setLeaderboardProjection({ challengeId: challenge.id, rows: [] });
         // Plan-drift fix (consistent with Browse's card->Detail change): a
         // freshly created/found challenge lands on its own Detail, not Home
         // - Home's hero is always today's daily and would otherwise show no
         // trace of what was just created.
-        setMode("challenges");
-        setChallengesView("detail");
+        nav.openDetail(challenge.id);
       }
       setRunNotice(createChallengeNotice(outcome));
       if (!challengeLockRef.current) {
@@ -1146,11 +1128,9 @@ export default function App({
       if (!challengeLockRef.current) {
         race.resetCompleted();
         setSelectedChallengeId(challenge.id);
-        syncChallengeUrl(challenge.id);
         setLeaderboardProjection({ challengeId: challenge.id, rows: [] });
         setRaceStage(null);
-        setMode("challenges");
-        setChallengesView("detail");
+        nav.openDetail(challenge.id);
       }
       setRunNotice("Found a fresh challenge for you.");
       if (!challengeLockRef.current) {
@@ -1173,15 +1153,15 @@ export default function App({
   }
 
   function exitRaceFlow(nextMode: ModeKey) {
-    setRaceStage(null);
-    selectMode(nextMode);
+    nav.exitRaceTo(nextMode);
   }
 
   function exitCompletedRaceTo(nextMode: ModeKey) {
+    // RC-07 Step 2: race.resetCompleted() now clears a folded-in dnfResult
+    // too (Judge B amend 1's widened guard) - the standalone setDnfResult
+    // call this used to pair it with is gone, not just moved.
     race.resetCompleted();
-    setDnfResult(null);
-    setRaceStage(null);
-    selectMode(nextMode);
+    nav.exitRaceTo(nextMode);
   }
 
   // Play-another's suggestion (Home and Results) opens Challenge Detail -
@@ -1190,7 +1170,6 @@ export default function App({
   // takeover first, unlike onOpenChallengeDetail (App-shell-only).
   function exitCompletedRaceToChallenge(challengeId: string) {
     race.resetCompleted();
-    setDnfResult(null);
     setRaceStage(null);
     void openChallengeDetail(challengeId);
   }
@@ -1231,10 +1210,18 @@ export default function App({
 
     setError(null);
     setRunNotice(null);
-    setDnfResult(null);
+    // RC-07 Step 2: no standalone dnfResult clear needed here anymore -
+    // race.start() below unconditionally commits a fresh `{...initialState,
+    // ...}` snapshot (dnfResult included) the instant it flips phase to
+    // "preparing".
     setMode("home");
     setLeaderboardProjection({ challengeId: challenge.id, rows: [] });
     setSelectedChallengeId(challenge.id);
+    // RC-07 Step 3 (deliberately NOT routed through nav - see
+    // useNavigationIntents.ts's own doc comment): this pins the URL for the
+    // in-flight race takeover while `mode` stays "home", a shape none of
+    // nav's mode-paired intents match. Still the one shared urlRouting.ts
+    // primitive directly.
     syncChallengeUrl(challenge.id);
     const outcome = await race.start(challenge, sessionForRun.token);
     if (outcome.status === "unauthorized") {
@@ -1779,61 +1766,50 @@ export default function App({
     sessionForEnd: VGamesIdentitySession | null = identitySession,
   ) {
     if (!sessionForEnd) return;
-    // Recovery's "End Old Run" (a stale/legacy run from this or another
-    // device) has no live session/path to show - it resolves straight back
-    // to the shell, same as always. Only ending an in-flight run from
-    // RaceMode's "End Run" gets the DNF Results variant (spec: Race flow
-    // beat 3). useRaceController.endRun wipes session/run on abandon, so
-    // the data Results needs is snapshotted here, before that call.
+    // RC-07 Step 2: the actual DNF snapshot (challenge/clicks/elapsedMs/
+    // runId, the isRecoveryEnd exclusion, the clicks>0 display gate, and
+    // the server-elapsedMs override) now lives entirely inside
+    // useRaceController's endRun - race.dnfResult is the one place both
+    // this file and RaceFlow read it from. What's left here are two small,
+    // App-owned booleans confirmEndRun still needs for ITS OWN decisions
+    // (which runNotice copy to show, and FB-7's board-visibility mark) -
+    // read from the exact same pre-call `race` snapshot the hook itself
+    // reads a moment later (same tick, same object references, so these
+    // can't drift from what the hook decides).
     const isRecoveryEnd = Boolean(race.recoveryRun);
     const endedChallengeId = race.recoveryRun?.challengeId ?? race.challenge?.id ?? null;
     const acceptedClickCount = race.recoveryRun?.clickCount ?? race.session?.clicks ?? 0;
-    const dnfSnapshot: DnfResultSnapshot | null = !isRecoveryEnd && race.challenge
-      ? {
-          challenge: race.challenge,
-          clicks: acceptedClickCount,
-          elapsedMs: race.elapsedMs,
-          runId: race.run?.id ?? null,
-        }
-      : null;
+    // Judge B amend 2: mirrors the hook's OWN `clicks > 0` display gate
+    // exactly (`!isRecoveryEnd && race.challenge` is dnfResult's other
+    // null condition) - true iff the DNF Results screen is about to show,
+    // so this file's plain-notice copy never doubles up with it.
+    const dnfWillShow = !isRecoveryEnd && Boolean(race.challenge) && acceptedClickCount > 0;
     const outcome = await race.endRun(
       sessionForEnd.token,
       race.recoveryRun?.protocolVersion === 1 ? 1 : undefined,
     );
     if (outcome.status === "abandoned") {
       setEndConfirmationOpen(false);
-      // PKG-03 (council 2026-07-19): the header/board-row time mismatch
-      // ("0:04" vs "0:05") traced to dnfSnapshot using the client's
-      // pre-call timer reading while the eventual board row reads the
-      // server's own abandoned_at-based elapsedMs. The abandon response
-      // now echoes that same server value (see AbandonRunTransition's doc
-      // comment) - prefer it here, in the SAME already-in-flight call,
-      // rather than a later, separate leaderboard refetch (which would
-      // also risk a visible number flip after the Results screen mounts).
-      // Falls back to the client snapshot only if an older/legacy
-      // response omitted it.
-      const resolvedDnfSnapshot = dnfSnapshot && outcome.elapsedMs !== undefined
-        ? { ...dnfSnapshot, elapsedMs: outcome.elapsedMs }
-        : dnfSnapshot;
-      if (resolvedDnfSnapshot && resolvedDnfSnapshot.clicks > 0) {
-        setDnfResult(resolvedDnfSnapshot);
+      if (dnfWillShow) {
         setRunNotice(null);
       } else {
-        setDnfResult(null);
         setRunNotice(acceptedClickCount > 0
           ? "Run ended. Your DNF and path were saved."
           : "Run ended. The attempt was saved to your stats.");
       }
       // Home's DNF sub-state (spec: "an end-run this session") - local
       // memory of it, not a server read, so Home can reflect it immediately.
-      // Recovery's "End Old Run" is excluded (matches dnfSnapshot's own
-      // guard above) - it's a stale/legacy run being cleared out, not "the
+      // Recovery's "End Old Run" is excluded (matches the hook's dnfResult
+      // guard) - it's a stale/legacy run being cleared out, not "the
       // account tried and gave up on today's daily this session." FB-7
       // (owner ruling, 2026-07-19): also gated on
       // `acceptedClickCount >= MIN_COUNTED_DNF_CLICKS` - a sub-threshold
       // bail is a non-attempt and must leave Home in the FRESH state, same
       // as the server (which never surfaces a sub-threshold DNF as a board
-      // row) shows on reload.
+      // row) shows on reload. This threshold is DELIBERATELY separate from
+      // (and larger than) the `clicks > 0` display gate above - a 1-click
+      // DNF still shows the Results screen but does NOT mark Home's
+      // board-visible session state.
       if (endedChallengeId && !isRecoveryEnd && acceptedClickCount >= MIN_COUNTED_DNF_CLICKS) {
         markSessionDnf(endedChallengeId);
       }
@@ -1843,7 +1819,6 @@ export default function App({
       bumpStatsRefresh();
     } else if (outcome.status === "completed") {
       setEndConfirmationOpen(false);
-      setDnfResult(null);
       setRunNotice(null);
       if (endedChallengeId) {
         await refreshLeaderboard(endedChallengeId);
@@ -1918,14 +1893,13 @@ export default function App({
       className="app-shell"
       aria-busy={isBusy}
     >
-      {raceEngaged ? (
+      {screen.kind !== "shell" ? (
         <RaceFlow
+          screen={screen}
           apiClient={apiClient}
           phase={race.phase}
           raceChallenge={race.challenge}
           recoveryRun={race.recoveryRun}
-          recoveryPending={recoveryGatePending}
-          showPreview={raceStage === "preview"}
           previewChallenge={selectedChallenge}
           targetPreview={targetPreview}
           session={session}
@@ -1937,7 +1911,7 @@ export default function App({
           pendingRetry={race.pendingRetry}
           leaderboardContext={race.leaderboardContext}
           runId={race.run?.id ?? null}
-          dnfResult={dnfResult}
+          dnfResult={race.dnfResult}
           todayCentral={currentCentralDate}
           identityStatus={identitySession?.status ?? null}
           identityAccountId={identitySession?.accountId ?? null}
@@ -1967,11 +1941,12 @@ export default function App({
             // it routes to that challenge's own Challenge Detail leaderboard
             // instead (the same exitCompletedRaceToChallenge onOpenChallenge
             // already uses). `session` (completed) falls back to
-            // `dnfResult` (DNF) - useRaceController.endRun wipes `session`
-            // on a genuine abandon, so only one of the two is ever set here.
-            // Same `isDailyToday` calc RaceResults' own header/board-title
-            // copy uses, so the two can't independently drift.
-            const racedChallenge = session?.challenge ?? dnfResult?.challenge ?? null;
+            // `race.dnfResult` (DNF) - useRaceController.endRun wipes
+            // `session` on a genuine abandon, so only one of the two is
+            // ever set here. Same `isDailyToday` calc RaceResults' own
+            // header/board-title copy uses, so the two can't independently
+            // drift.
+            const racedChallenge = session?.challenge ?? race.dnfResult?.challenge ?? null;
             if (racedChallenge && !isDailyToday(racedChallenge, currentCentralDate)) {
               exitCompletedRaceToChallenge(racedChallenge.id);
               return;

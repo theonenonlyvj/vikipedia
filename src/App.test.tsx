@@ -2585,7 +2585,19 @@ describe("VWiki Race app", () => {
     await user.click(await screen.findByRole("button", { name: /start race/i }));
     await user.click(await screen.findByRole("button", { name: /^end run$/i }));
     await user.click(screen.getByRole("button", { name: /confirm end run/i }));
-    await user.click(screen.getByRole("button", { name: /^you$/i }));
+    // Test-stability fix (unrelated to RC-07's scope, root-caused while
+    // verifying this package's own suite run): ending the run bumps the
+    // stats-refresh version, which refetches account stats in the
+    // background and - via this test's own `statsUnauthorizedAfterFirst`
+    // fixture - gets back the 401 that clears identity. That background
+    // clear and this test's own next click are two independent async
+    // chains racing each other; under enough CPU contention the clear can
+    // land FIRST, and NV-1 (see below) swaps this exact nav item's label
+    // from "You" to "Log In" the instant identitySession goes null - so a
+    // literal `/^you$/i` match can legitimately never (re)appear. Both
+    // labels route to the same "you" mode/panel this test actually cares
+    // about, so match either.
+    await user.click(await screen.findByRole("button", { name: /^(you|log in)$/i }));
 
     await waitFor(() => expect(storage.getItem("vwiki-race:vgames-session")).toBeNull());
     // "Honest You": a cleared identity lands in State A - NV-1's explicit
@@ -5342,6 +5354,69 @@ describe("Race flow: full-screen takeover", () => {
     expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
   });
 
+  // RC-07 Step 2 (Judge B amend 1): resetCompleted's guard used to be gated
+  // on phase === "completed" alone - a plain abandon lands on phase "idle"
+  // with dnfResult set instead, exactly the state the DNF Results screen
+  // shows from. Before this fix, exiting a DNF via Results' own "Home"
+  // link would leave race.dnfResult stuck set (resetCompleted a no-op),
+  // making Home/Boards/Challenges taps a dead click until a fresh race
+  // started - the same test shape as "browse all challenges" above, but
+  // exercising the OTHER exit link so both paths through
+  // exitCompletedRaceTo are covered.
+  it("Home from a DNF Results screen actually leaves it - resetCompleted clears an idle dnfResult too", async () => {
+    const fetchImpl = createFetchMock({ clickStaysActive: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await screen.findByRole("heading", { name: "Apple" });
+    await user.click(await screen.findByRole("link", { name: /apple tree/i }));
+    await screen.findByRole("heading", { name: "Apple tree" });
+
+    await user.click(screen.getByRole("button", { name: /^end run$/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+    expect(await screen.findByText(/that one got away/i)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Home" }));
+
+    expect(screen.getByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
+    expect(within(screen.getByRole("navigation", { name: /vwiki race views/i })).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
+    // Not stuck showing DNF Results underneath/behind - it's gone.
+    expect(screen.queryByText(/that one got away/i)).toBeNull();
+  });
+
+  // Judge A amend 1(b) / Judge B amend 2: the DNF Results DISPLAY gate
+  // (`clicks > 0`) is distinct from - and smaller than - FB-7's
+  // MIN_COUNTED_DNF_CLICKS board-visibility threshold. A single click
+  // earns the Results screen but must NOT mark Home's board-visible
+  // session-DNF sub-state.
+  it("shows DNF Results for a single click but does not mark Home's board-visible DNF sub-state (FB-7's distinct threshold)", async () => {
+    const fetchImpl = createFetchMock({ clickStaysActive: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await screen.findByRole("heading", { name: "Apple" });
+    await user.click(await screen.findByRole("link", { name: /apple tree/i }));
+    await screen.findByRole("heading", { name: "Apple tree" });
+
+    await user.click(screen.getByRole("button", { name: /^end run$/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+
+    // The display gate (clicks > 0): 1 click still earns the Results screen.
+    expect(await screen.findByText(/that one got away/i)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Home" }));
+
+    // The board-visibility threshold (MIN_COUNTED_DNF_CLICKS = 2): 1 click
+    // is sub-threshold, so Home stays FRESH, same as a 0-click end run.
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+  });
+
   it("shows the server-confirmed elapsed time on a DNF, not the client's pre-call timer reading", async () => {
     // PKG-03 (council 2026-07-19): the header and the eventual board row
     // for the same just-ended run used to read two independent sources -
@@ -5378,6 +5453,33 @@ describe("Race flow: full-screen takeover", () => {
     expect(screen.queryByText(/dnf · 0:08 · 1 clk/i)).toBeNull();
   });
 
+  // Journey5 acceptance (RC-07): "no stale DNF-results frame renders after
+  // a fresh start" - race.start() unconditionally commits a fresh
+  // `{...initialState, ...}` snapshot (dnfResult included) the instant a
+  // new run begins, so deriveScreen should never show the old DNF Results
+  // screen bleeding into the new race.
+  it("Try again from a DNF Results screen starts fresh with no stale DNF frame bleeding through", async () => {
+    const fetchImpl = createFetchMock({ clickStaysActive: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await screen.findByRole("heading", { name: "Apple" });
+    await user.click(await screen.findByRole("link", { name: /apple tree/i }));
+    await screen.findByRole("heading", { name: "Apple tree" });
+    await user.click(screen.getByRole("button", { name: /^end run$/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+    expect(await screen.findByText(/that one got away/i)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+
+    expect(await screen.findByRole("heading", { name: "Apple" })).toBeVisible();
+    // Not a shell-and-takeover double-render, and not the old DNF frame.
+    expect(screen.queryByText(/that one got away/i)).toBeNull();
+    expect(screen.queryByRole("navigation", { name: /vwiki race views/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /^end run$/i })).toBeVisible();
+  });
 });
 
 describe("Home v2: stateful daily hub + teaching gate (Increment 2 Task 2)", () => {
@@ -6799,6 +6901,76 @@ describe("Owner-approved Back ladder (item 8, addendum 2026-07-21): Detail -> Br
     } finally {
       backSpy.mockRestore();
     }
+  });
+
+  // RC-07 Step 3 (Judge B amend 6): Back pressed while a DNF Results screen
+  // is showing (phase idle, dnfResult set) was previously undefined -
+  // that combination isn't covered by the locked-race pin's
+  // `challengeIsLocked` boolean, so a physical Back press used to silently
+  // rewrite mode/view state underneath a screen that never itself reacted.
+  // Defined behavior: Back exits the DNF Results screen to Home.
+  it("Back pressed on a DNF Results screen exits to Home (previously-undefined behavior, now defined)", async () => {
+    const fetchImpl = createFetchMock({ clickStaysActive: true });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await screen.findByRole("heading", { name: "Apple" });
+    await user.click(await screen.findByRole("link", { name: /apple tree/i }));
+    await screen.findByRole("heading", { name: "Apple tree" });
+    await user.click(screen.getByRole("button", { name: /^end run$/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end run/i }));
+    expect(await screen.findByText(/that one got away/i)).toBeVisible();
+
+    window.history.pushState({}, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(screen.queryByText(/that one got away/i)).toBeNull();
+    const nav = screen.getByRole("navigation", { name: /vwiki race views/i });
+    expect(within(nav).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // Judge B amend 5: the popstate handler is rebuilt fresh every render and
+  // stashed in a ref rather than captured once at effect-mount time -
+  // proves it reacts to the CURRENT mode, not whatever was true when the
+  // component (or the effect) first mounted, across MULTIPLE transitions
+  // without a remount. A stale-closure regression here would leave `mode`
+  // stuck on "you" (the value true back when the popstate effect would
+  // have been created if it only ran once at mount).
+  it("popstate reacts to current state across multiple transitions, not state captured at mount (stale-closure regression guard)", async () => {
+    const user = userEvent.setup();
+    render(
+      <App
+        apiOrigin={apiOrigin}
+        fetchImpl={createFetchMock({ challenges: twoChallenges() })}
+        storage={claimedStorage()}
+      />,
+    );
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    // Several transitions AFTER mount, none of which remount the component -
+    // a stale closure captured at mount would still think mode === "home".
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #2/i }));
+    await screen.findByRole("region", { name: /challenge detail/i });
+    await user.click(await screen.findByRole("button", { name: /^← challenges$/i }));
+    await user.click(within(nav).getByRole("button", { name: "You" }));
+    expect(screen.getByRole("heading", { name: "Your stats" })).toBeVisible();
+
+    // Simulate a physical Back landing on a bare, unresolvable URL - the
+    // handler's `!requested` branch reads CURRENT `mode`/`challengesView`
+    // to decide whether to demote to Home. A stale closure (mode "home"
+    // from mount) would treat this as already-Home and skip the demotion
+    // entirely, leaving the screen stuck on "Your stats" with no nav
+    // change - the exact silent-drift failure mode Judge B flagged.
+    window.history.pushState({}, "", "/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(within(nav).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("heading", { name: "Your stats" })).toBeNull();
   });
 });
 
