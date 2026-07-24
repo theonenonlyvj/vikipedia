@@ -243,6 +243,31 @@ function readCachedIdentitySession(
   return repository.getSession();
 }
 
+/**
+ * RC-03 (Judge B amendment 5, the lower-risk third option): content
+ * equality for the fields that actually matter to the app, not object
+ * identity. `readCachedIdentitySession` above builds a THROWAWAY repository
+ * per lazy useState initializer (three separate ones at mount, one per
+ * initializer), and the real memoized `identityRepository` used everywhere
+ * else is a FOURTH, independent instance - each one's own `getSession()`
+ * re-parses storage into a brand-new object, so two calls a tick apart are
+ * deeply equal but never reference-equal. The post-mount resync effect
+ * below used to compare by reference and so treated that as a genuine
+ * change every time, cascading a second capabilities/suggestion/stats fetch
+ * on every cold load with a cached identity even though nothing changed.
+ */
+function identitySessionsEqual(
+  a: VGamesIdentitySession | null,
+  b: VGamesIdentitySession | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.accountId === b.accountId &&
+    a.token === b.token &&
+    a.displayName === b.displayName &&
+    a.status === b.status;
+}
+
 export default function App({
   apiOrigin,
   fetchImpl = defaultFetch,
@@ -361,6 +386,17 @@ export default function App({
   const requestedPaths = useRef(new Set<string>());
   const catalogRequest = useRef(0);
   const catalogRefreshQueued = useRef(false);
+  // RC-03: the very first run of the catalog-load effect below is a plain
+  // cold-load read (happy to reuse a cache, though there's nothing to reuse
+  // yet) - every SUBSEQUENT run was asked for on purpose, either by
+  // `queueCatalogRefresh` (window focus, `visibilitychange`-to-visible, AND
+  // the 5:00 AM Central daily-drop timer all funnel through that one
+  // callback - see its own comment) bumping `catalogRefreshVersion`, or by
+  // `currentCentralDate` itself changing. Either way, "please check for
+  // updates now" is exactly the signal `listChallenges`'s `force` option
+  // exists for - a 60s-stale catalog silently sitting through a real daily
+  // drop would defeat the self-heal these triggers exist to provide.
+  const initialCatalogLoadRef = useRef(true);
   const leaderboardRequest = useRef(0);
   const statsRequest = useRef(0);
   const suggestionRequest = useRef(0);
@@ -536,9 +572,28 @@ export default function App({
   // itself changes after mount (e.g. a different `identityRepository`/
   // `storage` prop, simulating a device/account swap in tests) - the lazy
   // useState initializers above only run once, at mount, so they can't see
-  // this. Harmless no-op on the initial mount itself (same cached value).
+  // this.
+  //
+  // RC-03 (Judge B amendment 5): on a perfectly ordinary cold mount (no
+  // repository swap at all), `identityRepository.getSession()` here still
+  // returns a REFERENTIALLY NEW object - a plain re-parse of the exact same
+  // storage value the lazy initializers above already read into
+  // `identitySession`. Calling the setters below unconditionally used to
+  // treat that as a genuine change every render-cycle, which cascaded a
+  // second capabilities/suggestion/stats fetch effect run right after
+  // mount (every `identitySession`-keyed effect depends on it by
+  // reference). The `identitySessionsEqual` guard makes this a true no-op
+  // whenever the cached session is unchanged BY CONTENT, so it only
+  // actually updates state on a real swap - deliberately NOT added to the
+  // dependency array below (that would change what re-triggers this effect
+  // entirely, and risk the mount-time hook ordering the recovery gate
+  // depends on being synchronously true on first render - see
+  // `readCachedIdentitySession`'s doc comment).
   useEffect(() => {
     const cachedSession = identityRepository.getSession();
+    if (cachedSession && identitySessionsEqual(cachedSession, identitySession)) {
+      return;
+    }
     if (cachedSession) {
       setIdentitySession(cachedSession);
       setDisplayNameDraft(cachedSession.displayName);
@@ -626,12 +681,18 @@ export default function App({
   useEffect(() => {
     let cancelled = false;
     const request = ++catalogRequest.current;
+    // See initialCatalogLoadRef's own comment: only the very first run of
+    // this effect gets to reuse a cached catalog - every later run (focus/
+    // visibilitychange/5am-drop via queueCatalogRefresh, or a bare
+    // currentCentralDate change) forces a fresh read.
+    const force = !initialCatalogLoadRef.current;
+    initialCatalogLoadRef.current = false;
 
     async function loadChallengeCatalog() {
       setError(null);
       let challengesLoaded = false;
       try {
-        const nextChallenges = await apiClient.listChallenges();
+        const nextChallenges = await apiClient.listChallenges({ force });
         if (cancelled || request !== catalogRequest.current) {
           return;
         }

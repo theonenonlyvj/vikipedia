@@ -96,8 +96,40 @@ export interface VWikiRaceDailyAdminApiClient {
   removeDailyQueueEntry(queueEntryId: string, token: string): Promise<DailyQueueEntry>;
 }
 
+export interface ListChallengesOptions {
+  /**
+   * RC-03: bypasses the 60s catalog TTL for exactly one read - App.tsx's
+   * `queueCatalogRefresh` (shared by window focus, `visibilitychange`, AND
+   * the 5:00 AM Central daily-drop timer - all three funnel through that
+   * one callback, so this bypass automatically covers all three, not just
+   * the timer) is an explicit "check for updates now" signal, distinct from
+   * an incidental remount that should happily reuse a fresh-enough cached
+   * catalog. Does not itself clear the cache - a plain `listChallenges()`
+   * called immediately after a forced read still gets the just-fetched
+   * value.
+   */
+  force?: boolean;
+}
+
+export interface GetChallengeBoardOptions {
+  /**
+   * RC-03 (Judge B amendment 3): the api client has no clock/domain
+   * knowledge of which challenge id is "today's" vs. a bygone calendar day
+   * (that lives in domain/challengeSelection.ts, consumed by callers) - so
+   * open/closed can't be inferred from a bare challengeId. Callers that
+   * KNOW a board is permanently closed (a real past daily, not the one
+   * pre-drop edge case where "yesterday's daily" is still the live one) opt
+   * in explicitly. `true` caches the response forever (until this specific
+   * challengeId's entry is invalidated) instead of the short open-board TTL
+   * - safe because a closed day's challengeId never becomes "today's" again,
+   * so there's no separate rollover bookkeeping needed. Defaults to `false`
+   * (short TTL) so an unmigrated call site never over-caches live data.
+   */
+  closed?: boolean;
+}
+
 export interface VWikiRaceApiClient extends VWikiRaceDailyAdminApiClient {
-  listChallenges(): Promise<Challenge[]>;
+  listChallenges(options?: ListChallengesOptions): Promise<Challenge[]>;
   createChallenge(input: CreateTrackedChallengeRequest, token: string): Promise<CreateChallengeV2Response>;
   startRun(input: StartTrackedRunRequest, token: string): Promise<ActiveRunRecord>;
   getActiveRun(token: string): Promise<ActiveRunRecord | null>;
@@ -114,7 +146,10 @@ export interface VWikiRaceApiClient extends VWikiRaceDailyAdminApiClient {
     input?: { recoveryProtocolVersion?: 1 },
   ): Promise<AbandonRunV2Response>;
   listLeaderboard(challengeId: string): Promise<RankedLeaderboardRow[]>;
-  getChallengeBoard(challengeId: string): Promise<ChallengeBoardResponse>;
+  getChallengeBoard(
+    challengeId: string,
+    options?: GetChallengeBoardOptions,
+  ): Promise<ChallengeBoardResponse>;
   /**
    * GR-1 ("View graph"): the merged-path visualization's bulk source - `GET
    * /api/v2/challenges/{id}/paths`. Authenticated, unlike `getChallengeBoard`
@@ -165,6 +200,86 @@ export interface VWikiRaceApiClientOptions {
   apiOrigin?: string;
 }
 
+/**
+ * RC-03: the one shared caching primitive every newly-cached read below
+ * builds on, rather than five independent copies of the same
+ * get/put/expire logic - the OWNER-PROXY ruling asked for "a thin module
+ * with tests, not a framework". `ttlMs: null` on `put` means "cache forever
+ * until an explicit invalidate" (the closed-day board case) - never a
+ * synonym for "don't cache".
+ *
+ * The `generation` handshake on `put` is the out-of-order-resolution guard
+ * (Judge B amendment 4), mirroring the pre-existing `statsGeneration`
+ * pattern this file already used for account stats: a caller captures
+ * `generation()` BEFORE awaiting the network response, and its eventual
+ * write only commits if nothing invalidated this cache group in the
+ * meantime. Without it, a slow in-flight read that resolves AFTER a
+ * mutation-triggered invalidation could silently overwrite the fresher
+ * post-mutation cache entry with stale data.
+ */
+interface CacheGroup<T> {
+  get(key: string): T | undefined;
+  put(key: string, value: T, ttlMs: number | null, generation: number): void;
+  generation(): number;
+  /** Bumps the generation (so any write already in flight is dropped) and
+   *  clears cached entries - `keepPermanent` leaves `ttlMs: null` entries
+   *  (closed-day boards) alone, since those never go stale from a run
+   *  finishing elsewhere. */
+  invalidate(invalidateOptions?: { keepPermanent?: boolean }): void;
+  /** Same generation bump, scoped to a single key - used where a mutation's
+   *  own response names the one affected id (e.g. createChallenge) rather
+   *  than requiring a blanket clear. */
+  invalidateKey(key: string): void;
+}
+
+function createCacheGroup<T>(): CacheGroup<T> {
+  const entries = new Map<string, { value: T; expiresAt: number | null }>();
+  let currentGeneration = 0;
+  return {
+    get(key) {
+      const entry = entries.get(key);
+      if (!entry) return undefined;
+      if (entry.expiresAt !== null && entry.expiresAt <= Date.now()) {
+        entries.delete(key);
+        return undefined;
+      }
+      return entry.value;
+    },
+    put(key, value, ttlMs, generation) {
+      if (generation !== currentGeneration) return;
+      entries.set(key, { value, expiresAt: ttlMs === null ? null : Date.now() + ttlMs });
+    },
+    generation() {
+      return currentGeneration;
+    },
+    invalidate(invalidateOptions) {
+      currentGeneration += 1;
+      if (!invalidateOptions?.keepPermanent) {
+        entries.clear();
+        return;
+      }
+      for (const [key, entry] of entries) {
+        if (entry.expiresAt !== null) entries.delete(key);
+      }
+    },
+    invalidateKey(key) {
+      currentGeneration += 1;
+      entries.delete(key);
+    },
+  };
+}
+
+// RC-03 TTLs - conservative per the binding ruling ("<=60s reads"). Boards
+// additionally split open (short TTL) vs. closed (forever, until a targeted
+// invalidate) - see GetChallengeBoardOptions's doc comment.
+const CATALOG_TTL_MS = 60_000;
+const OPEN_BOARD_TTL_MS = 20_000;
+const LEADERBOARD_TTL_MS = 25_000;
+const SUMMARY_TTL_MS = 30_000;
+const OUTCOMES_TTL_MS = 30_000;
+const CATALOG_CACHE_KEY = "catalog";
+const SUMMARY_CACHE_KEY = "summary";
+
 export function createVWikiRaceApiClient(
   fetchImpl: typeof fetch = defaultApiFetch,
   options: VWikiRaceApiClientOptions = {},
@@ -175,6 +290,22 @@ export function createVWikiRaceApiClient(
   const statsCache = new Map<string, AccountStats>();
   const statsInFlight = new Map<string, Promise<AccountStats>>();
   let statsGeneration = 0;
+  // RC-03: persistent read caches (in addition to `inFlight`'s plain
+  // concurrent-request dedup above) - see createCacheGroup's doc comment.
+  // NOT applied to getBoardsTrends: a prior binding council round (2026-07-19
+  // QF-02, Judge A amendment 2 / Judge B amendment 3) explicitly rejected
+  // caching the 7d/30d/lifetime trend windows because they keep absorbing
+  // the CURRENT session's own just-finished daily until midnight - caching
+  // risks a player finishing today's race, flipping to Boards, and not
+  // seeing their own fresh run. RC-03 leaves `getBoardsTrends` on its
+  // existing in-flight-dedup-only behavior rather than reintroducing that
+  // bug (Judge B amendment 2, option (b)).
+  const catalogCache = createCacheGroup<{ challenges: Challenge[] }>();
+  const boardCache = createCacheGroup<ChallengeBoardResponse>();
+  const leaderboardCache = createCacheGroup<{ leaderboard: RankedLeaderboardRow[] }>();
+  const summaryCache = createCacheGroup<{ challenges: ChallengeSummaryEntry[] }>();
+  const outcomesCache = createCacheGroup<ChallengeOutcomeEntry[]>();
+  const outcomesInFlight = new Map<string, Promise<ChallengeOutcomeEntry[]>>();
   const url = (path: string) => `${apiOrigin}${path}`;
   const read = <T>(path: string, validate: (value: unknown) => value is T): Promise<T> => {
     const requestUrl = url(path);
@@ -197,18 +328,27 @@ export function createVWikiRaceApiClient(
   };
 
   return {
-    async listChallenges() {
-      return (await read(urlPath.challenges, isChallengesResponse)).challenges;
+    async listChallenges(listOptions) {
+      if (!listOptions?.force) {
+        const cached = catalogCache.get(CATALOG_CACHE_KEY);
+        if (cached) return cached.challenges;
+      }
+      const generation = catalogCache.generation();
+      const response = await read(urlPath.challenges, isChallengesResponse);
+      catalogCache.put(CATALOG_CACHE_KEY, response, CATALOG_TTL_MS, generation);
+      return response.challenges;
     },
     async createChallenge(input, token) {
       const response = await write(urlPath.challenges, input, token, isCreateChallengeResponse, true);
       invalidateStats();
       invalidateChallengeCatalog();
+      summaryCache.invalidate();
+      invalidateChallengeEngagement(response.challenge.id);
       return response;
     },
     async startRun(input, token) {
       const response = await write(urlPath.startRun, input, token, isStartRunResponse, true);
-      invalidateStats();
+      invalidateEngagementCaches();
       return response.run;
     },
     async getActiveRun(token) {
@@ -232,7 +372,10 @@ export function createVWikiRaceApiClient(
         "POST",
         { firstAttemptTimeoutMs: CLICK_FIRST_ATTEMPT_TIMEOUT_MS, onRetry: hooks?.onRetry },
       );
-      invalidateStats();
+      // Judge A amendment 4: a run-completing click is still recordClick,
+      // not a separate "finish" mutation - this is the one place that beat
+      // needed covering.
+      invalidateEngagementCaches();
       return response;
     },
     async abandonRun(runId, token, input) {
@@ -244,14 +387,24 @@ export function createVWikiRaceApiClient(
         true,
         abandonIdempotencyKey(runId),
       );
-      invalidateStats();
+      invalidateEngagementCaches();
       return response;
     },
     async listLeaderboard(challengeId) {
-      return (await read(urlPath.leaderboard(challengeId), isLeaderboardResponse)).leaderboard;
+      const cached = leaderboardCache.get(challengeId);
+      if (cached) return cached.leaderboard;
+      const generation = leaderboardCache.generation();
+      const response = await read(urlPath.leaderboard(challengeId), isLeaderboardResponse);
+      leaderboardCache.put(challengeId, response, LEADERBOARD_TTL_MS, generation);
+      return response.leaderboard;
     },
-    async getChallengeBoard(challengeId) {
-      return read(urlPath.board(challengeId), isChallengeBoardResponse);
+    async getChallengeBoard(challengeId, boardOptions) {
+      const cached = boardCache.get(challengeId);
+      if (cached) return cached;
+      const generation = boardCache.generation();
+      const response = await read(urlPath.board(challengeId), isChallengeBoardResponse);
+      boardCache.put(challengeId, response, boardOptions?.closed ? null : OPEN_BOARD_TTL_MS, generation);
+      return response;
     },
     async getChallengePaths(challengeId, token) {
       return authenticatedRead(urlPath.paths(challengeId), token, isChallengePathsResponse);
@@ -295,14 +448,34 @@ export function createVWikiRaceApiClient(
       return pending;
     },
     async getChallengesSummary() {
-      return (await read(urlPath.challengesSummary, isChallengesSummaryResponse)).challenges;
+      const cached = summaryCache.get(SUMMARY_CACHE_KEY);
+      if (cached) return cached.challenges;
+      const generation = summaryCache.generation();
+      const response = await read(urlPath.challengesSummary, isChallengesSummaryResponse);
+      summaryCache.put(SUMMARY_CACHE_KEY, response, SUMMARY_TTL_MS, generation);
+      return response.challenges;
     },
     async getAccountChallengeOutcomes(token) {
-      return (await authenticatedRead(
+      const cached = outcomesCache.get(token);
+      if (cached) return cached;
+      const existing = outcomesInFlight.get(token);
+      if (existing) return existing;
+      const generation = outcomesCache.generation();
+      let pending!: Promise<ChallengeOutcomeEntry[]>;
+      pending = authenticatedRead(
         urlPath.accountChallengeOutcomes,
         token,
         isAccountChallengeOutcomesResponse,
-      )).outcomes;
+      ).then((response) => {
+        outcomesCache.put(token, response.outcomes, OUTCOMES_TTL_MS, generation);
+        return response.outcomes;
+      }).finally(() => {
+        if (outcomesInFlight.get(token) === pending) {
+          outcomesInFlight.delete(token);
+        }
+      });
+      outcomesInFlight.set(token, pending);
+      return pending;
     },
     async getPlayAnotherSuggestion(token) {
       return (await authenticatedRead(
@@ -323,6 +496,8 @@ export function createVWikiRaceApiClient(
       });
       invalidateStats();
       invalidateChallengeCatalog();
+      summaryCache.invalidate();
+      invalidateChallengeEngagement(response.challenge.id);
       return response;
     },
     async getCapabilities(token) {
@@ -425,6 +600,58 @@ export function createVWikiRaceApiClient(
 
   function invalidateChallengeCatalog(): void {
     inFlight.delete(url(urlPath.challenges));
+    // Judge A amendment 2: this used to only clear the in-flight map, which
+    // was a no-op once a persistent cache existed alongside it - a new
+    // challenge (createChallenge/createRandomChallenge) wouldn't actually
+    // surface in the catalog for up to CATALOG_TTL_MS otherwise.
+    catalogCache.invalidate();
+  }
+
+  /**
+   * Wired into every run-ending mutation (startRun/recordClick/abandonRun -
+   * see each call site's own comment; Judge A amendment 4 folded "finish"
+   * into recordClick rather than treating it as a separate site). Blanket,
+   * not per-challengeId: none of these three responses carry a challengeId
+   * (RecordClickV2Input/AbandonRunV2Input don't either) for the api client
+   * to target precisely, and staleness - not an extra fetch - is the
+   * failure mode the risk section calls out. `boardCache` keeps its
+   * permanently-cached CLOSED entries (a past day's board can't be affected
+   * by a run against a different, still-open challenge); every other
+   * engagement-shaped cache is fully cleared.
+   */
+  function invalidateEngagementCaches(): void {
+    invalidateStats();
+    boardCache.invalidate({ keepPermanent: true });
+    leaderboardCache.invalidate();
+    summaryCache.invalidate();
+    outcomesCache.invalidate();
+    outcomesInFlight.clear();
+    // A board/leaderboard/summary GET that was already in flight when this
+    // mutation completed was issued against pre-mutation server state - the
+    // generation guard above stops its (now-stale) resolution from
+    // clobbering a fresher cache write, but without this, a caller reading
+    // right after this invalidation could still silently piggyback on that
+    // same stale in-flight request via read()'s URL-keyed dedup instead of
+    // getting a genuinely fresh fetch. Scoped by URL shape (not a blanket
+    // `inFlight.clear()`) so an unrelated concurrent read - e.g. the
+    // catalog, or getBoardsTrends - keeps its own dedup untouched.
+    dropInFlightMatching((requestUrl) =>
+      requestUrl.includes("/board") ||
+      requestUrl.includes("/leaderboard") ||
+      requestUrl.endsWith(urlPath.challengesSummary));
+  }
+
+  function invalidateChallengeEngagement(challengeId: string): void {
+    boardCache.invalidateKey(challengeId);
+    leaderboardCache.invalidateKey(challengeId);
+    inFlight.delete(url(urlPath.board(challengeId)));
+    inFlight.delete(url(urlPath.leaderboard(challengeId)));
+  }
+
+  function dropInFlightMatching(matches: (requestUrl: string) => boolean): void {
+    for (const requestUrl of inFlight.keys()) {
+      if (matches(requestUrl)) inFlight.delete(requestUrl);
+    }
   }
 }
 

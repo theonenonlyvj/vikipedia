@@ -1692,10 +1692,16 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("region", { name: "Challenge detail" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Leaderboard" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Stats" })).toBeNull();
-    // Home's own hero board read on initial mount, plus Results' own
-    // deduped-board self-fetch for its snippet (PKG-03), plus Challenge
-    // Detail's own board-fetch effect on landing here (PKG-05).
-    await waitFor(() => expect(boardCalls(fetchImpl, "challenge-0001")).toBe(3));
+    // RC-03: Home's own hero board read on initial mount, Results' own
+    // deduped-board self-fetch for its snippet (PKG-03), and Challenge
+    // Detail's own board-fetch effect on landing here (PKG-05) used to be
+    // three independent network calls for the SAME still-open board - the
+    // exact refetch churn RC-03's shared read-cache exists to kill. The
+    // completing click invalidates the open-board cache (a fresh run just
+    // landed), so Results' fetch right after is the first genuinely fresh
+    // read post-invalidation; Detail's landing here reuses that same
+    // now-cached value rather than firing a third request.
+    await waitFor(() => expect(boardCalls(fetchImpl, "challenge-0001")).toBe(2));
     expect(completeRunCalls(fetchImpl)).toBe(0);
   });
 
@@ -3950,6 +3956,37 @@ describe("VWiki Race app", () => {
       expect(valueFor("Avg speed")).toBe("12.3s");
       expect(valueFor("Avg clicks")).toBe("4.5");
     });
+  });
+});
+
+describe("RC-03: identity resync no-op guard kills the duplicate-mount refetch", () => {
+  it("fires exactly one GET each to capabilities/suggestion/stats on a cold load with a cached identity (baseline: 2 each, 1ms apart)", async () => {
+    // `claimedStorage()` seeds a real cached session into storage (not an
+    // injected repository) - this is the exact repro path: the lazy
+    // useState initializers and the memoized `identityRepository` each
+    // build their OWN throwaway/real repository instance, and every
+    // `getSession()` call re-parses storage into a referentially NEW (but
+    // content-identical) object. Before the value-equality guard, the
+    // post-mount resync effect treated that as a genuine session change and
+    // cascaded a second round of every identitySession-keyed fetch.
+    const fetchImpl = createFetchMock();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await screen.findByRole("button", { name: /▶ race/i });
+    await waitFor(() => expect(accountStatsCalls(fetchImpl)).toBeGreaterThan(0));
+    // Give any (bugged) second round - fired from a microtask-queued
+    // re-render right after mount - a chance to land before asserting.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchImpl.mock.calls.filter(
+      ([input]) => String(input) === apiUrl("/api/v2/accounts/me/capabilities"),
+    )).toHaveLength(1);
+    expect(fetchImpl.mock.calls.filter(
+      ([input]) => String(input) === apiUrl("/api/v2/challenges/suggestion"),
+    )).toHaveLength(1);
+    expect(accountStatsCalls(fetchImpl)).toBe(1);
   });
 });
 

@@ -348,10 +348,17 @@ describe("VWiki Race API client", () => {
     ];
 
     for (const mutate of mutations) {
-      const staleCatalog = client.listChallenges();
+      // RC-03: `listChallenges()` now also keeps a persistent 60s cache
+      // (see the dedicated cache tests below) - `force: true` here
+      // deliberately bypasses it so this test can keep driving the exact
+      // concurrent/overlapping-request scenario it exists to cover (a
+      // stale in-flight read racing a mutation's invalidation), the same
+      // way App.tsx's own focus/visibilitychange/5am-drop refresh forces a
+      // real read rather than silently reusing a same-tick cache hit.
+      const staleCatalog = client.listChallenges({ force: true });
       await vi.waitFor(() => expect(catalogReads % 2).toBe(1));
       await mutate();
-      await expect(client.listChallenges()).resolves.toEqual([]);
+      await expect(client.listChallenges({ force: true })).resolves.toEqual([]);
       pendingCatalogs.shift()?.resolve(Response.json({ challenges: [] }));
       await staleCatalog;
     }
@@ -637,7 +644,12 @@ describe("VWiki Race API client", () => {
       historical,
       dnf,
     ]);
-    await expect(client.listLeaderboard("challenge-0001"))
+    // RC-03: a distinct challenge id for the second read - `listLeaderboard`
+    // now caches its resolved value per challengeId, so repeating
+    // "challenge-0001" here would serve the first (valid) response back
+    // from cache instead of exercising the validator against the second,
+    // malformed one this test is actually checking.
+    await expect(client.listLeaderboard("challenge-0002"))
       .rejects.toMatchObject({ code: "invalid_response", status: 502 });
   });
 
@@ -1190,6 +1202,417 @@ describe("VWiki Race API client", () => {
     }
   });
 });
+
+describe("RC-03: shared read cache", () => {
+  it("caches the challenge catalog for up to 60s, then refetches on TTL expiry", async () => {
+    vi.useFakeTimers();
+    try {
+      let catalogReads = 0;
+      const fetchImpl = vi.fn(async () => {
+        catalogReads += 1;
+        return Response.json({ challenges: [] });
+      });
+      const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+      await client.listChallenges();
+      await client.listChallenges();
+      expect(catalogReads).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(59_999);
+      await client.listChallenges();
+      expect(catalogReads).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await client.listChallenges();
+      expect(catalogReads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("listChallenges({ force: true }) bypasses a still-fresh cache entry", async () => {
+    let catalogReads = 0;
+    const fetchImpl = vi.fn(async () => {
+      catalogReads += 1;
+      return Response.json({ challenges: [] });
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await client.listChallenges();
+    await client.listChallenges();
+    expect(catalogReads).toBe(1);
+
+    // Mirrors App.tsx's queueCatalogRefresh (focus/visibilitychange/5am-drop
+    // all funnel through it) forcing a real read rather than silently
+    // reusing a same-tick cache hit.
+    await client.listChallenges({ force: true });
+    expect(catalogReads).toBe(2);
+  });
+
+  it("invalidateChallengeCatalog (via createChallenge) clears the PERSISTENT catalog cache, not just in-flight dedup (Judge A amendment 2)", async () => {
+    let catalogReads = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      const method = init?.method ?? "GET";
+      if (requestUrl === `${apiOrigin}/api/v2/challenges` && method === "GET") {
+        catalogReads += 1;
+        return Response.json({ challenges: [] });
+      }
+      if (requestUrl === `${apiOrigin}/api/v2/challenges` && method === "POST") {
+        return Response.json(validCreateOutcome());
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await client.listChallenges();
+    await client.listChallenges();
+    expect(catalogReads).toBe(1);
+
+    await client.createChallenge({ startTitle: "Mars", targetTitle: "Water" }, "jwt-admin");
+    // Well within the 60s TTL - a plain, non-forced read must still refetch,
+    // because the mutation invalidated the persistent cache entry itself,
+    // not merely the (already-resolved, now-irrelevant) in-flight
+    // bookkeeping the old implementation only ever touched.
+    await client.listChallenges();
+    expect(catalogReads).toBe(2);
+  });
+
+  it("caches an open board for a short TTL, then refetches on expiry", async () => {
+    vi.useFakeTimers();
+    try {
+      let boardReads = 0;
+      const fetchImpl = vi.fn(async () => {
+        boardReads += 1;
+        return Response.json({ challengeId: "challenge-0001", placements: [], dnfs: [] });
+      });
+      const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+      await client.getChallengeBoard("challenge-0001");
+      await client.getChallengeBoard("challenge-0001");
+      expect(boardReads).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(20_000);
+      await client.getChallengeBoard("challenge-0001");
+      expect(boardReads).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caches a closed board forever - never refetches even long after the open-board TTL would have expired", async () => {
+    vi.useFakeTimers();
+    try {
+      let boardReads = 0;
+      const fetchImpl = vi.fn(async () => {
+        boardReads += 1;
+        return Response.json({ challengeId: "challenge-daily-0718", placements: [], dnfs: [] });
+      });
+      const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+      await client.getChallengeBoard("challenge-daily-0718", { closed: true });
+      await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+      await client.getChallengeBoard("challenge-daily-0718", { closed: true });
+      expect(boardReads).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a run-ending mutation invalidates the open board + leaderboard caches but leaves a permanently-closed board cached", async () => {
+    let openBoardReads = 0;
+    let closedBoardReads = 0;
+    let leaderboardReads = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      if (requestUrl === `${apiOrigin}/api/v2/challenges/challenge-open/board`) {
+        openBoardReads += 1;
+        return Response.json({ challengeId: "challenge-open", placements: [], dnfs: [] });
+      }
+      if (requestUrl === `${apiOrigin}/api/v2/challenges/challenge-closed/board`) {
+        closedBoardReads += 1;
+        return Response.json({ challengeId: "challenge-closed", placements: [], dnfs: [] });
+      }
+      if (requestUrl === `${apiOrigin}/api/v2/challenges/challenge-open/leaderboard`) {
+        leaderboardReads += 1;
+        return Response.json({ leaderboard: [] });
+      }
+      if (requestUrl.endsWith("/abandon")) {
+        return Response.json({ runId: "run-1", runStatus: "abandoned" });
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await client.getChallengeBoard("challenge-open");
+    await client.getChallengeBoard("challenge-closed", { closed: true });
+    await client.listLeaderboard("challenge-open");
+    expect(openBoardReads).toBe(1);
+    expect(closedBoardReads).toBe(1);
+    expect(leaderboardReads).toBe(1);
+
+    await client.abandonRun("run-1", "jwt-claimed", { recoveryProtocolVersion: 1 });
+
+    await client.getChallengeBoard("challenge-open");
+    await client.getChallengeBoard("challenge-closed", { closed: true });
+    await client.listLeaderboard("challenge-open");
+    expect(openBoardReads).toBe(2);
+    // A run against a different, still-open challenge can't affect an
+    // already-closed day's board - the permanent entry survives untouched.
+    expect(closedBoardReads).toBe(1);
+    expect(leaderboardReads).toBe(2);
+  });
+
+  it("drops a stale in-flight board read's write after a mutation invalidates it (out-of-order-resolution guard)", async () => {
+    const oldBoardResponse = deferred<Response>();
+    const freshBoardResponse = deferred<Response>();
+    let boardRequests = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      if (requestUrl.endsWith("/board")) {
+        boardRequests += 1;
+        return boardRequests === 1 ? oldBoardResponse.promise : freshBoardResponse.promise;
+      }
+      if (requestUrl.endsWith("/abandon")) {
+        return Response.json({ runId: "run-1", runStatus: "abandoned" });
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    const oldRead = client.getChallengeBoard("challenge-0001");
+    await vi.waitFor(() => expect(boardRequests).toBe(1));
+
+    await client.abandonRun("run-1", "jwt-claimed");
+    const freshRead = client.getChallengeBoard("challenge-0001");
+    await vi.waitFor(() => expect(boardRequests).toBe(2));
+    freshBoardResponse.resolve(Response.json({
+      challengeId: "challenge-0001",
+      placements: [{ accountId: "acc-1", displayName: "Vijay", placement: 1, elapsedMs: 1_000, clickCount: 2 }],
+      dnfs: [],
+    }));
+    await expect(freshRead).resolves.toMatchObject({
+      placements: [{ accountId: "acc-1" }],
+    });
+
+    oldBoardResponse.resolve(Response.json({ challengeId: "challenge-0001", placements: [], dnfs: [] }));
+    await expect(oldRead).resolves.toMatchObject({ placements: [] });
+    // The late-resolving stale read must not clobber the fresher cached
+    // value the post-mutation read already wrote.
+    await expect(client.getChallengeBoard("challenge-0001")).resolves.toMatchObject({
+      placements: [{ accountId: "acc-1" }],
+    });
+    expect(boardRequests).toBe(2);
+  });
+
+  it("drops a stale in-flight leaderboard read's write after a mutation invalidates it (out-of-order-resolution guard)", async () => {
+    const oldResponse = deferred<Response>();
+    const freshResponse = deferred<Response>();
+    let leaderboardRequests = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      if (requestUrl.endsWith("/leaderboard")) {
+        leaderboardRequests += 1;
+        return leaderboardRequests === 1 ? oldResponse.promise : freshResponse.promise;
+      }
+      if (requestUrl.endsWith("/abandon")) {
+        return Response.json({ runId: "run-1", runStatus: "abandoned" });
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    const oldRead = client.listLeaderboard("challenge-0001");
+    await vi.waitFor(() => expect(leaderboardRequests).toBe(1));
+
+    await client.abandonRun("run-1", "jwt-claimed");
+    const freshRead = client.listLeaderboard("challenge-0001");
+    await vi.waitFor(() => expect(leaderboardRequests).toBe(2));
+    freshResponse.resolve(Response.json({ leaderboard: [validLeaderboardRow({ runId: "run-fresh" })] }));
+    await expect(freshRead).resolves.toMatchObject([{ runId: "run-fresh" }]);
+
+    oldResponse.resolve(Response.json({ leaderboard: [] }));
+    await expect(oldRead).resolves.toEqual([]);
+    await expect(client.listLeaderboard("challenge-0001")).resolves.toMatchObject([
+      { runId: "run-fresh" },
+    ]);
+    expect(leaderboardRequests).toBe(2);
+  });
+
+  it("caches account challenge outcomes per token with a TTL", async () => {
+    vi.useFakeTimers();
+    try {
+      let outcomesReadsA = 0;
+      let outcomesReadsB = 0;
+      const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const requestUrl = String(input);
+        const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+        if (requestUrl.endsWith("/account/challenge-outcomes")) {
+          if (auth === "Bearer jwt-a") {
+            outcomesReadsA += 1;
+          } else {
+            outcomesReadsB += 1;
+          }
+          return Response.json({ outcomes: [] });
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      });
+      const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+      await client.getAccountChallengeOutcomes("jwt-a");
+      await client.getAccountChallengeOutcomes("jwt-a");
+      await client.getAccountChallengeOutcomes("jwt-b");
+      expect(outcomesReadsA).toBe(1);
+      expect(outcomesReadsB).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await client.getAccountChallengeOutcomes("jwt-a");
+      expect(outcomesReadsA).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a run-ending mutation invalidates cached outcomes for every token", async () => {
+    let outcomesReads = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      if (requestUrl.endsWith("/account/challenge-outcomes")) {
+        outcomesReads += 1;
+        return Response.json({ outcomes: [] });
+      }
+      if (requestUrl.endsWith("/abandon")) {
+        return Response.json({ runId: "run-1", runStatus: "abandoned" });
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await client.getAccountChallengeOutcomes("jwt-a");
+    expect(outcomesReads).toBe(1);
+
+    await client.abandonRun("run-1", "jwt-a");
+    await client.getAccountChallengeOutcomes("jwt-a");
+    expect(outcomesReads).toBe(2);
+  });
+
+  it("drops a stale in-flight outcomes read's write after a mutation invalidates it (out-of-order-resolution guard)", async () => {
+    const oldResponse = deferred<Response>();
+    const freshResponse = deferred<Response>();
+    let outcomesRequests = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input);
+      if (requestUrl.endsWith("/account/challenge-outcomes")) {
+        outcomesRequests += 1;
+        return outcomesRequests === 1 ? oldResponse.promise : freshResponse.promise;
+      }
+      if (requestUrl.endsWith("/abandon")) {
+        return Response.json({ runId: "run-1", runStatus: "abandoned" });
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    const oldRead = client.getAccountChallengeOutcomes("jwt-a");
+    await vi.waitFor(() => expect(outcomesRequests).toBe(1));
+
+    await client.abandonRun("run-1", "jwt-a");
+    const freshRead = client.getAccountChallengeOutcomes("jwt-a");
+    await vi.waitFor(() => expect(outcomesRequests).toBe(2));
+    freshResponse.resolve(Response.json({
+      outcomes: [{ challengeId: "challenge-fresh", outcome: "dnf", best: null }],
+    }));
+    await expect(freshRead).resolves.toEqual([{ challengeId: "challenge-fresh", outcome: "dnf", best: null }]);
+
+    oldResponse.resolve(Response.json({ outcomes: [] }));
+    await expect(oldRead).resolves.toEqual([]);
+    await expect(client.getAccountChallengeOutcomes("jwt-a")).resolves.toEqual([
+      { challengeId: "challenge-fresh", outcome: "dnf", best: null },
+    ]);
+    expect(outcomesRequests).toBe(2);
+  });
+
+  it("createChallenge invalidates only the resolved challenge's board/leaderboard cache, not an unrelated challenge's", async () => {
+    let otherBoardReads = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      const method = init?.method ?? "GET";
+      if (requestUrl === `${apiOrigin}/api/v2/challenges/challenge-other/board`) {
+        otherBoardReads += 1;
+        return Response.json({ challengeId: "challenge-other", placements: [], dnfs: [] });
+      }
+      if (requestUrl === `${apiOrigin}/api/v2/challenges` && method === "POST") {
+        return Response.json(validCreateOutcome());
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await client.getChallengeBoard("challenge-other");
+    expect(otherBoardReads).toBe(1);
+
+    await client.createChallenge({ startTitle: "Mars", targetTitle: "Water" }, "jwt-admin");
+
+    await client.getChallengeBoard("challenge-other");
+    expect(otherBoardReads).toBe(1);
+  });
+
+  it("caches the challenges summary for a TTL and invalidates it on createChallenge", async () => {
+    let summaryReads = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = String(input);
+      const method = init?.method ?? "GET";
+      if (requestUrl === `${apiOrigin}/api/v2/challenges/summary`) {
+        summaryReads += 1;
+        return Response.json({ challenges: [] });
+      }
+      if (requestUrl === `${apiOrigin}/api/v2/challenges` && method === "POST") {
+        return Response.json(validCreateOutcome());
+      }
+      throw new Error(`Unexpected request ${requestUrl}`);
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await client.getChallengesSummary();
+    await client.getChallengesSummary();
+    expect(summaryReads).toBe(1);
+
+    await client.createChallenge({ startTitle: "Mars", targetTitle: "Water" }, "jwt-admin");
+    await client.getChallengesSummary();
+    expect(summaryReads).toBe(2);
+  });
+
+  it("never caches getBoardsTrends - a prior council round explicitly rejected caching the rolling trend windows (Judge B amendment 2)", async () => {
+    let trendsReads = 0;
+    const fetchImpl = vi.fn(async () => {
+      trendsReads += 1;
+      return Response.json({ window: "7", guard: 3, ranked: [], unranked: [] });
+    });
+    const client = createVWikiRaceApiClient(fetchImpl, { apiOrigin });
+
+    await client.getBoardsTrends("7");
+    await client.getBoardsTrends("7");
+    expect(trendsReads).toBe(2);
+  });
+});
+
+function validLeaderboardRow(overrides: Record<string, unknown> = {}) {
+  return {
+    rank: 1,
+    runId: "run-1",
+    challengeId: "challenge-0001",
+    accountId: "acc-1",
+    displayName: "Vijay",
+    status: "completed",
+    isRepeatRun: false,
+    startedAt: "2026-07-14T01:00:00.000Z",
+    elapsedMs: 1_000,
+    clickCount: 2,
+    completedAt: "2026-07-14T01:00:01.000Z",
+    protocolVersion: 2,
+    ...overrides,
+  };
+}
 
 function accountStats(attempts: number) {
   return {

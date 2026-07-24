@@ -270,17 +270,20 @@ export default function Boards({
   // bug.
   const todayShowsYesterdayFraming = segment === "today" && todayHeroKind === "yesterday-daily";
 
-  // QF-02: session-scoped cache for the one segment that's actually and
-  // permanently closed data - "yesterday" can't change once the day has
-  // passed. Deliberately narrower than the package's literal text (which
-  // also named "finished trend windows"): 7d/30d/lifetime keep absorbing
-  // the CURRENT session's own just-finished daily until midnight, so
-  // caching those risks a player finishing today's race, flipping to
-  // Boards, and not seeing their own fresh run in the rolling windows -
-  // council flagged this independently (Judge A amendment 2, Judge B
-  // amendment 3) and the binding ruling didn't override it. "Today" is
-  // never cached (still-open data).
-  const yesterdayBoardCache = useRef(new Map<string, ChallengeBoardResponse>());
+  // RC-03: the component-local `yesterdayBoardCache` (a `useRef` Map that
+  // died on unmount) that used to live here is gone - the underlying cache
+  // now lives in vwikiRaceApiClient.ts itself (shared across every caller,
+  // survives a Boards unmount/remount) and needs an explicit "this board is
+  // permanently closed" hint at the call site (Judge B amendment 3 - the
+  // api client has no clock/domain knowledge of which challengeId is a
+  // bygone calendar day). "Yesterday" is closed UNLESS it's the one
+  // pre-drop edge case where the current live daily genuinely IS
+  // yesterday's (`heroSelection.kind === "yesterday-daily"`, same challenge
+  // id as `yesterdaysDaily`) - that board is still open and must keep the
+  // short TTL, or a finisher wouldn't see their own fresh run here until
+  // the next real day boundary.
+  const yesterdayIsCurrentlyOpen = todayHeroKind === "yesterday-daily" &&
+    heroSelection?.challenge.id === yesterdaysDaily?.id;
 
   useEffect(() => {
     let cancelled = false;
@@ -289,20 +292,10 @@ export default function Boards({
       setBoard(EMPTY_BOARD);
       return;
     }
-    if (segment === "yesterday") {
-      const cached = yesterdayBoardCache.current.get(activeChallenge.id);
-      if (cached) {
-        setBoard(cached);
-        return;
-      }
-    }
-    void apiClient.getChallengeBoard(activeChallenge.id)
+    const closed = segment === "yesterday" && !yesterdayIsCurrentlyOpen;
+    void apiClient.getChallengeBoard(activeChallenge.id, { closed })
       .then((response) => {
-        if (cancelled) return;
-        setBoard(response);
-        if (segment === "yesterday") {
-          yesterdayBoardCache.current.set(activeChallenge.id, response);
-        }
+        if (!cancelled) setBoard(response);
       })
       .catch(() => {
         if (!cancelled) setBoard(EMPTY_BOARD);
@@ -310,7 +303,7 @@ export default function Boards({
     return () => {
       cancelled = true;
     };
-  }, [apiClient, segment, activeChallenge?.id]);
+  }, [apiClient, segment, activeChallenge?.id, yesterdayIsCurrentlyOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -363,7 +356,11 @@ export default function Boards({
     );
     void Promise.all(
       recentDailyChallenges.map(({ challenge, dailyDate }) =>
-        apiClient.getChallengeBoard(challenge.id)
+        // RC-03: a strictly-past dailyDate is always closed (once a
+        // dated daily exists in the catalog at all, it dropped that day and
+        // is only "today's live one" when the date matches todayCentral
+        // exactly) - safe to cache permanently, unlike the equal-dates case.
+        apiClient.getChallengeBoard(challenge.id, { closed: dailyDate < todayCentral })
           .then((response): RecentDailyDetail => {
             const placement = identityAccountId
               ? response.placements.find((row) => row.accountId === identityAccountId)

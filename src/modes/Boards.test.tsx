@@ -168,9 +168,15 @@ describe("Boards: Today shares Home's honest hero selection (PKG-01)", () => {
     });
 
     await waitFor(() =>
-      expect(apiClient.getChallengeBoard).toHaveBeenCalledWith(yesterdaysDaily.id),
+      // RC-03: "Today" always passes `{ closed: false }` - this is the
+      // pre-drop case where the live daily genuinely IS yesterday's, so it
+      // must keep the short open-board TTL, not the permanent closed one.
+      expect(apiClient.getChallengeBoard).toHaveBeenCalledWith(yesterdaysDaily.id, { closed: false }),
     );
-    expect(apiClient.getChallengeBoard).not.toHaveBeenCalledWith(randomUserChallenge.id);
+    expect(apiClient.getChallengeBoard).not.toHaveBeenCalledWith(
+      randomUserChallenge.id,
+      expect.anything(),
+    );
   });
 
   it("Today and Yesterday intentionally render the identical board pre-drop (owner-proxy ruling: accepted duplication, not a bug)", async () => {
@@ -201,7 +207,17 @@ describe("Boards: Today shares Home's honest hero selection (PKG-01)", () => {
     expect(yesterdayHeader).toContain("Coffee");
   });
 
-  it("QF-02: bouncing Today -> Yesterday -> Today issues no repeat network call for the closed Yesterday board", async () => {
+  it("RC-03 (was QF-02): passes the correct open/closed hint per segment - the api client, not Boards, now owns not-refetching a closed board", async () => {
+    // QF-02 originally asserted "no fourth network call" against Boards'
+    // OWN component-local `yesterdayBoardCache` (a `useRef` Map). RC-03
+    // deleted that ref and moved the actual caching into
+    // vwikiRaceApiClient.ts, which this test's hand-built `mockApiClient()`
+    // (a bare `vi.fn()` with no caching of its own) never exercises - so
+    // "no repeat call" is no longer this component's contract to prove
+    // (see vwikiRaceApiClient.test.ts's own closed-board-forever-cached
+    // coverage for that). What Boards.tsx DOES still own is computing the
+    // right `{ closed }` hint per segment/challenge - that's what this test
+    // now checks instead.
     const apiClient = mockApiClient();
     const user = userEvent.setup();
     renderBoards({
@@ -211,20 +227,24 @@ describe("Boards: Today shares Home's honest hero selection (PKG-01)", () => {
     });
 
     await waitFor(() => expect(apiClient.getChallengeBoard).toHaveBeenCalledTimes(1));
-    expect(apiClient.getChallengeBoard).toHaveBeenCalledWith(todaysDaily.id);
+    expect(apiClient.getChallengeBoard).toHaveBeenLastCalledWith(todaysDaily.id, { closed: false });
 
     await user.click(screen.getByRole("tab", { name: "Yesterday" }));
     await waitFor(() => expect(apiClient.getChallengeBoard).toHaveBeenCalledTimes(2));
-    expect(apiClient.getChallengeBoard).toHaveBeenLastCalledWith(yesterdaysDaily.id);
+    // Post-drop here (today's real daily differs from yesterday's), so
+    // Yesterday genuinely is closed, bygone-day data.
+    expect(apiClient.getChallengeBoard).toHaveBeenLastCalledWith(yesterdaysDaily.id, { closed: true });
 
     await user.click(screen.getByRole("tab", { name: "Today" }));
     await waitFor(() => expect(apiClient.getChallengeBoard).toHaveBeenCalledTimes(3));
+    expect(apiClient.getChallengeBoard).toHaveBeenLastCalledWith(todaysDaily.id, { closed: false });
 
-    // Bounce back to the closed Yesterday board a second time - cached,
-    // no fourth network call.
+    // Bouncing back to Yesterday a second time still asks THIS mock again
+    // (it has no memory) - a real client would serve it from cache, proven
+    // separately in vwikiRaceApiClient.test.ts.
     await user.click(screen.getByRole("tab", { name: "Yesterday" }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(apiClient.getChallengeBoard).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(apiClient.getChallengeBoard).toHaveBeenCalledTimes(4));
+    expect(apiClient.getChallengeBoard).toHaveBeenLastCalledWith(yesterdaysDaily.id, { closed: true });
   });
 
   it("PKG-07: Today's badge carries the server-computed 'Daily #N' alongside the flavor, once the challenge carries a dailyNumber", async () => {
