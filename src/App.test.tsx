@@ -201,7 +201,10 @@ describe("VWiki Race app", () => {
     expect(await screen.findByRole("status", { name: "Authorization notice" })).toHaveTextContent(
       "This page is not available.",
     );
-    expect(screen.getByRole("button", { name: /▶ race/i })).toBeVisible();
+    // RC-05 part B: a signed-in session's Race button now waits on Home's
+    // own hero-board resolution (the skeleton-hold) rather than rendering
+    // synchronously - `findByRole`, not `getByRole`.
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Daily moderation" })).toBeNull();
     expect(
       fetchImpl.mock.calls.some(([input]) => String(input).includes("/api/v2/admin/dailies")),
@@ -2236,9 +2239,19 @@ describe("VWiki Race app", () => {
         },
       },
     });
+    // Cleanup pass (RC-05 part B): Home's OWN pre-race hero-board read (on
+    // mount, before Race is even clicked) hits this same endpoint - with a
+    // signed-in identity, Home now holds its Race button behind that read
+    // resolving (the skeleton-hold this test predates). Only the FIRST call
+    // (Home's) resolves normally here; RC-03's invalidation on startRun
+    // clears that cached read before RaceResults' own post-completion
+    // board read (the SECOND call - the one this test is actually about)
+    // reaches the still-open `boardPromise` below, unchanged.
+    let boardCallCount = 0;
     const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === apiUrl("/api/v2/challenges/challenge-0001/board")) {
-        return boardPromise;
+        boardCallCount += 1;
+        return boardCallCount === 1 ? baseFetch(input, init) : boardPromise;
       }
       return baseFetch(input, init);
     }) as typeof baseFetch;
@@ -3104,7 +3117,12 @@ describe("VWiki Race app", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("confirms that an ended attempt was saved", async () => {
+  it("confirms a 0-click end run honestly as a non-attempt (cleanup pass: was 'attempt was saved to your stats')", async () => {
+    // Cleanup pass (wave-3 review): this used to say "The attempt was saved
+    // to your stats" for a 0-click end - below FB-7's own
+    // MIN_COUNTED_DNF_CLICKS board-visibility threshold, so nothing was
+    // actually saved anywhere (Home stays FRESH, no board row exists). The
+    // notice must say so.
     const user = userEvent.setup();
     render(<App apiOrigin={apiOrigin} fetchImpl={createFetchMock()} storage={claimedStorage()} />);
     await user.click(await screen.findByRole("button", { name: /▶ race/i }));
@@ -3113,7 +3131,8 @@ describe("VWiki Race app", () => {
     await user.click(screen.getByRole("button", { name: /^end run$/i }));
     await user.click(screen.getByRole("button", { name: /confirm end run/i }));
 
-    expect(await screen.findByText(/attempt was saved to your stats/i)).toBeVisible();
+    expect(await screen.findByText(/run ended\. it won.t count as an attempt\./i)).toBeVisible();
+    expect(screen.queryByText(/attempt was saved to your stats/i)).toBeNull();
   });
 
   it("keeps End Run open and restores the active phase after an abandon failure", async () => {
@@ -4204,7 +4223,9 @@ describe("VWiki Race app", () => {
 
       // Home is the default landing mode.
       expect(within(nav).getByRole("button", { name: "Home" })).toHaveAttribute("aria-pressed", "true");
-      const heroRace = screen.getByRole("button", { name: /▶ race/i });
+      // RC-05 part B: a signed-in session's Race button waits on Home's own
+      // hero-board resolution (the skeleton-hold) - `findByRole`.
+      const heroRace = await screen.findByRole("button", { name: /▶ race/i });
       expect(heroRace).toBeVisible();
       // PKG-04 (owner-proxy ruling): opening the preview is non-committal -
       // the hero shares Boards'/Detail's teal `.race-preview-button` class,
@@ -5850,7 +5871,14 @@ describe("Race flow: full-screen takeover", () => {
     expect(document.querySelector(".race-takeover")).toHaveAttribute("inert");
   });
 
-  it("shows the DNF Results variant, DNF-aware End Run confirm copy, and elapsed time after abandoning a run with clicks", async () => {
+  it("shows the DNF Results variant and elapsed time after abandoning a 1-click run - below FB-7's counting threshold, so the confirm dialog still says it won't count", async () => {
+    // Cleanup pass (wave-3 review): 1 click clears the DNF Results DISPLAY
+    // gate (`clicks > 0`, unaffected by this fix) but sits below
+    // MIN_COUNTED_DNF_CLICKS (= 2), FB-7's separate board-visibility
+    // threshold - the confirm dialog used to say "It'll count as a DNF...
+    // with 1 click." here, promising a consequence (board/session
+    // visibility) that never happens at this click count. It must show the
+    // same honest "won't count" line a 0-click end gets.
     let now = 1_000;
     const fetchImpl = createFetchMock({ clickStaysActive: true });
     const user = userEvent.setup();
@@ -5872,8 +5900,9 @@ describe("Race flow: full-screen takeover", () => {
     await user.click(screen.getByRole("button", { name: /^end run$/i }));
     const dialog = await screen.findByRole("dialog", { name: /end this run/i });
     expect(
-      within(dialog).getByText(/it'll count as a dnf — did not finish — with 1 click\./i),
+      within(dialog).getByText(/ending now won.t count as an attempt.*you.ll go back to home\./i),
     ).toBeVisible();
+    expect(within(dialog).queryByText(/counts as an attempt/i)).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: /confirm end run/i }));
 
     expect(await screen.findByText(/that one got away/i)).toBeVisible();
@@ -5910,6 +5939,93 @@ describe("Race flow: full-screen takeover", () => {
     await user.click(screen.getByRole("button", { name: /browse all challenges/i }));
     expect(screen.getByRole("heading", { name: "Challenges" })).toBeVisible();
     expect(screen.getByRole("navigation", { name: /vwiki race views/i })).toBeVisible();
+  });
+
+  it("cleanup pass: End Run confirm copy honestly says it counts as an attempt once clicks reach MIN_COUNTED_DNF_CLICKS", async () => {
+    // The other half of the honesty fix above: at/above FB-7's own
+    // MIN_COUNTED_DNF_CLICKS (= 2) threshold, ending now genuinely DOES mark
+    // Home's board-visible session-DNF state (confirmEndRun's own
+    // `>= MIN_COUNTED_DNF_CLICKS` gate) - the dialog must say so, not the
+    // "won't count" line reserved for a sub-threshold bail.
+    //
+    // `createFetchMock`'s own `clickStaysActive` click handler hardcodes its
+    // request-shape assertion to a single first click (`expectedStepNumber:
+    // 1`, `sourceTitle: "Apple"`) - every other test that uses it only ever
+    // clicks once. A genuine SECOND click needs its own minimal handler for
+    // just this one endpoint, delegating everything else to the base mock.
+    const baseFetch = createFetchMock();
+    let clickCount = 0;
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl("/api/v2/runs/run-1/click")) {
+        clickCount += 1;
+        return Promise.resolve(
+          jsonResponse({ transition: { runId: "run-1", clickCount, runStatus: "active" } }),
+        );
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    await user.click(await screen.findByRole("button", { name: /▶ race/i }));
+    await user.click(await screen.findByRole("button", { name: /start race/i }));
+    await screen.findByRole("heading", { name: "Apple" });
+    await user.click(await screen.findByRole("link", { name: /apple tree/i }));
+    // The heading updates optimistically as soon as the destination article
+    // itself resolves (useRaceController's followLink), BEFORE the click
+    // POST to the server has actually settled - `followLink` silently
+    // ignores a second call while a click is still pending
+    // (`if (snapshot.pendingClick) return { status: "ignored" }`). Waiting
+    // for the "Run" metric's own click count - which only updates once the
+    // server round-trip completes - is what actually proves this first
+    // click has fully settled and a second one won't be dropped.
+    await screen.findByRole("heading", { name: "Apple tree" });
+    const metrics = screen.getByLabelText(/current run/i);
+    const runMetric = within(metrics).getByText("Run").nextElementSibling;
+    await waitFor(() => expect(runMetric).toHaveTextContent(/1 clk/));
+    // Second click, straight to the challenge's real target ("Fruit") -
+    // clickStaysActive's generic catch-all forces `runStatus: "active"` on
+    // EVERY click regardless of destination, so this still counts as a
+    // plain second click rather than completing the run. Deliberately not
+    // a second click back through the reused Apple-tree content itself:
+    // every non-"Fruit"/"Apple" title in this fixture's generic mock branch
+    // shares one hardcoded pageid (900_000), so a second hop through it
+    // would collide with the first hop's own pageid instead of registering
+    // as a distinct page. "Fruit" has its own real, distinct fixture pageid.
+    await user.click(await screen.findByRole("link", { name: /^fruit$/i }));
+    await waitFor(() => expect(runMetric).toHaveTextContent(/2 clk/));
+
+    await user.click(await screen.findByRole("button", { name: /^end run$/i }));
+    const dialog = await screen.findByRole("dialog", { name: /end this run/i });
+    expect(
+      within(dialog).getByText(/this will end your run — it counts as an attempt \(dnf\)\. you.ll go back to home\./i),
+    ).toBeVisible();
+    expect(within(dialog).queryByText(/won.t count as an attempt/i)).toBeNull();
+
+    await user.click(within(dialog).getByRole("button", { name: /confirm end run/i }));
+    expect(await screen.findByText(/that one got away/i)).toBeVisible();
+    expect(screen.getByText(/dnf · \d+:\d+ · 2 clk/i)).toBeVisible();
+  });
+
+  it("cleanup pass: a recovered run's post-end notice also honors MIN_COUNTED_DNF_CLICKS, not a bare clicks>0 check", async () => {
+    // Recovery ends never populate the DNF Results screen regardless of
+    // click count (confirmEndRun's own `isRecoveryEnd` exclusion, see
+    // RC-08's doc comment) - a plain Home-bound `runNotice` is the ONLY
+    // place this threshold is user-visible for a recovery end, so it's the
+    // one path that can actually exercise the >= threshold notice copy
+    // ("Run ended. Your DNF and path were saved.").
+    const storage = claimedStorage();
+    const fetchImpl = createFetchMock({
+      activeRun: activeRunFixture({ protocolVersion: 1, clickCount: 2 }),
+    });
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={storage} />);
+
+    await user.click(await screen.findByRole("button", { name: /end old run/i }));
+    await user.click(screen.getByRole("button", { name: /confirm end old run/i }));
+
+    expect(await screen.findByText(/run ended\. your dnf and path were saved\./i)).toBeVisible();
+    expect(screen.queryByText(/won.t count as an attempt/i)).toBeNull();
   });
 
   // RC-07 Step 2 (Judge B amend 1): resetCompleted's guard used to be gated
@@ -6679,8 +6795,11 @@ describe("Home board dedup + pre-drop hero (desktop pass, FIX 3/FIX 4)", () => {
     // AM Central." sentence is gone, replaced by a live "time left today"
     // readout.
     expect(screen.queryByText(/new daily drops 5:00 am central\./i)).toBeNull();
-    expect(screen.getByText(/\d+(:\d{2}){1,2} left today/)).toBeVisible();
-    expect(screen.getByRole("button", { name: /▶ race/i })).toBeEnabled();
+    // RC-05 part B: both the countdown line and the Race button are paired
+    // pre-play chrome held back behind Home's hero-board resolution for
+    // this signed-in session (the skeleton-hold) - `findBy`, not `getBy`.
+    expect(await screen.findByText(/\d+(:\d{2}){1,2} left today/)).toBeVisible();
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeEnabled();
     // PKG-06: the hero IS yesterday's daily, so the "Yesterday's results"
     // recap now reuses the hero's own (already-fetched) board - one card,
     // not a silent hollow gap where a second, separately-fetched card used

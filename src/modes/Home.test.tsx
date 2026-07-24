@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import Home from "./Home";
 import type { HomeHeroSelection } from "../domain/challengeSelection";
 import type { Challenge } from "../domain/types";
+import type { ChallengeBoardResponse } from "../server/contracts";
 import type { VWikiRaceApiClient } from "../services/vwikiRaceApiClient";
 
 const todayCentral = "2026-07-19";
@@ -154,5 +155,90 @@ describe("Home: RC-06 (one honest loading/error system) - 'Yesterday's results' 
     // Only ONE fetch in flight for the shared hero/yesterday board, not two
     // independent ones (see this file's own `yesterdayIsHero` doc comment).
     expect(getChallengeBoard).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Home: RC-05 part B - heroBoard tri-state skeleton-hold (unblocked by RC-03's shared read-cache)", () => {
+  it("holds a neutral skeleton for a signed-in session's genuinely cold board fetch - no pre-play chrome, no premature DONE/DNF - then cross-fades once it resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      // Home fetches TWO boards on mount (the hero's own, and the
+      // independent yesterday-recap one) - keyed resolvers so each fetch
+      // can be settled independently instead of one clobbering the other.
+      const resolvers = new Map<string, (value: ChallengeBoardResponse) => void>();
+      const getChallengeBoard = vi.fn(
+        (challengeId: string) =>
+          new Promise<ChallengeBoardResponse>((resolve) => {
+            resolvers.set(challengeId, resolve);
+          }),
+      );
+      const apiClient = mockApiClient({ getChallengeBoard });
+      renderHome({ apiClient, identityAccountId: "acc-1" });
+
+      // Nothing pre-play renders while genuinely unresolved: no Race button,
+      // no streak row, no yesterday recap link, and (within the first
+      // 300ms) not even the skeleton copy itself - StagedLoadingNotice's own
+      // "hidden" stage.
+      expect(screen.queryByRole("button", { name: /▶ race/i })).toBeNull();
+      expect(screen.queryByText(/checking your status/i)).toBeNull();
+      expect(screen.queryByText(/see full board/i)).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(screen.getByText(/checking your status/i)).toBeVisible();
+      expect(screen.queryByRole("button", { name: /▶ race/i })).toBeNull();
+
+      resolvers.get(todaysDaily.id)?.({ challengeId: todaysDaily.id, placements: [], dnfs: [] });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // A synchronous `getBy`, not `findBy`: `findBy*`'s internal polling
+      // relies on real `setTimeout` ticks, which fake timers freeze - the
+      // explicit `act`+`advanceTimersByTimeAsync` flush above is what
+      // settles the state update, matching Boards.test.tsx's own staged-
+      // loading precedent.
+      expect(screen.getByRole("button", { name: /▶ race/i })).toBeVisible();
+      expect(screen.queryByText(/checking your status/i)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("anonymous guests keep the instant pre-play render even while the hero board is still loading (Risk note: the hold applies only to a signed-in session)", () => {
+    const getChallengeBoard = vi.fn(
+      () => new Promise<ChallengeBoardResponse>(() => {}),
+    );
+    const apiClient = mockApiClient({ getChallengeBoard });
+    renderHome({ apiClient, identityAccountId: null });
+
+    expect(screen.getByRole("button", { name: /▶ race/i })).toBeVisible();
+  });
+
+  it("a just-ended session DNF resolves the hero to the DNF sub-state immediately, bypassing the skeleton even while the board fetch is still in flight (Judge B amendment 2)", async () => {
+    const getChallengeBoard = vi.fn(
+      () => new Promise<ChallengeBoardResponse>(() => {}),
+    );
+    const apiClient = mockApiClient({ getChallengeBoard });
+    renderHome({
+      apiClient,
+      identityAccountId: "acc-1",
+      sessionDnfChallengeIds: new Set([todaysDaily.id]),
+    });
+
+    expect(await screen.findByText(/last try: dnf/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeVisible();
+  });
+
+  it("a failed hero board fetch fails open to the pre-play chrome instead of a stuck skeleton (Judge A amendment 2)", async () => {
+    const getChallengeBoard = vi.fn<VWikiRaceApiClient["getChallengeBoard"]>(async () => {
+      throw new Error("down");
+    });
+    const apiClient = mockApiClient({ getChallengeBoard });
+    renderHome({ apiClient, identityAccountId: "acc-1" });
+
+    expect(await screen.findByRole("button", { name: /▶ race/i })).toBeVisible();
+    expect(screen.queryByText(/checking your status/i)).toBeNull();
   });
 });

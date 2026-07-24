@@ -301,11 +301,18 @@ function identitySessionsEqual(
 // guest-continue acceptance number - see RC-10's package notes.
 function scheduleBackgroundWork(callback: () => void): () => void {
   const idleScheduler = (globalThis as {
-    requestIdleCallback?: (cb: () => void) => number;
+    requestIdleCallback?: (cb: () => void, options?: { timeout: number }) => number;
     cancelIdleCallback?: (handle: number) => void;
   }).requestIdleCallback;
   if (typeof idleScheduler === "function") {
-    const handle = idleScheduler(callback);
+    // Cleanup pass: an unbounded requestIdleCallback can starve indefinitely
+    // on a sustained-busy main thread, silently delaying
+    // capabilities/stats/play-another-suggestion well past the point this
+    // was ever meant to defer them. 1500ms caps that wait - long enough to
+    // yield to a genuinely idle-soon thread (the common case this exists
+    // for), short enough that a busy thread still gets this work forced
+    // through in a bounded window rather than never.
+    const handle = idleScheduler(callback, { timeout: 1500 });
     return () => {
       (globalThis as { cancelIdleCallback?: (handle: number) => void })
         .cancelIdleCallback?.(handle);
@@ -2126,9 +2133,18 @@ export default function App({
       if (dnfWillShow) {
         setRunNotice(null);
       } else {
-        setRunNotice(acceptedClickCount > 0
+        // Cleanup pass (wave-3 review): this used to branch on plain
+        // `acceptedClickCount > 0`, so a 0-OR-1-click end (below FB-7's own
+        // `MIN_COUNTED_DNF_CLICKS` board-visibility threshold) still said
+        // "was saved"/"DNF and path were saved" - a claim this exact branch
+        // never backs up: `markSessionDnf` just below this block requires
+        // that same `>= MIN_COUNTED_DNF_CLICKS` threshold before Home's
+        // local session state (or any board) ever reflects it. Matching the
+        // threshold here means the notice never promises a consequence that
+        // didn't happen.
+        setRunNotice(acceptedClickCount >= MIN_COUNTED_DNF_CLICKS
           ? "Run ended. Your DNF and path were saved."
-          : "Run ended. The attempt was saved to your stats.");
+          : "Run ended. It won't count as an attempt.");
       }
       // Home's DNF sub-state (spec: "an end-run this session") - local
       // memory of it, not a server read, so Home can reflect it immediately.
@@ -2225,8 +2241,20 @@ export default function App({
   // QF-05: "DNF" spelled out here too, matching RaceResults' own kicker
   // ("DNF — Did not finish") - this dialog is often a first-time player's
   // first encounter with the term, before they've ever seen Results.
-  const endRunConfirmCopy = !isRecoveryEnd && endRunClickCount >= 1
-    ? `It'll count as a DNF — Did not finish — with ${endRunClickCount} ${endRunClickCount === 1 ? "click" : "clicks"}.`
+  // Cleanup pass (wave-3 review): the old `endRunClickCount >= 1` threshold
+  // claimed a 1-click end "counts as a DNF" a full click below
+  // MIN_COUNTED_DNF_CLICKS (FB-7's own board-visibility threshold, = 2) -
+  // the exact count a 1-click end neither marks Home's session DNF state
+  // (confirmEndRun's own `>= MIN_COUNTED_DNF_CLICKS` gate) nor ever shows up
+  // on any board. The dialog must not promise (or threaten) a consequence
+  // that won't actually happen - only a non-recovery end at/above the real
+  // threshold gets the "counts as an attempt" framing now; everything else
+  // (0/1 click, or any recovery end - see RC-08's own doc comment above on
+  // why recovery ends never count regardless of clicks) keeps the honest
+  // "won't count" line.
+  const endRunCountsAsAttempt = !isRecoveryEnd && endRunClickCount >= MIN_COUNTED_DNF_CLICKS;
+  const endRunConfirmCopy = endRunCountsAsAttempt
+    ? "This will end your run — it counts as an attempt (DNF). You'll go back to Home."
     : "Ending now won't count as an attempt — you'll go back to Home.";
   const showBanners = !authPrompt && !endConfirmationOpen;
   const bannerError = showBanners ? visibleError : null;
@@ -2616,8 +2644,24 @@ function IdentityPrompt({
             animated one - the outer's own height is exactly what we're
             setting from `identityFormHeight` above, so observing it instead
             would just measure our own last-written value back at ourselves
-            rather than the mounted form's real natural size. */}
-        <div ref={identityFormRef}>
+            rather than the mounted form's real natural size.
+            Cleanup pass (wave-3 review, RC-09 untraced finding): this div
+            used to carry no styling of its own, which let `.identity-form`'s
+            `margin-top: 14px` collapse straight through it and merge with
+            `.identity-form-viewport`'s own top edge instead of counting
+            toward THIS div's measured height - `getBoundingClientRect()`/
+            `ResizeObserver` both measured 14px short of the form's real
+            `scrollHeight` on every one of the three tabs (confirmed via a
+            local Playwright rig at 390px: viewport `scrollHeight` 229 vs the
+            animated `clientHeight` 215, every single state, not just
+            mid-transition). `.identity-form-viewport`'s `overflow: hidden`
+            then silently cropped that same 14px off the bottom of whichever
+            form was showing - `display: flow-root` here gives this div its
+            own block-formatting context so the child's margin is contained
+            inside the box actually being measured, matching what
+            `.identity-form-viewport`'s own doc comment already assumed was
+            true. See `.identity-form-measure` in styles.css. */}
+        <div className="identity-form-measure" ref={identityFormRef}>
         {authMode === "guest" ? (
           <form
             className="identity-form"

@@ -482,6 +482,19 @@ ol {
   transition: height 200ms ease;
 }
 
+/* Cleanup pass (wave-3 review, RC-09 untraced finding): the actual measured
+   node (App.tsx's `identityFormRef`) needs its own block-formatting context
+   so `.identity-form`'s `margin-top: 14px` can't collapse through it and
+   escape the measurement - without this, `.identity-form-viewport`'s own
+   comment above ("the height always ends up matching the single mounted
+   form's natural size") was false by exactly that margin on every tab, and
+   `overflow: hidden` silently cropped 14px off the bottom of the visible
+   form instead. `display: flow-root` contains the margin with no other
+   layout side effect (the div has no explicit height of its own either way). */
+.identity-form-measure {
+  display: flow-root;
+}
+
 .identity-form {
   display: grid;
   gap: 10px;

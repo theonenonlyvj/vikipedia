@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import BoardSnippet from "../components/BoardSnippet";
 import ChallengePathGraphButton from "../components/ChallengePathGraphButton";
 import PlayAnotherCard from "../components/PlayAnotherCard";
+import StagedLoadingNotice from "../components/StagedLoadingNotice";
 import { boardSnippetRowsFromBoard } from "../domain/boardSnippet";
 import {
   dailyDateForChallenge,
@@ -17,7 +18,10 @@ import { useDailyCountdown } from "../hooks/useDailyCountdown";
 import { ShareResultButton } from "../race/shared";
 import type { VWikiRaceApiClient } from "../services/vwikiRaceApiClient";
 
-type DailyState = "not-attempted" | "dnf" | "finished";
+// RC-05 part B (now unblocked by RC-03's shared read-cache, 96f1f6e): a
+// fourth "resolving" state, distinct from "not-attempted" - see
+// `heroResolving`'s own doc comment below for exactly when it applies.
+type DailyState = "not-attempted" | "dnf" | "finished" | "resolving";
 
 /**
  * Home v2 (Increment 2 Task 2): the stateful daily hub (UX redesign spec,
@@ -138,41 +142,26 @@ export default function Home({
     [challenges, yesterdayCentral],
   );
 
-  // RC-05 part (B) deferral (Judge A amendment 1 / Judge B amendment 4,
-  // OWNER-PROXY RULING "build as amended"): the package's hero-truthfulness
-  // half asked for a loading|error|ready tri-state here (skeleton-hold
-  // instead of defaulting to "not-attempted" while a placement lookup is in
-  // flight). Both judges gated that explicitly on RC-03's shared read-cache
-  // landing FIRST (or an equivalent substitute that lets a Home remount
-  // resolve synchronously from a cache) - "Do NOT ship the skeleton-hold
-  // ahead of that cache." RC-03 has not landed on this HEAD yet (still
-  // null-only, no caching at all - heroBoard genuinely refetches from
-  // scratch on every Home mount, per journey2-rapid-nav's network trace).
-  // A bespoke substitute cache built here would need its own invalidation
-  // hook into App.tsx's race-end path (finish/DNF) to avoid a WORSE bug -
-  // showing a stale pre-finish hero after a real completion - and building
-  // that is RC-03's mandate, not this package's file list. Judge B's own
-  // amendment 4 names exactly this fallback: ship Part A (the board
-  // widening below) now, and leave heroBoard's null-default behavior
-  // unchanged until RC-03 (or an owner-approved substitute) lands. See this
-  // package's report for the acceptance items this leaves unmet.
+  // RC-05 part (B), now landed (was deferred pending RC-03's shared
+  // read-cache, 96f1f6e - see `heroResolving` below for the tri-state
+  // itself): `heroBoard`/`independentYesterdayBoard` stay simple values;
+  // the tri-state that gates rendering lives in the `*Status` signals just
+  // below, same shape RC-06 already established for every other board read
+  // in this file.
   const [heroBoard, setHeroBoard] = useState<ChallengeBoardResponse | null>(null);
   const [independentYesterdayBoard, setIndependentYesterdayBoard] =
     useState<ChallengeBoardResponse | null>(null);
   // RC-06 ("one honest loading/error system"): a distinct error tri-state
-  // for EACH board's own BoardSnippet display, layered on top of (not
-  // replacing) the RC-05-deferred `heroBoard`/`independentYesterdayBoard`
-  // values above - `dailyState`'s derivation below still reads those two
-  // exactly as it always has (the "skeleton-hold" fix for THAT flicker
-  // stays explicitly deferred per RC-05's own doc comment; this package
-  // only fixes the board LIST rendering silently treating a fetch failure
-  // as a resolved-empty board). Deliberately does NOT reset `heroBoard`/
-  // `independentYesterdayBoard` to null on a failure anymore either - a
-  // background revalidate failure keeps whatever good data was already
-  // there for `dailyState` to keep reading, while `status` alone drives
-  // BoardSnippet into its error branch regardless of what `rows` it's also
-  // handed (same "error wins" precedent Boards.tsx's own board fetch
-  // follows).
+  // for EACH board's own BoardSnippet display. `dailyState`'s derivation
+  // below now ALSO reads `heroBoardStatus` directly (RC-05 part B,
+  // `heroResolving`) - not just `heroBoard`'s own value - so the two
+  // features share one signal rather than drifting. Deliberately does NOT
+  // reset `heroBoard`/`independentYesterdayBoard` to null on a failure
+  // either - a background revalidate failure keeps whatever good data was
+  // already there for `dailyState` to keep reading, while `status` alone
+  // drives BoardSnippet into its error branch regardless of what `rows`
+  // it's also handed (same "error wins" precedent Boards.tsx's own board
+  // fetch follows).
   const [heroBoardStatus, setHeroBoardStatus] = useState<"loading" | "error" | "ready">("loading");
   const [heroBoardRetryToken, setHeroBoardRetryToken] = useState(0);
   const [independentYesterdayBoardStatus, setIndependentYesterdayBoardStatus] =
@@ -294,15 +283,44 @@ export default function Home({
   const myDnf = identityAccountId && heroBoardMatches
     ? heroBoardMatches.dnfs.find((row) => row.accountId === identityAccountId) ?? null
     : null;
+  // RC-05 part B (owner ask, Judge A/B amendments, unblocked by RC-03's
+  // shared read-cache): true only while a placement lookup is genuinely
+  // pending for a SIGNED-IN session with nothing to show yet - every clause
+  // matters:
+  //  - `identityAccountId !== null` - Risk note/Judge A amendment 1: an
+  //    anonymous guest keeps the instant pre-play render unconditionally
+  //    (there's no personal placement to look up for them at all).
+  //  - `heroBoardStatus === "loading"` - never holds on "error" (Judge A
+  //    amendment 2: a failed fetch must fail OPEN to "not-attempted", not
+  //    get stuck - `heroBoardMatches` being null in that case already falls
+  //    through to "not-attempted" below with no extra handling needed).
+  //  - `heroBoardMatches === null` - the load is for a challenge we have
+  //    genuinely never resolved data for yet. A background revalidate
+  //    (e.g. after Retry) with last-good data already sitting in
+  //    `heroBoardMatches` does NOT re-engage this - matches RC-04's "never
+  //    blank live UI" mandate; only a cold/never-resolved lookup holds.
+  //  - `!sessionDnfChallengeIds.has(...)` - Judge B amendment 2: a
+  //    just-ended run this session resolves to "dnf" immediately regardless
+  //    of whether the board fetch has caught up yet, never the skeleton.
+  // With RC-03's cache, a repeat-in-session Home mount resolves this from
+  // cache within the same microtask the fetch's own promise settles in -
+  // long before the browser's next paint - so this reads as instant in
+  // practice; only a genuinely cold fetch holds long enough to be seen.
+  const heroResolving = identityAccountId !== null &&
+    heroBoardStatus === "loading" &&
+    heroBoardMatches === null &&
+    !sessionDnfChallengeIds.has(heroChallenge.id);
   // Invariant 2: "A completion is permanent... A later DNF never demotes a
   // prior checkmark." - the board endpoint already resolves this server-side
   // (an account with a completed run appears ONLY in placements), so a
   // placement row always wins here by construction.
-  const dailyState: DailyState = myPlacement
-    ? "finished"
-    : myDnf || sessionDnfChallengeIds.has(heroChallenge.id)
-      ? "dnf"
-      : "not-attempted";
+  const dailyState: DailyState = heroResolving
+    ? "resolving"
+    : myPlacement
+      ? "finished"
+      : myDnf || sessionDnfChallengeIds.has(heroChallenge.id)
+        ? "dnf"
+        : "not-attempted";
 
   // FIX 4 framing: pre-drop the hero is yesterday's still-playable daily and
   // must say so - badge it explicitly and tell the player when the next one
@@ -333,13 +351,30 @@ export default function Home({
             {heroChallenge.start.title} <span className="route-arrow">{"→"}</span> {heroChallenge.target.title}
           </strong>
 
-          {dailyState === "finished" && myPlacement ? (
-            <p className="daily-hero-status daily-hero-done">
+          {dailyState === "resolving" ? (
+            // RC-05 part B: the neutral skeleton-hold. Follows RC-06's own
+            // tri-state primitive (StagedLoadingNotice/useStagedLoading, not
+            // a bespoke shimmer box) - Judge A amendment 2's "never leave the
+            // skeleton indefinitely stuck" is exactly what that primitive's
+            // own stalled-at-2s Retry escalation exists for, and it renders
+            // nothing at all for the first 300ms so a fast/cached resolve
+            // (RC-03) never even flashes this. `surface-entrance` (QF-08's
+            // shared fade+rise) carries the "cross-fade into the final
+            // variant, not a hard swap" ask through to whichever of the
+            // three post-resolution paragraphs below mounts next.
+            <StagedLoadingNotice
+              active
+              className="daily-hero-status muted surface-entrance"
+              onRetry={() => setHeroBoardRetryToken((value) => value + 1)}
+              pendingLabel="Checking your status…"
+            />
+          ) : dailyState === "finished" && myPlacement ? (
+            <p className="daily-hero-status daily-hero-done surface-entrance">
               {"✓"} DONE · You finished #{myPlacement.placement} ·{" "}
               {formatTimeAndClicks(myPlacement.elapsedMs, myPlacement.clickCount)}
             </p>
           ) : dailyState === "dnf" ? (
-            <p className="daily-hero-status daily-hero-dnf">Last try: DNF</p>
+            <p className="daily-hero-status daily-hero-dnf surface-entrance">Last try: DNF</p>
           ) : null}
 
           {/* PKG-07 (owner-proxy ruling (d)): the live "time left today"
@@ -349,14 +384,16 @@ export default function Home({
               framed one the static line used to gate on (the mockup's own
               Step-1-Home shows it for a real TODAY's daily too). Finished
               state already closes with the "come defend your spot" ritual
-              line below - don't show both. */}
-          {hero.kind !== "default" && dailyState !== "finished" && countdownText ? (
+              line below - don't show both. RC-05 part B: also held back
+              during "resolving" - it's paired pre-play chrome, not a
+              standalone fact worth showing ahead of the skeleton resolving. */}
+          {hero.kind !== "default" && dailyState !== "finished" && dailyState !== "resolving" && countdownText ? (
             <p className="ritual-line muted">{countdownText}</p>
           ) : null}
         </div>
 
-        {dailyState !== "finished" ? (
-          <div className="player-gate">
+        {dailyState !== "finished" && dailyState !== "resolving" ? (
+          <div className="player-gate surface-entrance">
             {/* PKG-04 (owner-proxy ruling): this only opens the pre-race
                 preview (App.tsx's openRacePreviewFor) - non-committal, same
                 as Boards' CTA and Detail's "Race this" - so it shares their
@@ -375,7 +412,7 @@ export default function Home({
         ) : null}
       </div>
 
-      {dailyState !== "finished" ? (
+      {dailyState !== "finished" && dailyState !== "resolving" ? (
         <StreakTrendRow hasIdentifiedSession={identityAccountId !== null} stats={accountStats} />
       ) : null}
 
@@ -386,8 +423,11 @@ export default function Home({
           this card exactly in the pre-drop case (FIX 4: hero IS yesterday's
           daily) - the actual current-prod hollow state. `yesterdayBoard`
           already resolves to `heroBoardMatches` in that case (see above), so
-          dropping `!yesterdayIsHero` is the whole fix; no new fetch. */}
-      {dailyState !== "finished" && yesterdaysDaily ? (
+          dropping `!yesterdayIsHero` is the whole fix; no new fetch. RC-05
+          part B: also held back during "resolving" - see the countdown
+          line's own comment above on why paired pre-play chrome waits for
+          the skeleton to resolve rather than showing ahead of it. */}
+      {dailyState !== "finished" && dailyState !== "resolving" && yesterdaysDaily ? (
         <BoardSnippet
           onRetry={retryYesterdayBoard}
           status={yesterdayBoardStatus}
@@ -426,8 +466,9 @@ export default function Home({
           even when the hero IS today's real daily: the spec's whole reason
           for preferring yesterday's board pre-play is "the player has no
           stake in today's board yet, and it discourages scouting" - this
-          fallback keeps that invariant. */}
-      {dailyState !== "finished" && !yesterdaysDaily ? (
+          fallback keeps that invariant. RC-05 part B: held back during
+          "resolving" too, same as the board card above. */}
+      {dailyState !== "finished" && dailyState !== "resolving" && !yesterdaysDaily ? (
         <p className="home-boards-fallback muted">
           <button
             className="link-button"
