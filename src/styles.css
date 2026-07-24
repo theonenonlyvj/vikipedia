@@ -193,6 +193,15 @@ ol {
   font-size: 1.1rem;
 }
 
+/* RC-06: "Try again" (a lightweight, non-navigating recovery attempt) sits
+   beside the pre-existing "Reload" - same centered-row treatment the
+   surrounding `.crash-screen` grid already uses for its other children. */
+.crash-screen-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
 .entry-gate {
   width: min(520px, 100%);
   border: 1px solid rgba(130, 246, 239, 0.24);
@@ -1448,6 +1457,17 @@ h1 {
 /* F6: a failed trends fetch - reuses `.error-banner` rather than the
    "no one has cleared the guard" empty state. */
 .board-trend-error {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+/* RC-06 ("one honest loading/error system"): the same shape as
+   `.board-trend-error` above, reused wherever a data gate's fetch fails -
+   Boards' daily board, Challenge Detail's Leaderboard/Your history panels,
+   Home's board cards, You's stats panel - so the escalation reads as one
+   system rather than several visually-drifting ones. */
+.board-error {
   display: grid;
   gap: 8px;
   justify-items: start;

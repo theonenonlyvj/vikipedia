@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import StagedLoadingNotice from "./StagedLoadingNotice";
 import type { BoardSnippetRow } from "../domain/boardSnippet";
 import { formatTimeAndClicks } from "../domain/formatting";
 
@@ -12,6 +13,11 @@ import { formatTimeAndClicks } from "../domain/formatting";
  * FIX 3; the raw per-attempt leaderboard listed the same account twice),
  * while Results still feeds it per-attempt leaderboard rows highlighting the
  * exact run just finished.
+ *
+ * RC-06 ("one honest loading/error system"): `status` defaults to "ready" -
+ * Results' own snippet (and any other pre-existing caller) never passes it
+ * and keeps rendering exactly as before. Home is the one caller that
+ * distinguishes "loading"/"error" from a genuine zero-row result.
  */
 export default function BoardSnippet({
   title,
@@ -19,6 +25,8 @@ export default function BoardSnippet({
   emptyLabel = "No completed runs yet.",
   children,
   maxRows = 3,
+  onRetry,
+  status = "ready",
 }: {
   title: string;
   rows: BoardSnippetRow[];
@@ -29,7 +37,35 @@ export default function BoardSnippet({
   // "Today's board" widens this to 6 so a signed-in player can see (almost)
   // everyone who raced today, not just the podium.
   maxRows?: number;
+  // Only ever consulted from the "error"/"loading" branches below.
+  onRetry?: () => void;
+  status?: "loading" | "error" | "ready";
 }) {
+  if (status === "error") {
+    return (
+      <section aria-label={title} className="board-snippet board-error">
+        <h3>{title}</h3>
+        <p className="error-banner" role="alert">Couldn&apos;t load this board.</p>
+        {onRetry ? (
+          <button onClick={onRetry} type="button">
+            Retry
+          </button>
+        ) : null}
+        {children}
+      </section>
+    );
+  }
+
+  if (status === "loading") {
+    return (
+      <section aria-label={title} className="board-snippet">
+        <h3>{title}</h3>
+        <StagedLoadingNotice active onRetry={onRetry} pendingLabel="Loading board…" />
+        {children}
+      </section>
+    );
+  }
+
   if (rows.length === 0) {
     return (
       <section aria-label={title} className="board-snippet">

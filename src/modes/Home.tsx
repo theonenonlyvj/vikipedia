@@ -159,23 +159,43 @@ export default function Home({
   const [heroBoard, setHeroBoard] = useState<ChallengeBoardResponse | null>(null);
   const [independentYesterdayBoard, setIndependentYesterdayBoard] =
     useState<ChallengeBoardResponse | null>(null);
+  // RC-06 ("one honest loading/error system"): a distinct error tri-state
+  // for EACH board's own BoardSnippet display, layered on top of (not
+  // replacing) the RC-05-deferred `heroBoard`/`independentYesterdayBoard`
+  // values above - `dailyState`'s derivation below still reads those two
+  // exactly as it always has (the "skeleton-hold" fix for THAT flicker
+  // stays explicitly deferred per RC-05's own doc comment; this package
+  // only fixes the board LIST rendering silently treating a fetch failure
+  // as a resolved-empty board). Deliberately does NOT reset `heroBoard`/
+  // `independentYesterdayBoard` to null on a failure anymore either - a
+  // background revalidate failure keeps whatever good data was already
+  // there for `dailyState` to keep reading, while `status` alone drives
+  // BoardSnippet into its error branch regardless of what `rows` it's also
+  // handed (same "error wins" precedent Boards.tsx's own board fetch
+  // follows).
+  const [heroBoardStatus, setHeroBoardStatus] = useState<"loading" | "error" | "ready">("loading");
+  const [heroBoardRetryToken, setHeroBoardRetryToken] = useState(0);
+  const [independentYesterdayBoardStatus, setIndependentYesterdayBoardStatus] =
+    useState<"loading" | "error" | "ready">("loading");
+  const [yesterdayBoardRetryToken, setYesterdayBoardRetryToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     if (!heroChallenge) return;
+    setHeroBoardStatus("loading");
     void apiClient.getChallengeBoard(heroChallenge.id)
       .then((response) => {
-        if (!cancelled) setHeroBoard(response);
+        if (cancelled) return;
+        setHeroBoard(response);
+        setHeroBoardStatus("ready");
       })
       .catch(() => {
-        // Same convention as Boards' daily views: a failed board read renders
-        // as "no results yet" rather than blocking the hero itself.
-        if (!cancelled) setHeroBoard(null);
+        if (!cancelled) setHeroBoardStatus("error");
       });
     return () => {
       cancelled = true;
     };
-  }, [apiClient, heroChallenge?.id]);
+  }, [apiClient, heroChallenge?.id, heroBoardRetryToken]);
 
   // Pre-drop (FIX 4) the hero IS yesterday's daily - reuse its board rather
   // than fetching the identical endpoint twice.
@@ -185,19 +205,23 @@ export default function Home({
     let cancelled = false;
     if (!yesterdaysDaily || yesterdayIsHero) {
       setIndependentYesterdayBoard(null);
+      setIndependentYesterdayBoardStatus("loading");
       return;
     }
+    setIndependentYesterdayBoardStatus("loading");
     void apiClient.getChallengeBoard(yesterdaysDaily.id)
       .then((response) => {
-        if (!cancelled) setIndependentYesterdayBoard(response);
+        if (cancelled) return;
+        setIndependentYesterdayBoard(response);
+        setIndependentYesterdayBoardStatus("ready");
       })
       .catch(() => {
-        if (!cancelled) setIndependentYesterdayBoard(null);
+        if (!cancelled) setIndependentYesterdayBoardStatus("error");
       });
     return () => {
       cancelled = true;
     };
-  }, [apiClient, yesterdaysDaily?.id, yesterdayIsHero]);
+  }, [apiClient, yesterdaysDaily?.id, yesterdayIsHero, yesterdayBoardRetryToken]);
 
   // PKG-07 (council 2026-07-19, owner-proxy ruling (d)): "live countdown to
   // 5:00 AM Central on Home pre-play... update every second while visible".
@@ -246,6 +270,14 @@ export default function Home({
     : independentYesterdayBoard && independentYesterdayBoard.challengeId === yesterdaysDaily?.id
       ? independentYesterdayBoard
       : null;
+  // RC-06: whichever fetch actually feeds "Yesterday's results" (see
+  // `yesterdayBoard` just above) is the one whose status/retry this card
+  // shows - the pre-drop `yesterdayIsHero` case reuses the hero's own board
+  // fetch, never a second independent one.
+  const yesterdayBoardStatus = yesterdayIsHero ? heroBoardStatus : independentYesterdayBoardStatus;
+  const retryYesterdayBoard = yesterdayIsHero
+    ? () => setHeroBoardRetryToken((value) => value + 1)
+    : () => setYesterdayBoardRetryToken((value) => value + 1);
 
   // GR-1 ("View graph"): the SAME "has the viewer played this exact
   // challenge" check path/board disclosure already uses elsewhere (a
@@ -357,6 +389,8 @@ export default function Home({
           dropping `!yesterdayIsHero` is the whole fix; no new fetch. */}
       {dailyState !== "finished" && yesterdaysDaily ? (
         <BoardSnippet
+          onRetry={retryYesterdayBoard}
+          status={yesterdayBoardStatus}
           title="Yesterday's results"
           rows={yesterdayBoard ? boardSnippetRowsFromBoard(yesterdayBoard, identityAccountId) : []}
         >
@@ -415,6 +449,8 @@ export default function Home({
               because BoardSnippet already renders `children` in its empty
               branch too. */}
           <BoardSnippet
+            onRetry={() => setHeroBoardRetryToken((value) => value + 1)}
+            status={heroBoardStatus}
             title={heroBoardTitle}
             rows={heroBoardMatches ? boardSnippetRowsFromBoard(heroBoardMatches, identityAccountId) : []}
             maxRows={6}

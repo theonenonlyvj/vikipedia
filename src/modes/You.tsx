@@ -1,6 +1,14 @@
+import StagedLoadingNotice from "../components/StagedLoadingNotice";
 import { formatElapsed } from "../race/shared";
 import type { AccountStats } from "../domain/types";
 import type { VGamesIdentitySession } from "../services/vgamesIdentity";
+
+/** RC-06 ("one honest loading/error system", Judge A amendment 3 / Judge B
+ * amendment 1): the plumbing gap this file's own PKG-11 comment (below)
+ * explicitly descoped - threaded from App.tsx's `accountStatsStatus`, kept
+ * SEPARATE from `stats` itself (never leaked into the ghost-loss guard's
+ * shared `accountStats` derivation - see App.tsx's doc comment). */
+export type AccountStatsStatus = "loading" | "error" | "ready";
 
 /**
  * You (profile/stats). Ports the old StatsPanel/StatsList unchanged, plus
@@ -23,8 +31,10 @@ export default function You({
   onGoHome,
   onLogOut,
   onPlayAsSomeoneElse,
+  onRetryStats,
   onSwitchAccount,
   stats,
+  statsStatus,
 }: {
   identitySession: VGamesIdentitySession | null;
   // PKG-11 remainder fix (2026-07-19): widened from `() => void` to the same
@@ -46,9 +56,13 @@ export default function You({
   // "Honest You" (State B's ghost exit): routed through the ghost-loss guard
   // in App.tsx when the ghost has real stakes.
   onPlayAsSomeoneElse: () => void;
+  // RC-06: bumps App.tsx's statsRefreshVersion - the inline "Couldn't load
+  // your stats — Retry" below only.
+  onRetryStats: () => void;
   // "Honest You" (State C): opens the sheet on Log in, no pre-clear.
   onSwitchAccount: () => void;
   stats: AccountStats | null;
+  statsStatus: AccountStatsStatus;
 }) {
   // State A (spec §1): identitySession === null implies accountStats is
   // necessarily null too (the projection is token-gated on the session -
@@ -79,7 +93,7 @@ export default function You({
           </button>
         </section>
       ) : (
-        <StatsPanel stats={stats} />
+        <StatsPanel onRetry={onRetryStats} stats={stats} status={statsStatus} />
       )}
     </section>
   );
@@ -191,22 +205,61 @@ function AccountBlock({
 }
 
 // PKG-11 (council 2026-07-19, Judge A amendment 3, option b): "No data yet."
-// - StatsList's own established convention (below) - covers both
-// "stats haven't resolved yet" (loading/errored/no session; `stats` itself
-// is null - see App.tsx's accountStatsProjection, which conflates all three)
-// AND a resolved account's own genuinely-empty numeric field (`bestClicks`/
-// `bestElapsedMs` are legitimately `null` before a first completion, not a
-// missing-data bug). A confirmed-zero total (0 attempts, 0 completions, a
-// fresh account's 0-day streak) now renders as the real number "0", never a
-// bare "-" that reads like a rendering glitch. Distinguishing "loading" from
-// "errored" from "guest, nothing to fetch" would need new state threaded
-// through App.tsx -> AppShell.tsx -> You.tsx (accountStatsProjection has no
-// such signal today) - descoped to its own ticket per the council rescope;
-// this package only fixes the copy/zero-rendering, not that plumbing gap.
+// - StatsList's own established convention (below) - covers a resolved
+// account's own genuinely-empty numeric field (`bestClicks`/`bestElapsedMs`
+// are legitimately `null` before a first completion, not a missing-data
+// bug). A confirmed-zero total (0 attempts, 0 completions, a fresh account's
+// 0-day streak) now renders as the real number "0", never a bare "-" that
+// reads like a rendering glitch.
+//
+// RC-06 ("one honest loading/error system", Judge A amendment 3 / Judge B
+// amendment 1): "loading" and "errored" no longer collapse into this same
+// copy - `status` (threaded from App.tsx's accountStatsStatus, the plumbing
+// gap this comment used to descope) renders a distinct muted loading
+// treatment and a distinct inline error + Retry instead. `NO_DATA_YET`
+// itself is reachable ONLY via `status === "ready"` now - a genuine
+// zero-attempts account, or one of `totals`' own always-legitimately-null
+// fields - never a stand-in for "hasn't resolved yet".
 const NO_DATA_YET = "No data yet.";
 
-function StatsPanel({ stats }: { stats: AccountStats | null }) {
+function StatsPanel({
+  onRetry,
+  stats,
+  status,
+}: {
+  onRetry: () => void;
+  stats: AccountStats | null;
+  status: AccountStatsStatus;
+}) {
   const totals = stats?.totals;
+
+  if (status === "error") {
+    return (
+      <section className="stats-panel">
+        <h2>Your stats</h2>
+        <div className="board-error">
+          <p className="error-banner" role="alert">Couldn&apos;t load your stats.</p>
+          <button onClick={onRetry} type="button">
+            Retry
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  if (status === "loading") {
+    return (
+      <section className="stats-panel">
+        <h2>Your stats</h2>
+        <StagedLoadingNotice
+          active
+          className="muted stats-panel-loading"
+          onRetry={onRetry}
+          pendingLabel="Loading your stats…"
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="stats-panel">

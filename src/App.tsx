@@ -84,9 +84,24 @@ interface LoginFormInput {
   username: string;
   password: string;
 }
+// RC-06 ("one honest loading/error system"): `status` is the fetch tri-state
+// for THIS challenge's leaderboard - "error" is what lets Challenge Detail's
+// "Your history" strip tell a genuine failure apart from "you haven't tried
+// this one yet." instead of silently reusing the empty-rows shape for both
+// (Changes item 2 / Judge B amendment 2's "vanishing global banner" fix).
+type LeaderboardFetchStatus = "loading" | "error" | "ready";
 interface LeaderboardProjection {
   challengeId: string;
   rows: RankedLeaderboardRow[];
+  status: LeaderboardFetchStatus;
+  // Pre-existing house convention this package must not regress (proven by
+  // two already-shipped App.test.tsx cases): a MEANINGFUL server error (e.g.
+  // "Leaderboard unavailable.") is shown verbatim via the shared
+  // errorMessage() helper below, which only ever substitutes a generic
+  // fallback for the genuinely-uninformative internal_error catch-all - so
+  // "error" status alone isn't enough for Detail's "Your history" copy;
+  // this carries what to actually say. `null` outside "error" status.
+  message: string | null;
 }
 interface AccountStatsProjection {
   token: string;
@@ -333,6 +348,20 @@ export default function App({
     useState<LeaderboardProjection | null>(null);
   const [accountStatsProjection, setAccountStatsProjection] =
     useState<AccountStatsProjection | null>(null);
+  // RC-06 ("one honest loading/error system", Judge B amendment 1 - the
+  // GHOST-GUARD COLLISION fix): a status SEPARATE from `accountStatsProjection`
+  // itself, purely for You.tsx's tri-state display. `ghostGuardRequired`/
+  // `guestHasStakes`/the teaching gate/the at-risk nav dot all read the
+  // DERIVED `accountStats` value below and treat `null` as "unresolved, fail
+  // closed" by explicit design - this status must never feed back into that
+  // derivation (no "last-known-value" leak into the one variable those
+  // guards trust). It's derived, not independently tracked: "ready" whenever
+  // `accountStats` itself is non-null (including a background
+  // stale-while-revalidate refetch already in flight - RC-04's "never blank
+  // live UI" promise stays intact for You's numbers too), else whatever the
+  // fetch effect below most recently observed for a null result.
+  const [accountStatsFetchStatus, setAccountStatsFetchStatus] =
+    useState<"loading" | "error">("loading");
   const [runPaths, setRunPaths] = useState<Record<string, ServerPathStep[]>>({});
   // Boards v1 (Increment 3) owns its own [Today][Yesterday] segment state
   // internally, but the *initial* segment on mount depends on how you got
@@ -575,10 +604,38 @@ export default function App({
       leaderboardProjection?.challengeId === selectedChallenge.id
     ? leaderboardProjection.rows
     : [];
+  // RC-06: the exact same gate `leaderboard` above uses (kept as its own
+  // inline condition, not hoisted to a shared boolean, so TS's narrowing of
+  // `leaderboardProjection` stays intact in both) - Challenge Detail's "Your
+  // history" tri-state reads "loading" for every case `leaderboard` itself
+  // reads `[]` for a reason OTHER than a genuine empty result (a locked
+  // race, a not-yet-matching selection), not just a real in-flight fetch.
+  const leaderboardStatus: LeaderboardFetchStatus = !challengeIsLocked && selectedChallenge &&
+      leaderboardProjection?.challengeId === selectedChallenge.id
+    ? leaderboardProjection.status
+    : "loading";
+  // RC-06: the specific server message for the "error" status above (house
+  // convention: a meaningful message like "Leaderboard unavailable." shows
+  // verbatim; only a generic internal_error gets a friendly fallback - see
+  // errorMessage()) - `null` whenever `leaderboardStatus` isn't "error".
+  const leaderboardErrorMessage: string | null = !challengeIsLocked && selectedChallenge &&
+      leaderboardProjection?.challengeId === selectedChallenge.id
+    ? leaderboardProjection.message
+    : null;
   const accountStats = identitySession &&
       accountStatsProjection?.token === identitySession.token
     ? accountStatsProjection.stats
     : null;
+  // RC-06 (Judge B amendment 1): derived from `accountStats` itself, not
+  // tracked independently - "ready" whenever there's real data to show
+  // (including mid-background-revalidate, so You's numbers never flash back
+  // to a loading treatment the moment a race ends and this refetches),
+  // otherwise the raw fetch-effect signal for what a null `accountStats`
+  // actually means right now. Never read by ghostGuardRequired/
+  // guestHasStakes/the teaching gate/the at-risk dot - those all consume
+  // `accountStats` directly, unchanged.
+  const accountStatsStatus: "loading" | "error" | "ready" =
+    accountStats !== null ? "ready" : accountStatsFetchStatus;
   // "Play as someone else" (spec §2.3) forces the Guest form's name input
   // open even though `identitySession` already holds a name - readiness
   // must key off the freshly-typed draft, not the OLD session's name, or
@@ -751,7 +808,7 @@ export default function App({
         if (!challengeLockRef.current && nextChallengeId !== selectedChallengeIdRef.current) {
           setSelectedChallengeId(nextChallengeId);
           setLeaderboardProjection(nextChallenge
-            ? { challengeId: nextChallenge.id, rows: [] }
+            ? { challengeId: nextChallenge.id, rows: [], status: "loading", message: null }
             : null);
         }
         const requestedIdHonored = Boolean(
@@ -801,16 +858,40 @@ export default function App({
         }
         if (nextChallenge) {
           const leaderboardGeneration = ++leaderboardRequest.current;
-          const nextLeaderboard = await apiClient.listLeaderboard(nextChallenge.id);
-          if (
-            !cancelled &&
-            request === catalogRequest.current &&
-            leaderboardGeneration === leaderboardRequest.current
-          ) {
-            setLeaderboardProjection({
-              challengeId: nextChallenge.id,
-              rows: nextLeaderboard,
-            });
+          // RC-06: this piggyback leaderboard read gets its OWN try/catch,
+          // separate from the outer one below - a failure here is a
+          // leaderboard problem, not a catalog problem, and used to
+          // misreport as "Could not load challenges." in the global banner
+          // while leaving `leaderboardProjection` stuck at `status:
+          // "loading"` forever (a worse regression than the bug this
+          // package fixes: an eternal, un-retriable "Loading…").
+          try {
+            const nextLeaderboard = await apiClient.listLeaderboard(nextChallenge.id);
+            if (
+              !cancelled &&
+              request === catalogRequest.current &&
+              leaderboardGeneration === leaderboardRequest.current
+            ) {
+              setLeaderboardProjection({
+                challengeId: nextChallenge.id,
+                rows: nextLeaderboard,
+                status: "ready",
+                message: null,
+              });
+            }
+          } catch (caught) {
+            if (
+              !cancelled &&
+              request === catalogRequest.current &&
+              leaderboardGeneration === leaderboardRequest.current
+            ) {
+              setLeaderboardProjection({
+                challengeId: nextChallenge.id,
+                rows: [],
+                status: "error",
+                message: errorMessage(caught, "Couldn't load your history."),
+              });
+            }
           }
         }
       } catch (caught) {
@@ -962,9 +1043,9 @@ export default function App({
     // browser already navigated the address bar to this exact URL).
     nav.openDetail(requested.id);
     setError(null);
-    void refreshLeaderboard(requested.id).catch((caught) => {
-      setError(errorMessage(caught, "Could not load the leaderboard."));
-    });
+    // RC-06 (Judge B amendment 2): Detail's own inline leaderboard tri-state
+    // (leaderboardStatus) owns a failure here now too - no global banner.
+    void refreshLeaderboard(requested.id).catch(() => {});
   };
 
   useEffect(() => {
@@ -997,6 +1078,13 @@ export default function App({
     if (identityChanged) {
       setAccountStatsProjection({ token, stats: null });
     }
+    // RC-06: "loading" at the start of every run, including a background
+    // same-token revalidate - harmless there, since You.tsx only ever
+    // consults this status once `accountStats` itself reads null (see its
+    // own doc comment above); a revalidate with good data already on screen
+    // never surfaces it. A Retry tap (bumps statsRefreshVersion from the
+    // "error" state) needs this to flip visibly back to "loading" too.
+    setAccountStatsFetchStatus("loading");
     void apiClient.getAccountStats(identitySession.token)
       .then((stats) => {
         if (request === statsRequest.current) {
@@ -1005,11 +1093,15 @@ export default function App({
       })
       .catch((caught) => {
         if (request !== statsRequest.current) return;
+        // Deliberately still nulled unconditionally (Judge B amendment 1) -
+        // ghostGuardRequired's fail-closed contract requires a fetch error
+        // to read exactly like "unresolved", the same as mid-flight. Only
+        // the NEW `accountStatsFetchStatus` distinguishes them for display.
         setAccountStatsProjection(null);
+        setAccountStatsFetchStatus("error");
         if (isUnauthorizedError(caught)) {
           clearStaleIdentity();
         }
-        setError(errorMessage(caught, "Could not load account stats."));
       });
     return () => {
       if (request === statsRequest.current) statsRequest.current += 1;
@@ -1075,18 +1167,44 @@ export default function App({
 
   async function refreshLeaderboard(challengeId: string) {
     const request = ++leaderboardRequest.current;
-    setLeaderboardProjection({ challengeId, rows: [] });
+    setLeaderboardProjection({ challengeId, rows: [], status: "loading", message: null });
     try {
       const nextLeaderboard = await apiClient.listLeaderboard(challengeId);
       if (request === leaderboardRequest.current) {
-        setLeaderboardProjection({ challengeId, rows: nextLeaderboard });
+        setLeaderboardProjection({ challengeId, rows: nextLeaderboard, status: "ready", message: null });
       }
     } catch (caught) {
       if (request === leaderboardRequest.current) {
-        setLeaderboardProjection({ challengeId, rows: [] });
+        // RC-06 (Changes item 2 / Judge B amendment 2): an honest "error"
+        // status Challenge Detail's "Your history" tri-state can render
+        // in-place, instead of the old `rows: []` silently reading as a
+        // false "you haven't tried this one yet." Preserves this file's
+        // pre-existing errorMessage() convention (proven by two already-
+        // shipped App.test.tsx regressions) - a meaningful server message
+        // ("Leaderboard unavailable.") still surfaces verbatim; only a
+        // generic internal_error gets the friendly fallback substituted.
+        setLeaderboardProjection({
+          challengeId,
+          rows: [],
+          status: "error",
+          message: errorMessage(caught, "Couldn't load your history."),
+        });
       }
       throw caught;
     }
+  }
+
+  // RC-06 (Judge B amendment 6): retries `refreshLeaderboard` DIRECTLY for
+  // Challenge Detail's own Retry controls ("Leaderboard" panel's board fetch
+  // has its own component-local retry - this is only for the App-owned
+  // per-attempt leaderboard feeding "Your history") - never a fresh
+  // push-based navigation, so the hard-won Back-ladder-depth invariant is
+  // untouched by a Detail-local retry tap.
+  function retryLeaderboard(challengeId: string) {
+    void refreshLeaderboard(challengeId).catch(() => {
+      // Already reflected in leaderboardProjection's own "error" status
+      // above - nothing else to do with the rejection here.
+    });
   }
 
   // Plan-drift fix: Browse's cards now open Challenge Detail directly (spec
@@ -1101,8 +1219,11 @@ export default function App({
     setRunNotice(null);
     try {
       await refreshLeaderboard(challengeId);
-    } catch (caught) {
-      setError(errorMessage(caught, "Could not load the leaderboard."));
+    } catch {
+      // RC-06 (Judge B amendment 2): Detail's own inline leaderboard
+      // tri-state (leaderboardStatus, above) now owns this failure - no
+      // longer surfaced through the vanishing global banner too, which used
+      // to double up with (and outlast) whatever Detail itself renders.
     }
   }
 
@@ -1201,7 +1322,7 @@ export default function App({
       if (!challengeLockRef.current) {
         race.resetCompleted();
         setSelectedChallengeId(challenge.id);
-        setLeaderboardProjection({ challengeId: challenge.id, rows: [] });
+        setLeaderboardProjection({ challengeId: challenge.id, rows: [], status: "loading", message: null });
         // Plan-drift fix (consistent with Browse's card->Detail change): a
         // freshly created/found challenge lands on its own Detail, not Home
         // - Home's hero is always today's daily and would otherwise show no
@@ -1210,11 +1331,9 @@ export default function App({
       }
       setRunNotice(createChallengeNotice(outcome));
       if (!challengeLockRef.current) {
-        try {
-          await refreshLeaderboard(challenge.id);
-        } catch (caught) {
-          setError(errorMessage(caught, "Could not load the leaderboard."));
-        }
+        // RC-06 (Judge B amendment 2): this also lands on Detail (above) -
+        // same in-place tri-state, no global banner for this failure either.
+        await refreshLeaderboard(challenge.id).catch(() => {});
       }
     } catch (caught) {
       if (isUnauthorizedError(caught)) {
@@ -1260,17 +1379,15 @@ export default function App({
       if (!challengeLockRef.current) {
         race.resetCompleted();
         setSelectedChallengeId(challenge.id);
-        setLeaderboardProjection({ challengeId: challenge.id, rows: [] });
+        setLeaderboardProjection({ challengeId: challenge.id, rows: [], status: "loading", message: null });
         setRaceStage(null);
         nav.openDetail(challenge.id);
       }
       setRunNotice("Found a fresh challenge for you.");
       if (!challengeLockRef.current) {
-        try {
-          await refreshLeaderboard(challenge.id);
-        } catch (caught) {
-          setError(errorMessage(caught, "Could not load the leaderboard."));
-        }
+        // RC-06 (Judge B amendment 2): same in-place Detail tri-state as
+        // every other Detail-open path - no global banner for this failure.
+        await refreshLeaderboard(challenge.id).catch(() => {});
       }
     } catch (caught) {
       if (isUnauthorizedError(caught)) {
@@ -1347,7 +1464,7 @@ export default function App({
     // ...}` snapshot (dnfResult included) the instant it flips phase to
     // "preparing".
     setMode("home");
-    setLeaderboardProjection({ challengeId: challenge.id, rows: [] });
+    setLeaderboardProjection({ challengeId: challenge.id, rows: [], status: "loading", message: null });
     setSelectedChallengeId(challenge.id);
     // RC-07 Step 3 (deliberately NOT routed through nav - see
     // useNavigationIntents.ts's own doc comment): this pins the URL for the
@@ -2094,6 +2211,7 @@ export default function App({
       ) : (
         <AppShell
           accountStats={accountStats}
+          accountStatsStatus={accountStatsStatus}
           apiClient={apiClient}
           authBusy={authBusy}
           bannerError={bannerError}
@@ -2106,6 +2224,8 @@ export default function App({
           challengesView={challengesView}
           identitySession={identitySession}
           leaderboard={leaderboard}
+          leaderboardErrorMessage={leaderboardErrorMessage}
+          leaderboardStatus={leaderboardStatus}
           mode={mode}
           onClaimIdentity={(mode) => openAuthPrompt({ type: "claim" }, mode)}
           onCloseChallengeDetail={closeChallengeDetail}
@@ -2120,7 +2240,9 @@ export default function App({
           onOpenChallengeDetail={(challengeId) => void openChallengeDetail(challengeId)}
           onPlayAsSomeoneElse={requestPlayAsSomeoneElse}
           onRaceChallenge={openRacePreviewFor}
+          onRetryAccountStats={() => setStatsRefreshVersion((version) => version + 1)}
           onRetryCatalog={() => setCatalogRefreshVersion((version) => version + 1)}
+          onRetryLeaderboard={retryLeaderboard}
           onSelectMode={selectMode}
           onSwitchAccount={requestSwitchAccount}
           playAnotherSuggestion={playAnotherSuggestion}

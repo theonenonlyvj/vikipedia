@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -66,5 +67,70 @@ describe("ErrorBoundary", () => {
     await user.click(screen.getByRole("button", { name: /reload/i }));
 
     expect(reloadSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("RC-06: renders a 'Try again' button beside Reload when a child throws", () => {
+    render(
+      <ErrorBoundary reporter={{ report: vi.fn() }}>
+        <Bomb />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByRole("button", { name: /try again/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /reload/i })).toBeVisible();
+  });
+
+  it("RC-06: 'Try again' resets a transient render error and recovers in place - no reload, no navigation - for a realistic App-state-shaped crash (not just a Bomb that always throws)", async () => {
+    // A module-level flag standing in for "some reachable-but-transient
+    // impossible app state" (exactly the class of bug this whole council
+    // round targets) - NOT a per-render counter, so this genuinely proves a
+    // remount happened rather than the component just returning different
+    // content on a re-render of the SAME instance.
+    let brokenStateStillPresent = true;
+    let mountCount = 0;
+    function TransientlyBrokenApp() {
+      // Lazy initializer only runs on a genuine fresh mount - a recycled
+      // fiber surviving the crash would never bump this again.
+      const [instance] = useState(() => ++mountCount);
+      if (brokenStateStillPresent) {
+        throw new Error("reachable impossible state");
+      }
+      return <p>Recovered, instance {instance}</p>;
+    }
+    const reloadSpy = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload: reloadSpy });
+    const user = userEvent.setup();
+
+    render(
+      <ErrorBoundary reporter={{ report: vi.fn() }}>
+        <TransientlyBrokenApp />
+      </ErrorBoundary>,
+    );
+    expect(screen.getByText(/something broke on our side/i)).toBeVisible();
+    const mountCountAtCrash = mountCount;
+
+    // The underlying condition has since cleared (e.g. a stale ref reset by
+    // some other event) - "Try again" is what gives the player a way back
+    // without a full page reload.
+    brokenStateStillPresent = false;
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+
+    expect(await screen.findByText(/recovered/i)).toBeVisible();
+    expect(mountCount).toBeGreaterThan(mountCountAtCrash);
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it("RC-06: repeated 'Try again' taps on a non-transient crash keep landing back on the crash screen without ever reloading", async () => {
+    const user = userEvent.setup();
+    render(
+      <ErrorBoundary reporter={{ report: vi.fn() }}>
+        <Bomb />
+      </ErrorBoundary>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+    expect(screen.getByText(/something broke on our side/i)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+    expect(screen.getByText(/something broke on our side/i)).toBeVisible();
   });
 });

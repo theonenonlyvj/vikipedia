@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import ChallengePathGraphButton from "../../components/ChallengePathGraphButton";
 import LeaderboardList from "../../components/LeaderboardList";
+import StagedLoadingNotice from "../../components/StagedLoadingNotice";
 import WinningPathChain from "../../components/WinningPathChain";
 import { dailyBadgeLabel } from "../../domain/challengeSelection";
 import { formatTimeAndClicks } from "../../domain/formatting";
@@ -53,10 +54,13 @@ export default function ChallengeDetail({
   identityAccountId,
   identityToken,
   leaderboard,
+  leaderboardErrorMessage = null,
+  leaderboardStatus = "ready",
   onBack,
   onDisclosePath,
   onPlayTodaysDaily,
   onRaceThis,
+  onRetryLeaderboard,
   raceDisabled,
   runPaths,
   todayCentral,
@@ -68,6 +72,17 @@ export default function ChallengeDetail({
   // to fetch the merged graph - see its own doc comment.
   identityToken: string | null;
   leaderboard: RankedLeaderboardRow[];
+  // RC-06: the specific server message for "Your history"'s "error" state
+  // (house convention: a meaningful message survives verbatim; a generic
+  // internal_error gets App.tsx's own friendly fallback - see its doc
+  // comment). `null`/omitted falls back to this file's own generic copy.
+  leaderboardErrorMessage?: string | null;
+  // RC-06: App.tsx's tri-state for the SAME `leaderboard` prop above (the
+  // per-attempt fetch feeding "Your history") - "loading"/"error" only ever
+  // matter to `showHistoryPanel`'s gating below the moment they'd otherwise
+  // read as a false "you haven't tried this one yet."; defaults to "ready"
+  // so any other future caller stays source-compatible.
+  leaderboardStatus?: "loading" | "error" | "ready";
   onBack: () => void;
   onDisclosePath: (runId: string) => void;
   // Owner-approved URL policy, item 5 (approved polish): present only when
@@ -78,26 +93,42 @@ export default function ChallengeDetail({
   // already share.
   onPlayTodaysDaily?: () => void;
   onRaceThis: () => void;
+  // RC-06 (Judge B amend 6): retries App.tsx's `refreshLeaderboard` DIRECTLY
+  // for this exact challenge id - never a fresh push-based navigation (the
+  // Back-ladder invariant stays untouched by a Detail-local retry).
+  onRetryLeaderboard: () => void;
   raceDisabled: boolean;
   runPaths: Record<string, ServerPathStep[]>;
   todayCentral: string;
 }) {
   const [board, setBoard] = useState<ChallengeBoardResponse>(() => emptyBoard(challenge.id));
+  // RC-06 ("one honest loading/error system"): this panel's OWN board fetch
+  // tri-state - independent of `leaderboardStatus` above, which covers the
+  // separate App-owned per-attempt fetch feeding "Your history" below, not
+  // this deduped board read.
+  const [boardStatus, setBoardStatus] = useState<"loading" | "error" | "ready">("loading");
+  const [boardRetryToken, setBoardRetryToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setBoard(emptyBoard(challenge.id));
+    setBoardStatus("loading");
     void apiClient.getChallengeBoard(challenge.id)
       .then((response) => {
-        if (!cancelled) setBoard(response);
+        if (!cancelled) {
+          setBoard(response);
+          setBoardStatus("ready");
+        }
       })
       .catch(() => {
-        if (!cancelled) setBoard(emptyBoard(challenge.id));
+        // RC-06 (Judge A amendment 1): an honest error + Retry, never the
+        // silent empty-board fallback this used to reset to.
+        if (!cancelled) setBoardStatus("error");
       });
     return () => {
       cancelled = true;
     };
-  }, [apiClient, challenge.id]);
+  }, [apiClient, challenge.id, boardRetryToken]);
 
   const yourRows = identityAccountId
     ? leaderboard.filter((row) => row.accountId === identityAccountId)
@@ -205,9 +236,11 @@ export default function ChallengeDetail({
           dnfs={board.dnfs}
           identityAccountId={identityAccountId}
           onDisclosePath={onDisclosePath}
+          onRetry={() => setBoardRetryToken((value) => value + 1)}
           pathsUnlocked={pathsUnlocked}
           placements={board.placements}
           runPaths={runPaths}
+          status={boardStatus}
         />
         {!pathsUnlocked ? (
           <p className="muted board-footnote">Paths hidden until you&apos;ve played.</p>
@@ -217,7 +250,26 @@ export default function ChallengeDetail({
       {showHistoryPanel ? (
         <section className="leaderboard-panel" aria-label="Your history">
           <h3>Your history</h3>
-          {yourRows.length ? (
+          {leaderboardStatus === "error" ? (
+            // RC-06 (Changes item 2): the same in-place tri-state as the
+            // Leaderboard panel above, for the SEPARATE App-owned per-attempt
+            // fetch this strip reads - a failed Detail open is retriable
+            // here instead of via the vanishing global banner.
+            <div className="board-error">
+              <p className="error-banner" role="alert">
+                {leaderboardErrorMessage ?? "Couldn't load your history."}
+              </p>
+              <button onClick={onRetryLeaderboard} type="button">
+                Retry
+              </button>
+            </div>
+          ) : leaderboardStatus === "loading" ? (
+            <StagedLoadingNotice
+              active
+              onRetry={onRetryLeaderboard}
+              pendingLabel="Loading your history…"
+            />
+          ) : yourRows.length ? (
             <ol className="leaderboard">
               {yourRows.map((row) => (
                 <li className={row.status === "abandoned" ? "dnf" : undefined} key={row.runId}>

@@ -4632,6 +4632,40 @@ describe("Honest You: account UX (session states, logout, ghost guards)", () => 
       expect(await screen.findByRole("dialog", { name: /leave nimbus behind\?/i })).toBeVisible();
     });
 
+    it("RC-06 (Judge B GHOST-GUARD COLLISION regression): DOES fire for a ghost whose stats fetch ERRORS (not just still-loading) - the new loading/error/ready status for You's display must never leak a non-null accountStats value into the shared fail-closed guard", async () => {
+      const user = userEvent.setup();
+      // A non-401 failure (never touches clearStaleIdentity/isUnauthorizedError -
+      // the ghost session itself stays fully intact, exactly the "we asked,
+      // the server broke, we still don't know" case the guard must fail
+      // closed on) on the SAME account-stats endpoint RC-06 gave its own
+      // You-tab tri-state (accountStatsFetchStatus) to.
+      const baseFetch = createFetchMock({ accountAttempts: 4 });
+      const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === apiUrl("/api/v2/accounts/me/stats")) {
+          return Promise.resolve(jsonError("internal_error", "Something went wrong.", 500));
+        }
+        return baseFetch(input, init);
+      }) as typeof baseFetch;
+      render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={ghostStorage("Nimbus")} />);
+
+      await user.click(await screen.findByRole("button", { name: /^you\b/i }));
+      // You's own new inline tri-state confirms the fetch genuinely settled
+      // failed (not merely slow) - RC-06's honest-error copy replaces the
+      // old silent "3"/stat-grid display.
+      expect(await screen.findByText(/couldn.t load your stats/i)).toBeVisible();
+
+      const claimCta = screen.getByRole("region", { name: /claim your stats/i });
+      await user.click(within(claimCta).getByRole("button", { name: /^log in$/i }));
+      const sheet = await screen.findByRole("dialog", { name: /save your stats/i });
+      await submitLoginForm(user, sheet);
+
+      // The guard still fires - accountStats reads null (RC-06 deliberately
+      // never lets a "last-known-value"/stale-good-data semantic reach this
+      // shared variable), so ghostGuardRequired's fail-closed branch fires
+      // exactly as it does for the unresolved-forever case above.
+      expect(await screen.findByRole("dialog", { name: /leave nimbus behind\?/i })).toBeVisible();
+    });
+
     it("never fires on the 401 clearStaleIdentity path, even for a previously at-stake ghost", async () => {
       const user = userEvent.setup();
       const fetchImpl = createFetchMock({ accountAttempts: 5, startUnauthorizedOnce: true });
@@ -5280,13 +5314,16 @@ describe("Race flow: full-screen takeover", () => {
     expect(screen.queryByText(/something went wrong/i)).toBeNull();
   });
 
-  it("RC-01 (Judge A class-wide fix): substitutes the fallback for a leaderboard load's own internal_error too, not just the catalog call site", async () => {
+  it("RC-01 (Judge A class-wide fix) + RC-06 (Judge B amendment 2): a failed Detail-open leaderboard load never leaks the raw internal_error message, and now renders in Detail's OWN inline tri-state instead of the old vanishing global banner", async () => {
     // errorMessage()'s fix is a `.code === \"internal_error\"` check inside
     // the shared helper itself, not a literal-string patch at the catalog
-    // call site - proves it also covers openChallengeDetail's independent
-    // refreshLeaderboard() catch (App.tsx's "Could not load the
-    // leaderboard." fallback), one of ~15 call sites that all shared the
-    // exact same latent leak before this fix.
+    // call site - originally proved via openChallengeDetail's
+    // refreshLeaderboard() catch setting the shared `error` banner. RC-06
+    // deliberately moved this exact call site OFF that banner entirely (a
+    // failed Detail open is retriable in place instead - see
+    // ChallengeDetail's `leaderboardStatus`/"Your history" tri-state), so
+    // this now asserts the raw message never reaches Detail's own inline
+    // copy instead of the retired global banner.
     const baseFetch = createFetchMock({ challenges: twoChallenges() });
     const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = String(input);
@@ -5302,9 +5339,9 @@ describe("Race flow: full-screen takeover", () => {
     await user.click(within(nav).getByRole("button", { name: "Challenges" }));
     await user.click(await screen.findByRole("button", { name: /challenge #2/i }));
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/could not load the leaderboard\./i);
-    expect(alert).not.toHaveTextContent(/something went wrong/i);
+    expect(await screen.findByText(/couldn.t load your history/i)).toBeVisible();
+    expect(screen.queryByText(/something went wrong/i)).toBeNull();
+    expect(screen.queryByText("Could not load the leaderboard.")).toBeNull();
   });
 
   it("shows the unclaimed-guest claim CTA directly above Share result, opening the identity dialog", async () => {
@@ -6498,8 +6535,15 @@ describe("Home board dedup + pre-drop hero (desktop pass, FIX 3/FIX 4)", () => {
     // to be suppressed. No board data was seeded for this challenge, so it
     // reads the shared BoardSnippet empty state, not a duplicate/second
     // board.
+    //
+    // RC-06: this card's board fetch now genuinely stays in an honest
+    // "loading" tri-state (StagedLoadingNotice) until it resolves, instead
+    // of the old bug of `rows: []` always reading as the same "No completed
+    // runs yet." empty copy whether or not the fetch had settled yet (which
+    // is what let this specific assertion get away with being synchronous
+    // before) - findByText now genuinely waits for that resolution.
     const yesterdayCard = screen.getByRole("region", { name: /yesterday's results/i });
-    expect(within(yesterdayCard).getByText(/no completed runs yet\./i)).toBeVisible();
+    expect(await within(yesterdayCard).findByText(/no completed runs yet\./i)).toBeVisible();
     // And the silent fallback pair must NOT be the hero.
     expect(screen.queryByText(fullTextMatch(/Apple → Fruit/), { selector: "strong" })).toBeNull();
   });
@@ -7061,6 +7105,56 @@ describe("Owner-approved Back ladder (item 8, addendum 2026-07-21): Detail -> Br
 
       expect(pushSpy).toHaveBeenCalledTimes(2);
       expect(replaceSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      pushSpy.mockRestore();
+      replaceSpy.mockRestore();
+    }
+  });
+
+  it("RC-06 (Judge B amendment 6): Retry on Challenge Detail's failed 'Your history' calls refreshLeaderboard directly - no history push/replace at all, the Back-ladder depth stays untouched", async () => {
+    // A 502/503/504 is automatically retried ONCE inside requestJson itself
+    // (apiRequest.ts's read-once ladder, unrelated to this package) before
+    // ever rejecting up to refreshLeaderboard - a call-count-based fixture
+    // would get silently swallowed by that internal retry. A standing
+    // "still broken" flag, only flipped once THIS test is ready to prove
+    // recovery, persists across both of the client's own internal attempts
+    // exactly like a genuinely-still-down server would.
+    let leaderboardStillDown = true;
+    const baseFetch = createFetchMock({
+      challenges: twoChallenges(),
+      leaderboardRowsByChallenge: {
+        "challenge-0002": [leaderboardRow({ challengeId: "challenge-0002", runId: "run-retry" })],
+      },
+    });
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === apiUrl("/api/v2/challenges/challenge-0002/leaderboard") && leaderboardStillDown) {
+        return Promise.resolve(jsonError("leaderboard_unavailable", "Leaderboard unavailable.", 503));
+      }
+      return baseFetch(input, init);
+    }) as typeof baseFetch;
+    const user = userEvent.setup();
+    render(<App apiOrigin={apiOrigin} fetchImpl={fetchImpl} storage={claimedStorage()} />);
+
+    const nav = await screen.findByRole("navigation", { name: /vwiki race views/i });
+    await user.click(within(nav).getByRole("button", { name: "Challenges" }));
+    await user.click(await screen.findByRole("button", { name: /challenge #2/i }));
+    expect(await screen.findByText(/leaderboard unavailable\./i)).toBeVisible();
+
+    leaderboardStillDown = false;
+    const pushSpy = vi.spyOn(window.history, "pushState");
+    const replaceSpy = vi.spyOn(window.history, "replaceState");
+    try {
+      await user.click(screen.getByRole("button", { name: /^retry$/i }));
+
+      // Recovers in place with the real per-attempt row, not just the
+      // error text disappearing.
+      expect(await screen.findByText(/0:01 · 1 clk/i)).toBeVisible();
+      expect(screen.queryByText(/leaderboard unavailable/i)).toBeNull();
+      // The hard-won Back-ladder invariant: a Detail-local Retry is NEVER a
+      // fresh push-based navigation (or even a replace) - refreshLeaderboard
+      // is called directly, not routed through nav.openDetail/syncChallengeUrl.
+      expect(pushSpy).not.toHaveBeenCalled();
+      expect(replaceSpy).not.toHaveBeenCalled();
     } finally {
       pushSpy.mockRestore();
       replaceSpy.mockRestore();

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import Boards from "./Boards";
@@ -264,6 +264,118 @@ describe("Boards: Today shares Home's honest hero selection (PKG-01)", () => {
     });
     expect(within(header).getByText("Today")).toBeVisible();
     expect(within(header).getByText("Hard · Daily #7")).toBeVisible();
+  });
+});
+
+describe("Boards: RC-06 (one honest loading/error system) - daily board tri-state", () => {
+  it("renders a distinct error + Retry when the board fetch fails - never 'No completed runs yet.'", async () => {
+    const apiClient = mockApiClient({
+      getChallengeBoard: vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    });
+    renderBoards({
+      apiClient,
+      challenges: [randomUserChallenge, yesterdaysDaily, todaysDaily],
+      heroSelection: { challenge: todaysDaily, kind: "today-daily" },
+    });
+
+    expect(await screen.findByText(/couldn.t load this board/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /retry/i })).toBeVisible();
+    expect(screen.queryByText("No completed runs yet.")).toBeNull();
+  });
+
+  it("Retry recovers the board in place once the fetch succeeds - no reload, no fresh navigation", async () => {
+    const getChallengeBoard = vi.fn<
+      VWikiRaceApiClient["getChallengeBoard"]
+    >(async () => {
+      throw new Error("still down");
+    });
+    const apiClient = mockApiClient({ getChallengeBoard });
+    const user = userEvent.setup();
+    renderBoards({
+      apiClient,
+      challenges: [randomUserChallenge, yesterdaysDaily, todaysDaily],
+      heroSelection: { challenge: todaysDaily, kind: "today-daily" },
+    });
+
+    await screen.findByRole("button", { name: /retry/i });
+
+    getChallengeBoard.mockImplementation(async (challengeId: string) => ({
+      challengeId,
+      placements: [
+        { accountId: "acc-1", displayName: "FranTheGreat", placement: 1, elapsedMs: 42_000, clickCount: 6 },
+      ],
+      dnfs: [],
+    }));
+    await user.click(screen.getByRole("button", { name: /retry/i }));
+
+    expect(await screen.findByText("FranTheGreat")).toBeVisible();
+    expect(screen.queryByText(/couldn.t load this board/i)).toBeNull();
+  });
+
+  it("scopes the error per segment+challenge (Judge B amend 5) - a Today failure never leaks into Yesterday, and reappears on switching back", async () => {
+    const getChallengeBoard = vi.fn(async (challengeId: string) => {
+      if (challengeId === todaysDaily.id) throw new Error("today is down");
+      return { challengeId, placements: [], dnfs: [] };
+    });
+    const apiClient = mockApiClient({ getChallengeBoard });
+    const user = userEvent.setup();
+    renderBoards({
+      apiClient,
+      challenges: [randomUserChallenge, yesterdaysDaily, todaysDaily],
+      heroSelection: { challenge: todaysDaily, kind: "today-daily" },
+    });
+
+    expect(await screen.findByText(/couldn.t load this board/i)).toBeVisible();
+
+    await user.click(screen.getByRole("tab", { name: "Yesterday" }));
+    expect(await screen.findByText("No completed runs yet.")).toBeVisible();
+    expect(screen.queryByText(/couldn.t load this board/i)).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "Today" }));
+    expect(await screen.findByText(/couldn.t load this board/i)).toBeVisible();
+  });
+
+  it("stages the board's own loading copy - nothing before 300ms, honest 'Loading board…' at 300ms, escalates to 'Still working on it…' + Retry at 2000ms", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveBoard: (value: ChallengeBoardResponse) => void = () => {};
+      const getChallengeBoard = vi.fn(
+        () =>
+          new Promise<ChallengeBoardResponse>((resolve) => {
+            resolveBoard = resolve;
+          }),
+      );
+      const apiClient = mockApiClient({ getChallengeBoard });
+      renderBoards({
+        apiClient,
+        challenges: [randomUserChallenge, yesterdaysDaily, todaysDaily],
+        heroSelection: { challenge: todaysDaily, kind: "today-daily" },
+      });
+
+      expect(screen.queryByText(/loading board/i)).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(screen.getByText(/loading board/i)).toBeVisible();
+      expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_700);
+      });
+      expect(screen.getByText(/still working on it/i)).toBeVisible();
+      expect(screen.getByRole("button", { name: /retry/i })).toBeVisible();
+
+      resolveBoard({ challengeId: todaysDaily.id, placements: [], dnfs: [] });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText("No completed runs yet.")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

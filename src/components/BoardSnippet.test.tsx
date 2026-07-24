@@ -1,5 +1,5 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import BoardSnippet from "./BoardSnippet";
 import type { BoardSnippetRow } from "../domain/boardSnippet";
 
@@ -132,5 +132,46 @@ describe("BoardSnippet: maxRows (RC-05)", () => {
       </BoardSnippet>,
     );
     expect(screen.getByRole("button", { name: /see full board/i })).toBeVisible();
+  });
+});
+
+describe("BoardSnippet: RC-06 (one honest loading/error system) - status tri-state", () => {
+  it("defaults status to 'ready' - a pre-existing caller (e.g. Results) that never passes it is unaffected", () => {
+    render(<BoardSnippet title="Today's board" rows={rankedRows(2, null)} />);
+    expect(screen.getByText("Player1")).toBeVisible();
+  });
+
+  it("'error': renders a distinct error + Retry - never the empty-state copy - and still renders children", () => {
+    const onRetry = vi.fn();
+    render(
+      <BoardSnippet title="Today's board" rows={[]} onRetry={onRetry} status="error">
+        <button type="button">see full board ›</button>
+      </BoardSnippet>,
+    );
+
+    expect(screen.getByText(/couldn.t load this board/i)).toBeVisible();
+    expect(screen.queryByText("No completed runs yet.")).toBeNull();
+    expect(screen.getByRole("button", { name: /see full board/i })).toBeVisible();
+
+    screen.getByRole("button", { name: /retry/i }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("'loading': stages honestly - nothing before 300ms, then 'Loading board…', never the empty-state copy meanwhile", () => {
+    vi.useFakeTimers();
+    try {
+      render(<BoardSnippet title="Today's board" rows={[]} status="loading" />);
+
+      expect(screen.queryByText(/loading board/i)).toBeNull();
+      expect(screen.queryByText("No completed runs yet.")).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(screen.getByText(/loading board/i)).toBeVisible();
+      expect(screen.queryByText("No completed runs yet.")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

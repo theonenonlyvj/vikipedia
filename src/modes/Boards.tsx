@@ -6,6 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import ChallengePathGraphButton from "../components/ChallengePathGraphButton";
+import StagedLoadingNotice from "../components/StagedLoadingNotice";
 import WinningPathChain from "../components/WinningPathChain";
 import {
   dailyDateForChallenge,
@@ -226,6 +227,20 @@ export default function Boards({
   }, [segment]);
 
   const [board, setBoard] = useState<ChallengeBoardResponse>(EMPTY_BOARD);
+  // RC-06 ("one honest loading/error system"): the Today/Yesterday daily
+  // board's own error tri-state, keyed by BOTH segment and challengeId (not
+  // just segment, the way `trendsErrorSegment` below can get away with) -
+  // Today and Yesterday resolve to two DIFFERENT challenges, so scoping by
+  // segment alone would leak a stale error banner across a Today<->Yesterday
+  // switch (or across two different daily challenge ids on the same
+  // segment, e.g. a new day's drop) the instant the OTHER one is what
+  // actually failed (Judge B amendment 5). `null` covers both "never
+  // failed" and "a stale failure for a since-abandoned segment/challenge
+  // pair" - see `boardHasError` below, which is the only place that reads
+  // it.
+  const [boardFetchError, setBoardFetchError] =
+    useState<{ segment: BoardsSegment; challengeId: string } | null>(null);
+  const [boardRetryToken, setBoardRetryToken] = useState(0);
   const [trends, setTrends] = useState<BoardsTrendsResponse | null>(null);
   // F6: a failed trends fetch is its own state, distinct from "still
   // loading" and from a genuine zero-ranked response - never silently
@@ -290,20 +305,31 @@ export default function Boards({
     if (isTrendSegment(segment)) return;
     if (!activeChallenge) {
       setBoard(EMPTY_BOARD);
+      setBoardFetchError(null);
       return;
     }
+    // Clear synchronously as the (re)fetch starts - not just on eventual
+    // failure - so a Retry (or a segment/challenge switch back onto a
+    // previously-failed pair) immediately reads as "loading" again instead
+    // of the stale error banner sitting there inert until the new attempt
+    // resolves.
+    setBoardFetchError(null);
     const closed = segment === "yesterday" && !yesterdayIsCurrentlyOpen;
     void apiClient.getChallengeBoard(activeChallenge.id, { closed })
       .then((response) => {
         if (!cancelled) setBoard(response);
       })
       .catch(() => {
-        if (!cancelled) setBoard(EMPTY_BOARD);
+        // RC-06 (Judge A amendment 1): an honest error + Retry, matching the
+        // exact F6 pattern trends already ships below - never silently
+        // reused as "No completed runs yet.", which is reserved for a
+        // genuinely-resolved empty board.
+        if (!cancelled) setBoardFetchError({ segment, challengeId: activeChallenge.id });
       });
     return () => {
       cancelled = true;
     };
-  }, [apiClient, segment, activeChallenge?.id, yesterdayIsCurrentlyOpen]);
+  }, [apiClient, segment, activeChallenge?.id, yesterdayIsCurrentlyOpen, boardRetryToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -402,6 +428,17 @@ export default function Boards({
   const boardMatchesActiveChallenge = Boolean(activeChallenge) && board.challengeId === activeChallenge?.id;
   const placements = boardMatchesActiveChallenge ? board.placements : [];
   const dnfs = boardMatchesActiveChallenge ? board.dnfs : [];
+  // RC-06: an error for the CURRENT segment/challenge pair wins over
+  // rendering whatever `board` happens to hold (same "error wins" precedent
+  // trends already established below) - a stale error left over from a
+  // different pair simply doesn't match and is ignored.
+  const boardHasError = Boolean(activeChallenge) &&
+    boardFetchError?.segment === segment && boardFetchError?.challengeId === activeChallenge?.id;
+  // Genuinely in flight: there's a challenge to show a board for, no error
+  // for it yet, and `board` hasn't caught up to it - never true once a
+  // background stale-while-revalidate refresh has last-good data already
+  // matching (RC-04's "never blank live UI" stays intact for this segment).
+  const boardIsLoading = Boolean(activeChallenge) && !boardMatchesActiveChallenge && !boardHasError;
 
   const ownPlacement = identityAccountId
     ? placements.find((row) => row.accountId === identityAccountId) ?? null
@@ -654,6 +691,23 @@ export default function Boards({
             ? "Yesterday's daily isn't available."
             : "Loading today's daily…"}
         </p>
+      ) : boardHasError ? (
+        // RC-06 (Judge A amendment 1): the exact F6 error-banner + Retry
+        // pattern trends already ships (see the `trendHasError` branch
+        // above) - never the "No completed runs yet." empty state, which is
+        // reserved for a genuinely-resolved empty board.
+        <div className="board-error">
+          <p className="error-banner" role="alert">Couldn&apos;t load this board.</p>
+          <button onClick={() => setBoardRetryToken((value) => value + 1)} type="button">
+            Retry
+          </button>
+        </div>
+      ) : boardIsLoading ? (
+        <StagedLoadingNotice
+          active
+          onRetry={() => setBoardRetryToken((value) => value + 1)}
+          pendingLabel="Loading board…"
+        />
       ) : (
         <>
           <div className="board-segment-header challenge-route">

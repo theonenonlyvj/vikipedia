@@ -61,6 +61,7 @@ const MODE_ITEMS: { key: ModeKey; label: string }[] = [
  */
 export default function AppShell({
   accountStats,
+  accountStatsStatus,
   apiClient,
   authBusy,
   bannerError,
@@ -73,6 +74,8 @@ export default function AppShell({
   challengesView,
   identitySession,
   leaderboard,
+  leaderboardErrorMessage,
+  leaderboardStatus,
   mode,
   onClaimIdentity,
   onCloseChallengeDetail,
@@ -87,7 +90,9 @@ export default function AppShell({
   onOpenChallengeDetail,
   onPlayAsSomeoneElse,
   onRaceChallenge,
+  onRetryAccountStats,
   onRetryCatalog,
+  onRetryLeaderboard,
   onSelectMode,
   onSwitchAccount,
   playAnotherSuggestion,
@@ -102,6 +107,11 @@ export default function AppShell({
   todayCentral,
 }: {
   accountStats: AccountStats | null;
+  // RC-06 ("one honest loading/error system", Judge B amendment 1): a
+  // status SEPARATE from `accountStats` - see App.tsx's own doc comment on
+  // why the ghost-loss guard/teaching gate/at-risk dot must keep consuming
+  // `accountStats` directly and never this. Only threaded through to You.
+  accountStatsStatus: "loading" | "error" | "ready";
   apiClient: VWikiRaceApiClient;
   authBusy: boolean;
   bannerError: string | null;
@@ -120,6 +130,13 @@ export default function AppShell({
   challengesView: ChallengesView;
   identitySession: VGamesIdentitySession | null;
   leaderboard: RankedLeaderboardRow[];
+  // RC-06: the specific server message for a "error" `leaderboardStatus` -
+  // see App.tsx's own doc comment (house convention: meaningful messages
+  // survive, only a generic internal_error gets a fallback substituted).
+  leaderboardErrorMessage: string | null;
+  // RC-06: tri-state for the SAME `leaderboard` above - Challenge Detail's
+  // "Your history" strip only.
+  leaderboardStatus: "loading" | "error" | "ready";
   mode: ModeKey;
   // PKG-11 remainder fix: widened to match You.tsx's own widened signature
   // (see that file's doc comment) - the app-wide "Create account"/"Log in"
@@ -146,10 +163,17 @@ export default function AppShell({
   // "Honest You" (State B, spec §2.3): routes through the ghost-loss guard.
   onPlayAsSomeoneElse: () => void;
   onRaceChallenge: (challengeId: string) => void;
+  // RC-06: bumps App.tsx's statsRefreshVersion - You's "Couldn't load your
+  // stats — Retry" only.
+  onRetryAccountStats: () => void;
   // RC-01: retries the App-level catalog fetch (same callback RaceFlow's
   // own recovery-gate Retry and Home's new failed-catalog Retry both use) -
   // offered here only in the shell-level banner below.
   onRetryCatalog: () => void;
+  // RC-06 (Judge B amendment 6): retries App.tsx's `refreshLeaderboard`
+  // DIRECTLY for a given challenge id - never a fresh push-based navigation
+  // (Challenge Detail's "Your history" Retry only).
+  onRetryLeaderboard: (challengeId: string) => void;
   onSelectMode: (mode: ModeKey) => void;
   // "Honest You" (State C, spec §2.4): opens the sheet on Log in, no
   // pre-clear.
@@ -373,6 +397,8 @@ export default function AppShell({
               identityAccountId={identitySession?.accountId ?? null}
               identityToken={identitySession?.token ?? null}
               leaderboard={leaderboard}
+              leaderboardErrorMessage={leaderboardErrorMessage}
+              leaderboardStatus={leaderboardStatus}
               onBack={onCloseChallengeDetail}
               onDisclosePath={onDisclosePath}
               // Owner-approved URL policy, item 5: only offered when a real
@@ -386,6 +412,7 @@ export default function AppShell({
                   : undefined
               }
               onRaceThis={() => onRaceChallenge(selectedChallenge.id)}
+              onRetryLeaderboard={() => onRetryLeaderboard(selectedChallenge.id)}
               raceDisabled={!selectedChallenge || authBusy}
               runPaths={runPaths}
               todayCentral={todayCentral}
@@ -417,8 +444,10 @@ export default function AppShell({
             onGoHome={() => onSelectMode("home")}
             onLogOut={onLogOut}
             onPlayAsSomeoneElse={onPlayAsSomeoneElse}
+            onRetryStats={onRetryAccountStats}
             onSwitchAccount={onSwitchAccount}
             stats={accountStats}
+            statsStatus={accountStatsStatus}
           />
         ) : null}
       </section>

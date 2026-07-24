@@ -1,7 +1,16 @@
+import StagedLoadingNotice from "./StagedLoadingNotice";
 import WinningPathChain from "./WinningPathChain";
 import { formatTimeAndClicks } from "../domain/formatting";
 import { pathStepsToChain } from "../domain/winningPath";
 import type { ChallengeBoardDnfRow, ChallengeBoardPlacement, ServerPathStep } from "../domain/types";
+
+/** RC-06 ("one honest loading/error system"): the board fetch that feeds
+ * this list, tri-stated by the caller (ChallengeDetail.tsx) - "ready" is the
+ * only state where `placements`/`dnfs` are trustworthy enough to render
+ * (including the genuine "No completed runs yet." empty case). Defaults to
+ * "ready" so this stays source-compatible with any future caller that has
+ * no reason to distinguish loading/error. */
+export type LeaderboardListStatus = "loading" | "error" | "ready";
 
 /**
  * Challenge Detail's own leaderboard (Invariant 1: "Time AND clicks,
@@ -38,21 +47,45 @@ export default function LeaderboardList({
   dnfs,
   identityAccountId,
   onDisclosePath,
+  onRetry,
   pathsUnlocked,
   placements,
   runPaths,
+  status = "ready",
 }: {
   dnfs: ChallengeBoardDnfRow[];
   identityAccountId: string | null;
   onDisclosePath: (runId: string) => void;
+  // Only ever invoked from the "error" branch below - undefined is fine for
+  // any caller that never passes a non-"ready" status.
+  onRetry?: () => void;
   pathsUnlocked: boolean;
   placements: ChallengeBoardPlacement[];
   runPaths: Record<string, ServerPathStep[]>;
+  status?: LeaderboardListStatus;
 }) {
+  if (status === "error") {
+    // RC-06: an honest error + Retry - never "No completed runs yet.",
+    // which is reserved for a genuinely-resolved empty board (same F6 rule
+    // Boards.tsx's own inline board markup follows).
+    return (
+      <section className="board-snippet board-error" aria-label="Leaderboard placements">
+        <p className="error-banner" role="alert">Couldn&apos;t load the leaderboard.</p>
+        {onRetry ? (
+          <button onClick={onRetry} type="button">
+            Retry
+          </button>
+        ) : null}
+      </section>
+    );
+  }
+
   return (
     <>
       <section className="board-snippet" aria-label="Leaderboard placements">
-        {placements.length ? (
+        {status === "loading" ? (
+          <StagedLoadingNotice active onRetry={onRetry} pendingLabel="Loading board…" />
+        ) : placements.length ? (
           <ol>
             {placements.map((row) => {
               const isYou = identityAccountId !== null && row.accountId === identityAccountId;
